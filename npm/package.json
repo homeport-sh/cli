@@ -1,0 +1,25 @@
+{
+  "name": "homeport",
+  "version": "0.0.1",
+  "description": "The CLI of homeport.sh — a platform that deploys web apps for you: connect a repository and it builds and runs it.",
+  "homepage": "https://homeport.sh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/homeport-sh/cli.git"
+  },
+  "license": "FSL-1.1-ALv2",
+  "keywords": [
+    "deploy",
+    "deployment",
+    "vps",
+    "binary",
+    "hosting",
+    "caddy",
+    "self-hosted"
+  ],
+  "files": [
+    "index.js",
+    "README.md"
+  ],
+  "main": "index.js"
+}
