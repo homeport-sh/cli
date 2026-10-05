@@ -39,6 +39,9 @@ checksum:
 # Linux users install via install.sh — casks are macOS-only.)
 homebrew_casks:
   - name: homeport
+    # no tap token in this repository yet: the release still ships, the
+    # cask waits (set HOMEBREW_TAP_TOKEN to publish it)
+    skip_upload: '{{ if not (index .Env "HOMEBREW_TAP_TOKEN") }}true{{ end }}'
     repository:
       owner: homeport-sh
       name: homebrew-tap
