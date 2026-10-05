@@ -219,3 +219,33 @@ func TestSayingHowAnRSCKitAppBuildsWins(t *testing.T) {
 		}
 	}
 }
+
+// A FrankenPHP binary prints its help and exits with no args, so a PHP app
+// is served by default: php-server on the port homeport gives it. What
+// homeport.yaml or a person says still wins; a static site runs nothing.
+func TestAPHPAppIsServedByDefault(t *testing.T) {
+	php := map[string]string{"composer.json": `{}`, "composer.lock": "{}"}
+	if p := detect(t, php, buildplan.Settings{}); p.Run != "php-server --listen :$PORT" {
+		t.Fatalf("default: %q", p.Run)
+	}
+	with := func(extra map[string]string) map[string]string {
+		m := map[string]string{"composer.json": `{}`, "composer.lock": "{}"}
+		for k, v := range extra {
+			m[k] = v
+		}
+		return m
+	}
+	if p := detect(t, with(map[string]string{"homeport.yaml": "run: php-server --listen :$PORT --worker public/index.php\n"}), buildplan.Settings{}); p.Run != "php-server --listen :$PORT --worker public/index.php" {
+		t.Fatalf("homeport.yaml: %q", p.Run)
+	}
+	if p := detect(t, php, buildplan.Settings{Run: "php-server --listen :$PORT --access-log"}); p.Run != "php-server --listen :$PORT --access-log" {
+		t.Fatalf("settings: %q", p.Run)
+	}
+	if p := detect(t, php, buildplan.Settings{Kind: buildplan.Static, Output: "public"}); p.Run != "" {
+		t.Fatalf("static: %q", p.Run)
+	}
+	// other toolchains' binaries run as they are
+	if p := detect(t, map[string]string{"go.mod": "module m\n\ngo 1.24\n"}, buildplan.Settings{}); p.Run != "" {
+		t.Fatalf("go: %q", p.Run)
+	}
+}

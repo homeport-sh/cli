@@ -69,7 +69,8 @@ type Plan struct {
 	// only what a builder that doesn't read it falls back to.
 	RSCKit bool `json:"rsc_kit,omitempty"`
 
-	// how a binary runs, from homeport.yaml or Settings: checked by whoever
+	// how a binary runs, from homeport.yaml or Settings (a PHP app's has a
+	// default, PHPRun): checked by whoever
 	// runs it (the CLI, the control plane), not here
 	Run       string    `json:"run,omitempty"`
 	Release   string    `json:"release,omitempty"`
@@ -87,6 +88,11 @@ type Process struct {
 // FrankenPHPImage is homeport's FrankenPHP base (images/frankenphp): PHP 8.5
 // with the standard extensions, compiled once, FrankenPHP 1.12.7.
 const FrankenPHPImage = "ghcr.io/homeport-sh/frankenphp:8.5-1.12.7"
+
+// PHPRun is how a PHP app's binary runs when nothing says: with no args a
+// FrankenPHP binary prints its help and exits, so it's served on the port
+// homeport gives it ($PORT is substituted where it's run, without a shell).
+const PHPRun = "php-server --listen :$PORT"
 
 // SiteFolders are where a build's static site lands, tried in order when a
 // guessed binary isn't there.
@@ -230,6 +236,9 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	}
 	if s.Run != "" {
 		p.Run = s.Run
+	}
+	if p.Run == "" && p.Toolchain == "php" && p.Kind == Binary {
+		p.Run = PHPRun
 	}
 	if p.Kind == Static {
 		p.Run, p.Release, p.Processes = "", "", nil // nothing runs

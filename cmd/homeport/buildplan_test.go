@@ -167,7 +167,7 @@ func TestAPHPRepoBuildsOnTheFrankenPHPBase(t *testing.T) {
 	p := plan(t, map[string]string{"composer.json": `{"require":{"php":"^8.3"}}`, "composer.lock": "{}"})
 	if p.Toolchain != "php" || p.Image != buildplan.FrankenPHPImage || p.Artifact != "server" ||
 		p.Install != "composer check-platform-reqs --no-dev --lock && composer install --no-dev --optimize-autoloader --no-interaction" ||
-		p.Command != "frankenphp-embed . server" {
+		p.Command != "frankenphp-embed . server" || p.Run != buildplan.PHPRun {
 		t.Fatalf("%+v", p)
 	}
 	// front-end assets (Vite) are built before the app is embedded
