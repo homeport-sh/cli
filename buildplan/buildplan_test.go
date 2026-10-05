@@ -1,6 +1,7 @@
 package buildplan_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -155,6 +156,66 @@ func TestTheFilesDetectionReads(t *testing.T) {
 	for f, seen := range want {
 		if !seen {
 			t.Errorf("%s not listed", f)
+		}
+	}
+}
+
+const rscKitPkg = `{"scripts":{"build":"rsc-kit build","compile":"rsc-kit compile"},"devDependencies":{"vite":"^8"},"dependencies":{"@rsc-kit/core":"^0.29.6"}}`
+
+// An rsc-kit app says what it made: its build writes .output/rsc-kit.json (a
+// server to compile, or a static export), which the builder reads after the
+// build. Detection names no compile step and guesses no output.
+func TestAnRSCKitAppIsDecidedByItsBuild(t *testing.T) {
+	p := detect(t, map[string]string{"package.json": rscKitPkg, "bun.lock": bunLock}, buildplan.Settings{})
+	if !p.RSCKit || p.Framework != "rsc-kit" || p.Toolchain != "bun" || p.Install != "bun install --frozen-lockfile" ||
+		p.Command != "bun run build" || strings.Contains(p.Command, "compile") {
+		t.Fatalf("rsc-kit: %+v", p)
+	}
+	// the builder reads it as rsc_kit in the plan's JSON
+	if b, _ := json.Marshal(p); !strings.Contains(string(b), `"rsc_kit":true`) {
+		t.Fatalf("json: %s", b)
+	}
+	if buildplan.RSCKitMarker != ".output/rsc-kit.json" {
+		t.Fatalf("marker: %s", buildplan.RSCKitMarker)
+	}
+	// in a folder of the repository, too
+	p = detect(t, map[string]string{"web/package.json": rscKitPkg, "web/bun.lock": bunLock}, buildplan.Settings{Root: "web"})
+	if !p.RSCKit || p.Root != "web" {
+		t.Fatalf("root: %+v", p)
+	}
+	// a person's install command keeps the build's say
+	p = detect(t, map[string]string{"package.json": rscKitPkg, "bun.lock": bunLock}, buildplan.Settings{Install: "bun install"})
+	if !p.RSCKit || p.Install != "bun install" {
+		t.Fatalf("install: %+v", p)
+	}
+	// not a Bun project: as before, nothing read after the build
+	p = detect(t, map[string]string{"package.json": rscKitPkg, "package-lock.json": "{}"}, buildplan.Settings{})
+	if p.RSCKit || p.Kind != buildplan.Binary {
+		t.Fatalf("npm: %+v", p)
+	}
+}
+
+// What homeport.yaml or a person said about the build wins over the marker.
+func TestSayingHowAnRSCKitAppBuildsWins(t *testing.T) {
+	for name, c := range map[string]struct {
+		yaml string
+		s    buildplan.Settings
+		kind string
+	}{
+		"static: dist":   {"static: dist\n", buildplan.Settings{}, buildplan.Static},
+		"build.command":  {"build:\n  command: bun run compile\n  artifact: dist/app\n", buildplan.Settings{}, buildplan.Binary},
+		"build.artifact": {"build:\n  artifact: dist/app\n", buildplan.Settings{}, buildplan.Binary},
+		"settings kind":  {"", buildplan.Settings{Kind: buildplan.Static}, buildplan.Static},
+		"settings build": {"", buildplan.Settings{Command: "bun run compile"}, buildplan.Binary},
+		"settings out":   {"", buildplan.Settings{Output: "dist/app"}, buildplan.Binary},
+	} {
+		files := map[string]string{"package.json": rscKitPkg, "bun.lock": bunLock}
+		if c.yaml != "" {
+			files["homeport.yaml"] = c.yaml
+		}
+		p := detect(t, files, c.s)
+		if p.RSCKit || p.Kind != c.kind {
+			t.Errorf("%s: %+v", name, p)
 		}
 	}
 }

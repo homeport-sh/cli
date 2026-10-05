@@ -30,6 +30,11 @@ const (
 	Static = "static" // a folder of files, served as they are
 )
 
+// RSCKitMarker is what an rsc-kit build (0.29.6+) writes, in the app's
+// folder: {"output":"server","compile":"<script>","binary":"<file>"} or
+// {"output":"export","dir":"<folder>"}.
+const RSCKitMarker = ".output/rsc-kit.json"
+
 // ConfigFile is homeport's optional per-app config.
 const ConfigFile = "homeport.yaml"
 
@@ -58,6 +63,11 @@ type Plan struct {
 	// none, a site folder (build/, dist/ or out/ with an index.html) is
 	// taken instead
 	StaticFallback bool `json:"static_fallback,omitempty"`
+	// RSCKit: an rsc-kit app, whose build says what it made. After Command
+	// the builder reads RSCKitMarker: a server, compiled by one of the app's
+	// scripts into a binary, or a static export. Kind and Artifact are then
+	// only what a builder that doesn't read it falls back to.
+	RSCKit bool `json:"rsc_kit,omitempty"`
 
 	// how a binary runs, from homeport.yaml or Settings: checked by whoever
 	// runs it (the CLI, the control plane), not here
@@ -206,6 +216,9 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	if s.Install != "" {
 		p.Install = s.Install
 	}
+	if s.Kind != "" || s.Command != "" || s.Output != "" {
+		p.RSCKit = false // the person said what the build makes
+	}
 	if s.Command != "" {
 		p.Command = s.Command
 		if p.Toolchain == "none" {
@@ -293,7 +306,11 @@ func (r reader) detect(cfg fileConfig) (Plan, error) {
 		if p.Command == "" {
 			p.Command = "bun run build"
 		}
-		r.site(&p, cfg)
+		if r.deps()["@rsc-kit/core"] {
+			r.rscKit(&p, cfg)
+		} else {
+			r.site(&p, cfg)
+		}
 	case r.exists("package.json") && r.exists("package-lock.json"):
 		v := strings.TrimPrefix(r.firstLine(".nvmrc"), "v")
 		if v == "" {
@@ -318,6 +335,17 @@ func (r reader) detect(cfg fileConfig) (Plan, error) {
 			"set the build and output in the app's build settings")
 	}
 	return p, nil
+}
+
+// rscKit: an rsc-kit app's build decides between a server and a static
+// export (RSCKit), unless homeport.yaml said what it makes. Its default
+// binary, else a site in dist/, is what an older builder falls back to.
+func (r reader) rscKit(p *Plan, cfg fileConfig) {
+	p.Framework = "rsc-kit"
+	if cfg.Static != "" || cfg.Build.Command != "" || cfg.Build.Artifact != "" {
+		return
+	}
+	p.RSCKit, p.Artifact, p.StaticFallback = true, "dist/app", true
 }
 
 // servers are packages that mean the app runs a server, not a site.
