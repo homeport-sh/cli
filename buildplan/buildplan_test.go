@@ -220,13 +220,21 @@ func TestSayingHowAnRSCKitAppBuildsWins(t *testing.T) {
 	}
 }
 
-// A FrankenPHP binary prints its help and exits with no args, so a PHP app
-// is served by default: php-server on the port homeport gives it. What
-// homeport.yaml or a person says still wins; a static site runs nothing.
-func TestAPHPAppIsServedByDefault(t *testing.T) {
-	php := map[string]string{"composer.json": `{}`, "composer.lock": "{}"}
-	if p := detect(t, php, buildplan.Settings{}); p.Run != "php-server --listen :$PORT" {
-		t.Fatalf("default: %q", p.Run)
+// A PHP app ships as a bundle: its installed files and, at their top, the
+// image's prebuilt FrankenPHP (bin) - nothing is compiled per app. It's
+// served by default, from the bundle's folder: php-server over public/ on
+// the port homeport gives it, in worker mode through Octane's worker when
+// the app uses Octane. What homeport.yaml or a person says still wins; a
+// static site runs nothing.
+func TestAPHPAppShipsAsABundle(t *testing.T) {
+	php := map[string]string{"composer.json": `{"require":{"laravel/framework":"^13.0"}}`, "composer.lock": "{}"}
+	p := detect(t, php, buildplan.Settings{})
+	if p.Kind != buildplan.Bundle || p.Artifact != ".homeport-bundle" || p.StaticFallback ||
+		p.Command != "frankenphp-bundle . .homeport-bundle" || p.Run != "php-server --root public --listen :$PORT" {
+		t.Fatalf("default: %+v", p)
+	}
+	if b, _ := json.Marshal(p); !strings.Contains(string(b), `"kind":"bundle"`) {
+		t.Fatalf("json: %s", b)
 	}
 	with := func(extra map[string]string) map[string]string {
 		m := map[string]string{"composer.json": `{}`, "composer.lock": "{}"}
@@ -235,17 +243,24 @@ func TestAPHPAppIsServedByDefault(t *testing.T) {
 		}
 		return m
 	}
-	if p := detect(t, with(map[string]string{"homeport.yaml": "run: php-server --listen :$PORT --worker public/index.php\n"}), buildplan.Settings{}); p.Run != "php-server --listen :$PORT --worker public/index.php" {
+	octane := with(map[string]string{"composer.json": `{"require":{"laravel/framework":"^13.0","laravel/octane":"^2.13"}}`})
+	if p := detect(t, octane, buildplan.Settings{}); p.Run != "php-server --root public --listen :$PORT --worker public/frankenphp-worker.php,2" {
+		t.Fatalf("octane: %q", p.Run)
+	}
+	if p := detect(t, with(map[string]string{"homeport.yaml": "run: php-server --root public --listen :$PORT --access-log\n"}), buildplan.Settings{}); p.Run != "php-server --root public --listen :$PORT --access-log" {
 		t.Fatalf("homeport.yaml: %q", p.Run)
 	}
-	if p := detect(t, php, buildplan.Settings{Run: "php-server --listen :$PORT --access-log"}); p.Run != "php-server --listen :$PORT --access-log" {
+	if p := detect(t, with(map[string]string{"homeport.yaml": "build:\n  artifact: dist/app\n"}), buildplan.Settings{}); p.Command != "frankenphp-bundle . dist/app" || p.Artifact != "dist/app" || p.Kind != buildplan.Bundle {
+		t.Fatalf("artifact: %+v", p)
+	}
+	if p := detect(t, php, buildplan.Settings{Run: "php-server --root public --listen :$PORT --debug"}); p.Run != "php-server --root public --listen :$PORT --debug" {
 		t.Fatalf("settings: %q", p.Run)
 	}
-	if p := detect(t, php, buildplan.Settings{Kind: buildplan.Static, Output: "public"}); p.Run != "" {
-		t.Fatalf("static: %q", p.Run)
+	if p := detect(t, php, buildplan.Settings{Kind: buildplan.Static, Output: "public"}); p.Run != "" || p.Kind != buildplan.Static {
+		t.Fatalf("static: %+v", p)
 	}
 	// other toolchains' binaries run as they are
-	if p := detect(t, map[string]string{"go.mod": "module m\n\ngo 1.24\n"}, buildplan.Settings{}); p.Run != "" {
-		t.Fatalf("go: %q", p.Run)
+	if p := detect(t, map[string]string{"go.mod": "module m\n\ngo 1.24\n"}, buildplan.Settings{}); p.Run != "" || p.Kind != buildplan.Binary {
+		t.Fatalf("go: %+v", p)
 	}
 }

@@ -161,16 +161,16 @@ func TestThePlanSaysHowTheAppRuns(t *testing.T) {
 }
 
 // A PHP app builds on homeport's FrankenPHP base: PHP is already compiled,
-// so the build checks the app's platform needs first (seconds, not a failed
-// link later), installs, and embeds the app into a static binary.
+// so the build checks the app's platform needs first (seconds), installs,
+// and bundles the app with the base's prebuilt FrankenPHP.
 func TestAPHPRepoBuildsOnTheFrankenPHPBase(t *testing.T) {
 	p := plan(t, map[string]string{"composer.json": `{"require":{"php":"^8.3"}}`, "composer.lock": "{}"})
-	if p.Toolchain != "php" || p.Image != buildplan.FrankenPHPImage || p.Artifact != "server" ||
+	if p.Toolchain != "php" || p.Image != buildplan.FrankenPHPImage || p.Artifact != buildplan.BundleDir ||
 		p.Install != "composer check-platform-reqs --no-dev --lock && composer install --no-dev --optimize-autoloader --no-interaction" ||
-		p.Command != "frankenphp-embed . server" || p.Run != buildplan.PHPRun {
+		p.Command != "frankenphp-bundle . .homeport-bundle" || p.Kind != buildplan.Bundle || p.Run != buildplan.PHPRun {
 		t.Fatalf("%+v", p)
 	}
-	// front-end assets (Vite) are built before the app is embedded
+	// front-end assets (Vite) are built before the app is bundled
 	p = plan(t, map[string]string{"composer.json": `{}`, "composer.lock": "{}",
 		"package.json": `{"scripts":{"build":"vite build"}}`, "package-lock.json": "{}"})
 	if p.Toolchain != "php" || !strings.HasSuffix(p.Install, " && bun install && bun run build") {
@@ -182,8 +182,8 @@ func TestAPHPRepoBuildsOnTheFrankenPHPBase(t *testing.T) {
 	if p := plan(t, map[string]string{"composer.json": `{}`, "composer.lock": "{}", "package.json": `{"scripts":{"build":"vite build"}}`, "bun.lock": "{}"}); !strings.Contains(p.Install, "bun install --frozen-lockfile") {
 		t.Fatalf("bun lockfile: %+v", p)
 	}
-	// homeport.yaml still says how, and where the binary lands
-	if p := plan(t, map[string]string{"composer.json": `{}`, "composer.lock": "{}", "homeport.yaml": "build:\n  artifact: dist/app\n"}); p.Command != "frankenphp-embed . dist/app" {
+	// homeport.yaml still says how, and where the bundle lands
+	if p := plan(t, map[string]string{"composer.json": `{}`, "composer.lock": "{}", "homeport.yaml": "build:\n  artifact: dist/app\n"}); p.Command != "frankenphp-bundle . dist/app" {
 		t.Fatalf("artifact: %+v", p)
 	}
 	// without a lockfile the build isn't reproducible: say so
