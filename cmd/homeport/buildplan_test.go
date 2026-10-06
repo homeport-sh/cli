@@ -167,7 +167,7 @@ func TestAPHPRepoBuildsOnTheFrankenPHPBase(t *testing.T) {
 	p := plan(t, map[string]string{"composer.json": `{"require":{"php":"^8.3"}}`, "composer.lock": "{}"})
 	if p.Toolchain != "php" || p.Image != buildplan.FrankenPHPImage || p.Artifact != buildplan.BundleDir ||
 		p.Install != "composer check-platform-reqs --no-dev --lock && composer install --no-dev --optimize-autoloader --no-interaction" ||
-		p.Command != "frankenphp-bundle . .homeport-bundle" || p.Kind != buildplan.Bundle || p.Run != buildplan.PHPRun {
+		p.Command != "frankenphp-bundle . .homeport-bundle && mv -T .homeport-bundle/frankenphp .homeport-bundle/bin" || p.Kind != buildplan.Bundle || p.Run != buildplan.PHPRun {
 		t.Fatalf("%+v", p)
 	}
 	// front-end assets (Vite) are built before the app is bundled
@@ -183,7 +183,7 @@ func TestAPHPRepoBuildsOnTheFrankenPHPBase(t *testing.T) {
 		t.Fatalf("bun lockfile: %+v", p)
 	}
 	// homeport.yaml still says how, and where the bundle lands
-	if p := plan(t, map[string]string{"composer.json": `{}`, "composer.lock": "{}", "homeport.yaml": "build:\n  artifact: dist/app\n"}); p.Command != "frankenphp-bundle . dist/app" {
+	if p := plan(t, map[string]string{"composer.json": `{}`, "composer.lock": "{}", "homeport.yaml": "build:\n  artifact: dist/app\n"}); p.Command != "frankenphp-bundle . dist/app && mv -T dist/app/frankenphp dist/app/bin" {
 		t.Fatalf("artifact: %+v", p)
 	}
 	// without a lockfile the build isn't reproducible: say so
