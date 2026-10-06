@@ -230,7 +230,7 @@ func TestAPHPAppShipsAsABundle(t *testing.T) {
 	php := map[string]string{"composer.json": `{"require":{"laravel/framework":"^13.0"}}`, "composer.lock": "{}"}
 	p := detect(t, php, buildplan.Settings{})
 	if p.Kind != buildplan.Bundle || p.Artifact != ".homeport-bundle" || p.StaticFallback ||
-		p.Command != "frankenphp-bundle . .homeport-bundle" || p.Run != "php-server --root public --listen :$PORT" {
+		p.Command != "frankenphp-bundle . .homeport-bundle && mv -T .homeport-bundle/frankenphp .homeport-bundle/bin" || p.Run != "php-server --root public --listen :$PORT" {
 		t.Fatalf("default: %+v", p)
 	}
 	// on the base with the static FrankenPHP and Bun, pinned by digest
@@ -274,7 +274,7 @@ func TestAPHPAppShipsAsABundle(t *testing.T) {
 			t.Errorf("%q changed: %q", run, p.Run)
 		}
 	}
-	if p := detect(t, with(map[string]string{"homeport.yaml": "build:\n  artifact: dist/app\n"}), buildplan.Settings{}); p.Command != "frankenphp-bundle . dist/app" || p.Artifact != "dist/app" || p.Kind != buildplan.Bundle {
+	if p := detect(t, with(map[string]string{"homeport.yaml": "build:\n  artifact: dist/app\n"}), buildplan.Settings{}); p.Command != "frankenphp-bundle . dist/app && mv -T dist/app/frankenphp dist/app/bin" || p.Artifact != "dist/app" || p.Kind != buildplan.Bundle {
 		t.Fatalf("artifact: %+v", p)
 	}
 	if p := detect(t, php, buildplan.Settings{Run: "php-server --root public --listen :$PORT --debug"}); p.Run != "php-server --root public --listen :$PORT --debug" {

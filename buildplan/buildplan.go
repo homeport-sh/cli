@@ -318,7 +318,9 @@ func (r reader) detect(cfg fileConfig) (Plan, error) {
 			}
 		}
 		if p.Command == "" {
-			p.Command = "frankenphp-bundle . " + p.Artifact
+			// a bundle's executable is bin, at its top: frankenphp-bundle
+			// puts FrankenPHP there as frankenphp
+			p.Command = "frankenphp-bundle . " + p.Artifact + " && mv -T " + p.Artifact + "/frankenphp " + p.Artifact + "/bin"
 		}
 	case r.exists("go.mod"):
 		v, err := r.goVersion()
