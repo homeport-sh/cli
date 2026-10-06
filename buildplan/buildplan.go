@@ -28,6 +28,9 @@ import (
 const (
 	Binary = "binary" // one executable, run by homeport
 	Static = "static" // a folder of files, served as they are
+	// a folder run by homeport: its executable is bin, at its top, run from
+	// the folder; .homeport/writable lists the paths in it the app writes
+	Bundle = "bundle"
 )
 
 // RSCKitMarker is what an rsc-kit build (0.29.6+) writes, in the app's
@@ -51,13 +54,13 @@ type Settings struct {
 
 // Plan is how the app is built and what comes out.
 type Plan struct {
-	Kind      string `json:"kind"`                // Binary or Static
+	Kind      string `json:"kind"`                // Binary, Static or Bundle
 	Framework string `json:"framework,omitempty"` // what was recognised, for people: SvelteKit, Astro, Go, ...
 	Toolchain string `json:"toolchain"`           // go, bun, node, php, custom, or none (nothing to build)
 	Image     string `json:"image,omitempty"`     // the toolchain's image; none for none
 	Install   string `json:"install,omitempty"`
 	Command   string `json:"command,omitempty"` // empty: nothing to build
-	Artifact  string `json:"artifact"`          // the binary, or the site's folder, relative to Root
+	Artifact  string `json:"artifact"`          // the binary, or the site's or bundle's folder, relative to Root
 	Root      string `json:"root,omitempty"`    // the app's folder in the repository; "" is its root
 	// StaticFallback: Artifact is a guess at a binary; if the build makes
 	// none, a site folder (build/, dist/ or out/ with an index.html) is
@@ -69,7 +72,8 @@ type Plan struct {
 	// only what a builder that doesn't read it falls back to.
 	RSCKit bool `json:"rsc_kit,omitempty"`
 
-	// how a binary runs, from homeport.yaml or Settings: checked by whoever
+	// how a binary runs, from homeport.yaml or Settings (a PHP app's has a
+	// default, PHPRun): checked by whoever
 	// runs it (the CLI, the control plane), not here
 	Run       string    `json:"run,omitempty"`
 	Release   string    `json:"release,omitempty"`
@@ -84,9 +88,26 @@ type Process struct {
 	CPU    string `json:"cpu,omitempty"`
 }
 
-// FrankenPHPImage is homeport's FrankenPHP base (images/frankenphp): PHP 8.5
-// with the standard extensions, compiled once, FrankenPHP 1.12.7.
-const FrankenPHPImage = "ghcr.io/homeport-sh/frankenphp:8.5-1.12.7"
+// FrankenPHPImage is homeport's FrankenPHP base (images/frankenphp): a
+// static FrankenPHP 1.12.7 with PHP 8.5 and the standard extensions, built
+// once, that bundles ship (frankenphp-bundle); composer, and Bun 1.4.2 for
+// front-end assets. Pinned by digest: a tag can be pushed again.
+const FrankenPHPImage = "ghcr.io/homeport-sh/frankenphp:8.5-1.12.7-bun1.4.2@sha256:190bf056138b92cce824a5630db049a6c1bb9f77bc4fb6853ef4761944503e48"
+
+// BundleDir is where a PHP app's build puts its bundle, in the app's folder.
+const BundleDir = ".homeport-bundle"
+
+// PHPRun is how a PHP app's bundle runs when nothing says: FrankenPHP (its
+// bin) serves public/ on the port homeport gives it ($PORT is substituted
+// where it's run, without a shell); with no args it would print its help
+// and exit. PHPOctaneRun serves an app that uses Octane in FrankenPHP's
+// worker mode, through Octane's worker: the config frankenphp-bundle writes
+// for it (octane:frankenphp's, without artisan in front; HOMEPORT_WORKERS
+// workers, 2 by default, which the smallest size has the memory for).
+const (
+	PHPRun       = "php-server --root public --listen :$PORT"
+	PHPOctaneRun = "run --config .homeport/octane.caddyfile --adapter caddyfile"
+)
 
 // SiteFolders are where a build's static site lands, tried in order when a
 // guessed binary isn't there.
@@ -231,6 +252,16 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	if s.Run != "" {
 		p.Run = s.Run
 	}
+	if p.Toolchain == "php" && p.Kind == Bundle {
+		switch {
+		case p.Run == "" && r.requires("laravel/octane"):
+			p.Run = PHPOctaneRun
+		case p.Run == "":
+			p.Run = PHPRun
+		default:
+			p.Run = phpServerRoot(p.Run)
+		}
+	}
 	if p.Kind == Static {
 		p.Run, p.Release, p.Processes = "", "", nil // nothing runs
 	}
@@ -264,9 +295,10 @@ func (r reader) detect(cfg fileConfig) (Plan, error) {
 		}
 		p.Toolchain, p.Image, p.Framework = "custom", cfg.Build.Image, "Custom image"
 	case r.exists("composer.json"):
-		// PHP: on homeport's FrankenPHP base, where PHP is compiled already.
-		// The platform check comes first (seconds), then composer, then
-		// the front-end assets if the app builds any, and the app is embedded.
+		// PHP: on homeport's FrankenPHP base, where FrankenPHP is built
+		// already. The platform check comes first (seconds), then composer,
+		// then the front-end assets if the app builds any, and the app is
+		// bundled with that FrankenPHP: nothing is compiled.
 		if !r.exists("composer.lock") {
 			return Plan{}, errors.New("composer.json without composer.lock: commit the lockfile, so the build installs what you tested")
 		}
@@ -279,8 +311,14 @@ func (r reader) detect(cfg fileConfig) (Plan, error) {
 				p.Install += " && bun install && bun run build"
 			}
 		}
+		if cfg.Static == "" {
+			p.Kind = Bundle
+			if cfg.Build.Artifact == "" {
+				p.Artifact, p.StaticFallback = BundleDir, false
+			}
+		}
 		if p.Command == "" {
-			p.Command = "frankenphp-embed . " + p.Artifact
+			p.Command = "frankenphp-bundle . " + p.Artifact
 		}
 	case r.exists("go.mod"):
 		v, err := r.goVersion()
@@ -441,6 +479,35 @@ func (r reader) deps() map[string]bool {
 		out[k] = true
 	}
 	return out
+}
+
+// phpServerRoot: a php-server run that names no document root serves
+// public/. An embedded FrankenPHP did that by itself, so a run written for
+// one says no --root; run from a bundle's folder it would serve the app's
+// own files (its config, its .env).
+func phpServerRoot(run string) string {
+	f := strings.Fields(run)
+	if len(f) == 0 || f[0] != "php-server" {
+		return run
+	}
+	for _, a := range f[1:] {
+		if a == "-r" || a == "--root" || strings.HasPrefix(a, "--root=") || strings.HasPrefix(a, "-r=") {
+			return run
+		}
+	}
+	return strings.Join(append([]string{"php-server", "--root", "public"}, f[1:]...), " ")
+}
+
+// requires says whether composer.json requires a package.
+func (r reader) requires(pkg string) bool {
+	b, err := r.read("composer.json")
+	if err != nil {
+		return false
+	}
+	var c struct {
+		Require map[string]any `json:"require"`
+	}
+	return json.Unmarshal(b, &c) == nil && c.Require[pkg] != nil
 }
 
 func (r reader) hasScript(name string) bool {
