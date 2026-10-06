@@ -244,7 +244,7 @@ func TestAPHPAppShipsAsABundle(t *testing.T) {
 		return m
 	}
 	octane := with(map[string]string{"composer.json": `{"require":{"laravel/framework":"^13.0","laravel/octane":"^2.13"}}`})
-	if p := detect(t, octane, buildplan.Settings{}); p.Run != "php-server --root public --listen :$PORT --worker public/frankenphp-worker.php,2" {
+	if p := detect(t, octane, buildplan.Settings{}); p.Run != "run --config .homeport/octane.caddyfile --adapter caddyfile" {
 		t.Fatalf("octane: %q", p.Run)
 	}
 	if p := detect(t, with(map[string]string{"homeport.yaml": "run: php-server --root public --listen :$PORT --access-log\n"}), buildplan.Settings{}); p.Run != "php-server --root public --listen :$PORT --access-log" {

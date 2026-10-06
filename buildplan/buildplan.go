@@ -98,12 +98,13 @@ const BundleDir = ".homeport-bundle"
 // PHPRun is how a PHP app's bundle runs when nothing says: FrankenPHP (its
 // bin) serves public/ on the port homeport gives it ($PORT is substituted
 // where it's run, without a shell); with no args it would print its help
-// and exit. PHPOctaneRun is the same in worker mode, through the worker
-// Octane ships, for an app that uses Octane: two workers, which the
-// smallest size has the memory for (each holds the booted app).
+// and exit. PHPOctaneRun serves an app that uses Octane in FrankenPHP's
+// worker mode, through Octane's worker: the config frankenphp-bundle writes
+// for it (octane:frankenphp's, without artisan in front; HOMEPORT_WORKERS
+// workers, 2 by default, which the smallest size has the memory for).
 const (
 	PHPRun       = "php-server --root public --listen :$PORT"
-	PHPOctaneRun = PHPRun + " --worker public/frankenphp-worker.php,2"
+	PHPOctaneRun = "run --config .homeport/octane.caddyfile --adapter caddyfile"
 )
 
 // SiteFolders are where a build's static site lands, tried in order when a
