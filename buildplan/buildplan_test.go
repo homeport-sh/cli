@@ -233,6 +233,10 @@ func TestAPHPAppShipsAsABundle(t *testing.T) {
 		p.Command != "frankenphp-bundle . .homeport-bundle" || p.Run != "php-server --root public --listen :$PORT" {
 		t.Fatalf("default: %+v", p)
 	}
+	// on the base with the static FrankenPHP and Bun, pinned by digest
+	if !strings.HasPrefix(p.Image, "ghcr.io/homeport-sh/frankenphp:8.5-1.12.7-bun1.4.2@sha256:") {
+		t.Fatalf("image: %s", p.Image)
+	}
 	if b, _ := json.Marshal(p); !strings.Contains(string(b), `"kind":"bundle"`) {
 		t.Fatalf("json: %s", b)
 	}

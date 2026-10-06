@@ -88,9 +88,11 @@ type Process struct {
 	CPU    string `json:"cpu,omitempty"`
 }
 
-// FrankenPHPImage is homeport's FrankenPHP base (images/frankenphp): PHP 8.5
-// with the standard extensions, compiled once, FrankenPHP 1.12.7.
-const FrankenPHPImage = "ghcr.io/homeport-sh/frankenphp:8.5-1.12.7"
+// FrankenPHPImage is homeport's FrankenPHP base (images/frankenphp): a
+// static FrankenPHP 1.12.7 with PHP 8.5 and the standard extensions, built
+// once, that bundles ship (frankenphp-bundle); composer, and Bun 1.4.2 for
+// front-end assets. Pinned by digest: a tag can be pushed again.
+const FrankenPHPImage = "ghcr.io/homeport-sh/frankenphp:8.5-1.12.7-bun1.4.2@sha256:190bf056138b92cce824a5630db049a6c1bb9f77bc4fb6853ef4761944503e48"
 
 // BundleDir is where a PHP app's build puts its bundle, in the app's folder.
 const BundleDir = ".homeport-bundle"
