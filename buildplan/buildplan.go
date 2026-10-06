@@ -250,10 +250,14 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	if s.Run != "" {
 		p.Run = s.Run
 	}
-	if p.Run == "" && p.Toolchain == "php" && p.Kind == Bundle {
-		p.Run = PHPRun
-		if r.requires("laravel/octane") {
+	if p.Toolchain == "php" && p.Kind == Bundle {
+		switch {
+		case p.Run == "" && r.requires("laravel/octane"):
 			p.Run = PHPOctaneRun
+		case p.Run == "":
+			p.Run = PHPRun
+		default:
+			p.Run = phpServerRoot(p.Run)
 		}
 	}
 	if p.Kind == Static {
@@ -473,6 +477,23 @@ func (r reader) deps() map[string]bool {
 		out[k] = true
 	}
 	return out
+}
+
+// phpServerRoot: a php-server run that names no document root serves
+// public/. An embedded FrankenPHP did that by itself, so a run written for
+// one says no --root; run from a bundle's folder it would serve the app's
+// own files (its config, its .env).
+func phpServerRoot(run string) string {
+	f := strings.Fields(run)
+	if len(f) == 0 || f[0] != "php-server" {
+		return run
+	}
+	for _, a := range f[1:] {
+		if a == "-r" || a == "--root" || strings.HasPrefix(a, "--root=") || strings.HasPrefix(a, "-r=") {
+			return run
+		}
+	}
+	return strings.Join(append([]string{"php-server", "--root", "public"}, f[1:]...), " ")
 }
 
 // requires says whether composer.json requires a package.

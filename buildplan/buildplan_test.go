@@ -250,6 +250,26 @@ func TestAPHPAppShipsAsABundle(t *testing.T) {
 	if p := detect(t, with(map[string]string{"homeport.yaml": "run: php-server --root public --listen :$PORT --access-log\n"}), buildplan.Settings{}); p.Run != "php-server --root public --listen :$PORT --access-log" {
 		t.Fatalf("homeport.yaml: %q", p.Run)
 	}
+	// a run from before bundles: an embedded FrankenPHP served public/
+	// without --root; from a bundle's folder that would serve the app's
+	// own files, so it keeps serving public/
+	if p := detect(t, php, buildplan.Settings{Run: "php-server"}); p.Run != "php-server --root public" {
+		t.Errorf("bare php-server: %q", p.Run)
+	}
+	for _, run := range []string{"php-server --listen :$PORT", "php-server  --listen :$PORT --access-log"} {
+		p := detect(t, with(map[string]string{"homeport.yaml": "run: " + run + "\n"}), buildplan.Settings{})
+		if !strings.HasPrefix(p.Run, "php-server --root public ") || !strings.Contains(p.Run, "--listen :$PORT") {
+			t.Errorf("%q: %q", run, p.Run)
+		}
+		if p := detect(t, php, buildplan.Settings{Run: run}); !strings.HasPrefix(p.Run, "php-server --root public ") {
+			t.Errorf("settings %q: %q", run, p.Run)
+		}
+	}
+	for _, run := range []string{"php-server -r web --listen :$PORT", "php-server --root=web --listen :$PORT", "php-cli artisan serve"} {
+		if p := detect(t, with(map[string]string{"homeport.yaml": "run: " + run + "\n"}), buildplan.Settings{}); p.Run != run {
+			t.Errorf("%q changed: %q", run, p.Run)
+		}
+	}
 	if p := detect(t, with(map[string]string{"homeport.yaml": "build:\n  artifact: dist/app\n"}), buildplan.Settings{}); p.Command != "frankenphp-bundle . dist/app" || p.Artifact != "dist/app" || p.Kind != buildplan.Bundle {
 		t.Fatalf("artifact: %+v", p)
 	}
