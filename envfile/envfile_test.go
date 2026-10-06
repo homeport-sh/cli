@@ -17,6 +17,32 @@ func TestNames(t *testing.T) {
 	}
 }
 
+// Names that change how a shell or the dynamic linker behaves must be refused
+// before they ever reach a host: homeportd (a bash script) runs as root to
+// build gVisor sandboxes, and a value named BASH_ENV or LD_PRELOAD would run
+// as root if it entered that process's environment (the C1 escalation). PATH
+// stays allowed — it is legitimate for an app, and never enters root context.
+func TestReservedNamesAreRefused(t *testing.T) {
+	for name, reserved := range map[string]bool{
+		"BASH_ENV": true, "ENV": true, "SHELLOPTS": true, "PS4": true, "IFS": true,
+		"GCONV_PATH": true, "LD_PRELOAD": true, "LD_LIBRARY_PATH": true,
+		"BASH_FUNC_x": true, "HOMEPORT_ROOT": true, "SANDBOX_CGROUP": true,
+		// legitimate, must stay allowed
+		"PATH": false, "DATABASE_URL": false, "NODE_ENV": false, "LDAP_URL": false, "ENVIRONMENT": false,
+	} {
+		if got := envfile.Reserved(name); got != reserved {
+			t.Errorf("Reserved(%q) = %v, want %v", name, got, reserved)
+		}
+		_, err := envfile.Line(name, "x")
+		if reserved && err == nil {
+			t.Errorf("Line accepted reserved name %q", name)
+		}
+		if !reserved && err != nil {
+			t.Errorf("Line refused legitimate name %q: %v", name, err)
+		}
+	}
+}
+
 func TestEncodingEscapesExactlyWhatHomeportdUnescapes(t *testing.T) {
 	for in, want := range map[string]string{
 		"plain":                `"plain"`,
