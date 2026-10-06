@@ -42,7 +42,9 @@ const RSCKitMarker = ".output/rsc-kit.json"
 const ConfigFile = "homeport.yaml"
 
 // Settings are what a person set about the build, each overriding what
-// homeport.yaml or detection would say; empty is "detect it".
+// homeport.yaml or detection would say; empty is "detect it". The app's
+// saved settings are one layer, one deploy's ("use once", With) another
+// over them.
 type Settings struct {
 	Root    string `json:"root,omitempty"`    // the app's folder in the repository
 	Kind    string `json:"kind,omitempty"`    // binary or static
@@ -50,6 +52,43 @@ type Settings struct {
 	Command string `json:"command,omitempty"` // the build
 	Output  string `json:"output,omitempty"`  // the binary, or the site's folder, relative to Root
 	Run     string `json:"run,omitempty"`     // a binary's args (it's run as ./bin <run>)
+	// Release: args to ./bin, run before a release goes live (migrations)
+	Release string `json:"release,omitempty"`
+	// Processes: the app's processes beside the web, replacing
+	// homeport.yaml's when there are any
+	Processes []Process `json:"processes,omitempty"`
+	// Octane: a Laravel app served through Octane (true) or not (false);
+	// nil is "whether it requires laravel/octane"
+	Octane *bool `json:"octane,omitempty"`
+}
+
+// IsZero says whether nothing is set.
+func (s Settings) IsZero() bool {
+	return s.Root == "" && s.Kind == "" && s.Install == "" && s.Command == "" && s.Output == "" &&
+		s.Run == "" && s.Release == "" && len(s.Processes) == 0 && s.Octane == nil
+}
+
+// With is s with what o sets in its place: one deploy's settings over the
+// app's saved ones. What o leaves empty is s's; processes, when o has any,
+// are o's alone.
+func (s Settings) With(o Settings) Settings {
+	pick := func(a, b string) string {
+		if b != "" {
+			return b
+		}
+		return a
+	}
+	out := Settings{Root: pick(s.Root, o.Root), Kind: pick(s.Kind, o.Kind), Install: pick(s.Install, o.Install),
+		Command: pick(s.Command, o.Command), Output: pick(s.Output, o.Output), Run: pick(s.Run, o.Run),
+		Release: pick(s.Release, o.Release), Processes: slices.Clone(s.Processes), Octane: s.Octane}
+	if len(o.Processes) > 0 {
+		out.Processes = slices.Clone(o.Processes)
+	}
+	if o.Octane != nil {
+		v := *o.Octane
+		out.Octane = &v
+	}
+	return out
 }
 
 // Plan is how the app is built and what comes out.
@@ -78,6 +117,10 @@ type Plan struct {
 	Run       string    `json:"run,omitempty"`
 	Release   string    `json:"release,omitempty"`
 	Processes []Process `json:"processes,omitempty"`
+	// Octane: a PHP app served through Laravel Octane (PHPOctaneRun);
+	// OctaneAvailable: it requires laravel/octane, so it could be
+	Octane          bool `json:"octane,omitempty"`
+	OctaneAvailable bool `json:"octane_available,omitempty"`
 }
 
 // Process is one of the app's processes beside the web.
@@ -174,7 +217,14 @@ func (s Settings) Check() error {
 			return fmt.Errorf("%s command: one line, at most %d characters", name, maxCommandSz)
 		}
 	}
-	return nil
+	// how it runs: by the sandbox's rules
+	if err := CheckRun(s.Run); err != nil {
+		return err
+	}
+	if err := CheckRelease(s.Release); err != nil {
+		return err
+	}
+	return CheckProcesses(s.Processes)
 }
 
 func relPath(p string) bool {
@@ -252,14 +302,37 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	if s.Run != "" {
 		p.Run = s.Run
 	}
-	if p.Toolchain == "php" && p.Kind == Bundle {
+	if s.Release != "" {
+		p.Release = s.Release
+	}
+	if len(s.Processes) > 0 {
+		p.Processes = slices.SortedFunc(slices.Values(s.Processes), func(a, b Process) int { return strings.Compare(a.Name, b.Name) })
+	}
+	php := p.Toolchain == "php" && p.Kind == Bundle
+	if s.Octane != nil && *s.Octane && !php {
+		return Plan{}, errors.New("Octane is for Laravel apps: this one isn't built as a PHP app")
+	}
+	if php {
+		p.OctaneAvailable = r.requires("laravel/octane")
+		// a start command a person set wins; else their Octane switch, over
+		// homeport.yaml's run; else the file's, else whether it requires Octane
+		octane := p.Run == "" && p.OctaneAvailable
+		if s.Run == "" && s.Octane != nil {
+			octane = *s.Octane
+			if octane || p.Run == PHPOctaneRun {
+				p.Run = ""
+			}
+		}
+		if octane && !p.OctaneAvailable {
+			return Plan{}, errors.New("Octane is on, but composer.json doesn't require laravel/octane: composer require laravel/octane, or turn Octane off")
+		}
 		switch {
-		case p.Run == "" && r.requires("laravel/octane"):
-			p.Run = PHPOctaneRun
+		case octane:
+			p.Run, p.Octane = PHPOctaneRun, true
 		case p.Run == "":
 			p.Run = PHPRun
 		default:
-			p.Run = phpServerRoot(p.Run)
+			p.Run, p.Octane = phpServerRoot(p.Run), p.Run == PHPOctaneRun
 		}
 	}
 	if p.Kind == Static {

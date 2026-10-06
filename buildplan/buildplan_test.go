@@ -288,3 +288,156 @@ func TestAPHPAppShipsAsABundle(t *testing.T) {
 		t.Fatalf("go: %+v", p)
 	}
 }
+
+// How the app runs - its start command, its release command and its
+// processes - is a person's say too: what they set wins over homeport.yaml,
+// which wins over detection; what they leave empty is the file's, or none.
+func TestHowItRunsIsSetOverTheFileOverDetection(t *testing.T) {
+	files := map[string]string{
+		"go.mod":        "module m\n\ngo 1.24\n",
+		"homeport.yaml": "run: serve --port $PORT\nrelease: migrate\nprocesses:\n  worker: work --queue default\n",
+	}
+	p := detect(t, files, buildplan.Settings{})
+	if p.Run != "serve --port $PORT" || p.Release != "migrate" || len(p.Processes) != 1 || p.Processes[0].Name != "worker" {
+		t.Fatalf("file: %+v", p)
+	}
+	p = detect(t, files, buildplan.Settings{Release: "migrate --force", Processes: []buildplan.Process{
+		{Name: "scheduler", Run: "schedule:work"}, {Name: "mailer", Run: "queue:work --queue mail"}}})
+	if p.Run != "serve --port $PORT" || p.Release != "migrate --force" {
+		t.Fatalf("settings: %+v", p)
+	}
+	// the person's processes are the app's: the file's are replaced, not added to
+	if len(p.Processes) != 2 || p.Processes[0].Name != "mailer" || p.Processes[1].Name != "scheduler" {
+		t.Fatalf("processes: %+v", p.Processes)
+	}
+	// none anywhere: none
+	if p := detect(t, map[string]string{"go.mod": "module m\n\ngo 1.24\n"}, buildplan.Settings{}); p.Release != "" || p.Processes != nil {
+		t.Fatalf("detected: %+v", p)
+	}
+}
+
+// One deploy's settings ("use once") win over the app's saved ones, field by
+// field: what it leaves empty is the saved settings'.
+func TestOneDeploysSettingsWinOverTheSavedOnes(t *testing.T) {
+	off, on := false, true
+	saved := buildplan.Settings{Root: "web", Command: "bun run build", Run: "serve", Release: "migrate", Octane: &on,
+		Processes: []buildplan.Process{{Name: "worker", Run: "work"}}}
+	got := saved.With(buildplan.Settings{Run: "serve --debug", Octane: &off})
+	if got.Run != "serve --debug" || got.Release != "migrate" || got.Command != "bun run build" || got.Root != "web" ||
+		got.Octane == nil || *got.Octane || len(got.Processes) != 1 {
+		t.Fatalf("with: %+v", got)
+	}
+	got = saved.With(buildplan.Settings{Processes: []buildplan.Process{{Name: "mailer", Run: "mail"}}})
+	if len(got.Processes) != 1 || got.Processes[0].Name != "mailer" || got.Octane == nil || !*got.Octane {
+		t.Fatalf("processes: %+v", got)
+	}
+	if len(saved.Processes) != 1 || saved.Processes[0].Name != "worker" {
+		t.Fatalf("saved changed: %+v", saved)
+	}
+	if !(buildplan.Settings{}).IsZero() || saved.IsZero() || (buildplan.Settings{Octane: &off}).IsZero() {
+		t.Fatal("IsZero")
+	}
+}
+
+// Laravel Octane is served when the app requires laravel/octane - unless a
+// person turned it off; turned on, it needs the package (its worker comes
+// from it). A start command wins over either.
+func TestOctaneIsDetectedAndCanBeTurnedOff(t *testing.T) {
+	off, on := false, true
+	octane := map[string]string{"composer.json": `{"require":{"laravel/framework":"^13.0","laravel/octane":"^2.13"}}`, "composer.lock": "{}"}
+	plain := map[string]string{"composer.json": `{"require":{"laravel/framework":"^13.0"}}`, "composer.lock": "{}"}
+	if p := detect(t, octane, buildplan.Settings{}); p.Run != buildplan.PHPOctaneRun || !p.Octane || !p.OctaneAvailable {
+		t.Fatalf("detected: %+v", p)
+	}
+	if p := detect(t, octane, buildplan.Settings{Octane: &off}); p.Run != buildplan.PHPRun || p.Octane || !p.OctaneAvailable {
+		t.Fatalf("off: %+v", p)
+	}
+	if p := detect(t, octane, buildplan.Settings{Octane: &on, Run: "php-server --root public --listen :$PORT --debug"}); p.Octane || !strings.HasSuffix(p.Run, "--debug") {
+		t.Fatalf("a start command wins: %+v", p)
+	}
+	if p := detect(t, plain, buildplan.Settings{}); p.Run != buildplan.PHPRun || p.Octane || p.OctaneAvailable {
+		t.Fatalf("plain: %+v", p)
+	}
+	if _, err := buildplan.Detect(repo(plain), buildplan.Settings{Octane: &on}); err == nil || !strings.Contains(err.Error(), "laravel/octane") {
+		t.Fatalf("on without the package: %v", err)
+	}
+	if _, err := buildplan.Detect(repo(map[string]string{"go.mod": "module m\n\ngo 1.24\n"}), buildplan.Settings{Octane: &on}); err == nil || !strings.Contains(err.Error(), "Laravel") {
+		t.Fatalf("on for Go: %v", err)
+	}
+	// off means nothing to an app that isn't PHP
+	if p := detect(t, map[string]string{"go.mod": "module m\n\ngo 1.24\n"}, buildplan.Settings{Octane: &off}); p.Octane || p.Run != "" {
+		t.Fatalf("off for Go: %+v", p)
+	}
+}
+
+// How an app runs is exec'd in its sandbox without a shell, so settings are
+// checked by the sandbox's rules before anything is planned: run may name
+// only $PORT and $HOST; a release and each process are args to ./bin with no
+// variables; at most four processes, named, never web or release.
+func TestHowItRunsIsCheckedByTheSandboxsRules(t *testing.T) {
+	ok := buildplan.Settings{Run: "serve --addr ${HOST}:$PORT", Release: "php-cli artisan migrate --force",
+		Processes: []buildplan.Process{{Name: "worker", Run: "php-cli artisan queue:work", Memory: "256M", CPU: "50%"}}}
+	if err := ok.Check(); err != nil {
+		t.Fatalf("ok: %v", err)
+	}
+	five := make([]buildplan.Process, 5)
+	for i := range five {
+		five[i] = buildplan.Process{Name: "p" + string(rune('a'+i)), Run: "x"}
+	}
+	for name, c := range map[string]struct {
+		s    buildplan.Settings
+		says string
+	}{
+		"run with a shell":         {buildplan.Settings{Run: "serve; rm -rf /"}, "run"},
+		"run with a variable":      {buildplan.Settings{Run: "serve $SECRET"}, "$PORT"},
+		"run with a newline":       {buildplan.Settings{Run: "serve\nrm"}, "run"},
+		"release with &&":          {buildplan.Settings{Release: "migrate && seed"}, "release"},
+		"release with a pipe":      {buildplan.Settings{Release: "migrate | tee"}, "release"},
+		"release with a variable":  {buildplan.Settings{Release: "migrate $DB"}, "release"},
+		"release with a newline":   {buildplan.Settings{Release: "migrate\nseed"}, "release"},
+		"release through ./bin":    {buildplan.Settings{Release: "./bin migrate"}, "write `migrate`"},
+		"release too long":         {buildplan.Settings{Release: strings.Repeat("x", 1001)}, "1000"},
+		"process named web":        {buildplan.Settings{Processes: []buildplan.Process{{Name: "web", Run: "x"}}}, "not web or release"},
+		"process named release":    {buildplan.Settings{Processes: []buildplan.Process{{Name: "release", Run: "x"}}}, "not web or release"},
+		"process named in caps":    {buildplan.Settings{Processes: []buildplan.Process{{Name: "Worker", Run: "x"}}}, "lowercase"},
+		"process name too long":    {buildplan.Settings{Processes: []buildplan.Process{{Name: strings.Repeat("a", 16), Run: "x"}}}, "max 15"},
+		"process twice":            {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: "x"}, {Name: "worker", Run: "y"}}}, "twice"},
+		"process with no command":  {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker"}}}, "command"},
+		"process with a shell":     {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: "work; rm -rf /"}}}, "without a shell"},
+		"process with a backtick":  {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: "work `id`"}}}, "without a shell"},
+		"process with a newline":   {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: "work\nrm"}}}, "without a shell"},
+		"process command too long": {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: strings.Repeat("x", 1001)}}}, "1000"},
+		"process memory":           {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: "x", Memory: "lots"}}}, "memory"},
+		"process cpu":              {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: "x", CPU: "half"}}}, "cpu"},
+		"five processes":           {buildplan.Settings{Processes: five}, "at most 4"},
+	} {
+		err := c.s.Check()
+		if err == nil || !strings.Contains(err.Error(), c.says) {
+			t.Errorf("%s: %v (want it to say %q)", name, err, c.says)
+		}
+		if _, derr := buildplan.Detect(repo(map[string]string{"go.mod": "module m\n\ngo 1.24\n"}), c.s); derr == nil {
+			t.Errorf("%s: planned", name)
+		}
+	}
+}
+
+// The Octane switch is the person's say, so it wins over homeport.yaml's run;
+// a start command they set wins over the switch.
+func TestTheOctaneSwitchWinsOverTheFilesRun(t *testing.T) {
+	off, on := false, true
+	files := map[string]string{"composer.json": `{"require":{"laravel/octane":"^2.13"}}`, "composer.lock": "{}",
+		"homeport.yaml": "run: php-server --root public --listen :$PORT --access-log\n"}
+	if p := detect(t, files, buildplan.Settings{}); p.Octane || !strings.HasSuffix(p.Run, "--access-log") {
+		t.Fatalf("the file's run: %+v", p)
+	}
+	if p := detect(t, files, buildplan.Settings{Octane: &on}); !p.Octane || p.Run != buildplan.PHPOctaneRun {
+		t.Fatalf("on: %+v", p)
+	}
+	if p := detect(t, files, buildplan.Settings{Octane: &off}); p.Octane || !strings.HasSuffix(p.Run, "--access-log") {
+		t.Fatalf("off keeps the file's run: %+v", p)
+	}
+	files["homeport.yaml"] = "run: " + buildplan.PHPOctaneRun + "\n"
+	if p := detect(t, files, buildplan.Settings{Octane: &off}); p.Octane || p.Run != buildplan.PHPRun {
+		t.Fatalf("off over the file's Octane run: %+v", p)
+	}
+}
