@@ -203,6 +203,19 @@ func (p *processConfig) UnmarshalYAML(n *yaml.Node) error {
 
 // Check says whether settings are well-formed, before anything reads them.
 func (s Settings) Check() error {
+	for name, v := range map[string]string{"root directory": s.Root, "kind": s.Kind, "install command": s.Install,
+		"build command": s.Command, "output": s.Output, "start command": s.Run, "release command": s.Release} {
+		if err := checkText(name, v); err != nil {
+			return err
+		}
+	}
+	for _, p := range s.Processes {
+		for name, v := range map[string]string{"process name": p.Name, "process command": p.Run, "process memory": p.Memory, "process cpu": p.CPU} {
+			if err := checkText(name, v); err != nil {
+				return err
+			}
+		}
+	}
 	if s.Root != "" && (!relPath(s.Root) || s.Root == ".") {
 		return fmt.Errorf("root directory %q must be a folder inside the repository", s.Root)
 	}

@@ -390,7 +390,7 @@ func TestHowItRunsIsCheckedByTheSandboxsRules(t *testing.T) {
 	}{
 		"run with a shell":         {buildplan.Settings{Run: "serve; rm -rf /"}, "run"},
 		"run with a variable":      {buildplan.Settings{Run: "serve $SECRET"}, "$PORT"},
-		"run with a newline":       {buildplan.Settings{Run: "serve\nrm"}, "run"},
+		"run with a newline":       {buildplan.Settings{Run: "serve\nrm"}, "control characters"},
 		"release with &&":          {buildplan.Settings{Release: "migrate && seed"}, "release"},
 		"release with a pipe":      {buildplan.Settings{Release: "migrate | tee"}, "release"},
 		"release with a variable":  {buildplan.Settings{Release: "migrate $DB"}, "release"},
@@ -405,7 +405,7 @@ func TestHowItRunsIsCheckedByTheSandboxsRules(t *testing.T) {
 		"process with no command":  {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker"}}}, "command"},
 		"process with a shell":     {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: "work; rm -rf /"}}}, "without a shell"},
 		"process with a backtick":  {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: "work `id`"}}}, "without a shell"},
-		"process with a newline":   {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: "work\nrm"}}}, "without a shell"},
+		"process with a newline":   {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: "work\nrm"}}}, "control characters"},
 		"process command too long": {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: strings.Repeat("x", 1001)}}}, "1000"},
 		"process memory":           {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: "x", Memory: "lots"}}}, "memory"},
 		"process cpu":              {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: "x", CPU: "half"}}}, "cpu"},
@@ -439,5 +439,50 @@ func TestTheOctaneSwitchWinsOverTheFilesRun(t *testing.T) {
 	files["homeport.yaml"] = "run: " + buildplan.PHPOctaneRun + "\n"
 	if p := detect(t, files, buildplan.Settings{Octane: &off}); p.Octane || p.Run != buildplan.PHPRun {
 		t.Fatalf("off over the file's Octane run: %+v", p)
+	}
+}
+
+// A process's memory and CPU are bounded as homeportd bounds them: 1M to
+// 16384M (K counts in whole MB, so less than 1024K is none), 1% to 1600%.
+func TestAProcesssLimitsAreHomeportdsLimits(t *testing.T) {
+	with := func(mem, cpu string) buildplan.Settings {
+		return buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: "work", Memory: mem, CPU: cpu}}}
+	}
+	for _, ok := range []buildplan.Settings{with("1M", ""), with("16384M", ""), with("16G", ""), with("1024K", ""), with("", "1%"), with("", "1600%"), with("256M", "50%")} {
+		if err := ok.Check(); err != nil {
+			t.Errorf("%+v: %v", ok.Processes[0], err)
+		}
+	}
+	for _, bad := range []buildplan.Settings{with("0M", ""), with("512K", ""), with("16385M", ""), with("17G", ""), with("99999999G", ""),
+		with("123456789M", ""), with("", "0%"), with("", "1601%"), with("", "9999%"), with("", "00000%")} {
+		if err := bad.Check(); err == nil {
+			t.Errorf("%+v accepted", bad.Processes[0])
+		}
+	}
+}
+
+// Nothing in settings holds a control character - DEL included: none is
+// ever meant, and the builder's jq would write one larger than Go counts it.
+func TestSettingsHoldNoControlCharacters(t *testing.T) {
+	for name, s := range map[string]buildplan.Settings{
+		"install DEL":  {Install: "bun install\x7f"},
+		"command tab":  {Command: "bun\trun build"},
+		"command ESC":  {Command: "bun run build\x1b[31m"},
+		"output DEL":   {Output: "dist\x7f"},
+		"kind NUL":     {Kind: "static\x00"},
+		"run DEL":      {Run: "serve\x7f"},
+		"release BEL":  {Release: "migrate\x07"},
+		"process name": {Processes: []buildplan.Process{{Name: "work\x7f", Run: "x"}}},
+		"process run":  {Processes: []buildplan.Process{{Name: "worker", Run: "x\x7f"}}},
+		"memory":       {Processes: []buildplan.Process{{Name: "worker", Run: "x", Memory: "1M\x7f"}}},
+		"bad utf-8":    {Command: "bun run \xff"},
+	} {
+		err := s.Check()
+		if err == nil || !strings.Contains(err.Error(), "control character") && !strings.Contains(err.Error(), "UTF-8") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if err := (buildplan.Settings{Command: "bun run build && echo é"}).Check(); err != nil {
+		t.Fatalf("plain text: %v", err)
 	}
 }
