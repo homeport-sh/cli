@@ -230,7 +230,7 @@ func TestAPHPAppShipsAsABundle(t *testing.T) {
 	php := map[string]string{"composer.json": `{"require":{"laravel/framework":"^13.0"}}`, "composer.lock": "{}"}
 	p := detect(t, php, buildplan.Settings{})
 	if p.Kind != buildplan.Bundle || p.Artifact != ".homeport-bundle" || p.StaticFallback ||
-		p.Command != "frankenphp-bundle . .homeport-bundle && mv -T .homeport-bundle/frankenphp .homeport-bundle/bin" || p.Run != "php-server --root public --listen :$PORT" {
+		!strings.HasSuffix(p.Command, " && frankenphp-bundle . .homeport-bundle && mv -T .homeport-bundle/frankenphp .homeport-bundle/bin") || p.Run != "php-server --root public --listen :$PORT" {
 		t.Fatalf("default: %+v", p)
 	}
 	// on the base with the static FrankenPHP and Bun, pinned by digest
@@ -286,6 +286,51 @@ func TestAPHPAppShipsAsABundle(t *testing.T) {
 	// other toolchains' binaries run as they are
 	if p := detect(t, map[string]string{"go.mod": "module m\n\ngo 1.24\n"}, buildplan.Settings{}); p.Run != "" || p.Kind != buildplan.Binary {
 		t.Fatalf("go: %+v", p)
+	}
+}
+
+// A Laravel app (it requires laravel/framework, as the dashboard tells) is
+// built with the caches that don't depend on its environment - its events,
+// its compiled views, its routes - so a wake doesn't make them: each is
+// files read in a sandbox, where that's slow. Its config isn't cached: that
+// holds the environment, which the app gets when it runs, and which changes
+// without a build. An app that can't boot without its environment is built
+// without them, as before. Other PHP apps and a build command a person set
+// are left as they are.
+func TestALaravelAppIsBuiltWithItsCaches(t *testing.T) {
+	const caches = "php artisan event:cache && php artisan view:cache && php artisan route:cache" +
+		" || echo \"homeport: built without Laravel's event, view and route caches (artisan couldn't make them here); the app runs without them\" >&2"
+	laravel := map[string]string{"composer.json": `{"require":{"laravel/framework":"^13.0"}}`, "composer.lock": "{}"}
+	p := detect(t, laravel, buildplan.Settings{})
+	if p.Command != caches+" && frankenphp-bundle . .homeport-bundle && mv -T .homeport-bundle/frankenphp .homeport-bundle/bin" {
+		t.Fatalf("laravel: %q", p.Command)
+	}
+	if strings.Contains(p.Command, "config:cache") || strings.Contains(p.Install, "artisan") {
+		t.Fatalf("config is the environment's: %+v", p)
+	}
+	// with Octane, and wherever the bundle lands
+	octane := map[string]string{"composer.json": `{"require":{"laravel/framework":"^13.0","laravel/octane":"^2.13"}}`, "composer.lock": "{}"}
+	if p := detect(t, octane, buildplan.Settings{}); !strings.HasPrefix(p.Command, caches+" && frankenphp-bundle ") {
+		t.Fatalf("octane: %q", p.Command)
+	}
+	laravel["homeport.yaml"] = "build:\n  artifact: dist/app\n"
+	if p := detect(t, laravel, buildplan.Settings{}); p.Command != caches+" && frankenphp-bundle . dist/app && mv -T dist/app/frankenphp dist/app/bin" {
+		t.Fatalf("artifact: %q", p.Command)
+	}
+	// not Laravel: no artisan to run
+	for _, c := range []string{`{}`, `{"require":{"php":"^8.3","slim/slim":"^4"}}`, `{"require-dev":{"laravel/framework":"^13.0"}}`} {
+		if p := detect(t, map[string]string{"composer.json": c, "composer.lock": "{}"}, buildplan.Settings{}); strings.Contains(p.Command, "artisan") {
+			t.Errorf("%s: %q", c, p.Command)
+		}
+	}
+	// a build command someone wrote is theirs
+	laravel["homeport.yaml"] = "build:\n  command: frankenphp-bundle . .homeport-bundle\n"
+	if p := detect(t, laravel, buildplan.Settings{}); p.Command != "frankenphp-bundle . .homeport-bundle" {
+		t.Fatalf("homeport.yaml: %q", p.Command)
+	}
+	delete(laravel, "homeport.yaml")
+	if p := detect(t, laravel, buildplan.Settings{Command: "make bundle"}); p.Command != "make bundle" {
+		t.Fatalf("settings: %q", p.Command)
 	}
 }
 

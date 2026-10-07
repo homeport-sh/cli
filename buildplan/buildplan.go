@@ -187,6 +187,16 @@ const (
 	PHPOctaneRun = "run --config .homeport/octane.caddyfile --adapter caddyfile"
 )
 
+// LaravelCaches is what a Laravel app's build caches before it's bundled:
+// what doesn't depend on the app's environment - its events, its compiled
+// views, its routes - so that a wake doesn't make them (each is files read,
+// and in a sandbox that's slow). Not its config, which holds the
+// environment: the app gets that when it runs, and it changes without a
+// build. An app whose artisan needs its environment to boot is built
+// without the caches, as before, and says so.
+const LaravelCaches = "php artisan event:cache && php artisan view:cache && php artisan route:cache" +
+	" || echo \"homeport: built without Laravel's event, view and route caches (artisan couldn't make them here); the app runs without them\" >&2"
+
 // SiteFolders are where a build's static site lands, tried in order when a
 // guessed binary isn't there.
 var SiteFolders = []string{"build", "dist", "out"}
@@ -479,6 +489,9 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 				p.SSR, p.Runtime, p.RuntimeVersion, p.RuntimeReason = SSRInertia, x.rt, x.version, x.why
 				p.Warnings = append(p.Warnings, ssrMemoryNote)
 				p.Command = join(p.Command, ssrAssemble(p.Artifact, x))
+			}
+			if r.requires("laravel/framework") {
+				p.Command = LaravelCaches + " && " + p.Command
 			}
 		}
 	case r.exists("go.mod"):
