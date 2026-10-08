@@ -136,7 +136,8 @@ func TestTheRuntimeIsWhatTheProjectRuns(t *testing.T) {
 		"Hono with bun.lock and bun src/index.ts": {js(sprintf(hono, "bun src/index.ts"), "bun.lock", "{}"), buildplan.Settings{}, "bun", "bun src/index.ts"},
 		"Elysia's dev script":                     {js(`{"scripts":{"dev":"bun run --watch src/index.ts"},"dependencies":{"elysia":"^1"}}`, "bun.lock", "{}"), buildplan.Settings{}, "bun", "bun run --watch src/index.ts"},
 		"Elysia":                                  {js(`{"module":"src/index.ts","dependencies":{"elysia":"^1"}}`, "package-lock.json", "{}"), buildplan.Settings{}, "bun", "Elysia runs on Bun"},
-		"Elysia with .nvmrc still needs Bun":      {js(`{"scripts":{"start":"bun src/index.ts"},"dependencies":{"elysia":"^1"}}`, "bun.lock", "{}", ".nvmrc", "24\n"), buildplan.Settings{}, "bun", ".nvmrc"},
+		"an .nvmrc wins over Elysia's Bun":        {js(`{"dependencies":{"elysia":"^1"},"main":"src/index.ts"}`, "bun.lock", "{}", ".nvmrc", "24\n"), buildplan.Settings{}, "node", ".nvmrc"},
+		"Elysia's start script wins over Elysia":  {js(`{"scripts":{"start":"node dist/index.js"},"dependencies":{"elysia":"^1"}}`, "bun.lock", "{}"), buildplan.Settings{}, "node", "node dist/index.js"},
 		"engines names bun":                       {js(`{"engines":{"bun":">=1.2"},"scripts":{"start":"node server.js"},"dependencies":{"express":"^5"}}`), buildplan.Settings{}, "bun", "engines"},
 		"engines names node":                      {js(`{"engines":{"node":">=22"},"scripts":{"start":"bun server.ts"},"dependencies":{"express":"^5"}}`, "bun.lock", "{}"), buildplan.Settings{}, "node", "engines"},
 		".bun-version":                            {js(sprintf(hono, "node dist/index.js"), ".bun-version", "1.4.2\n"), buildplan.Settings{}, "bun", ".bun-version"},
@@ -271,21 +272,31 @@ func TestNodeIsAPinnedOfficialRelease(t *testing.T) {
 	}
 }
 
-// Bun is pinned too when nothing asks for another: by digest, its binary
-// checked. A version the project names is its own.
+// Bun is pinned too: by digest, its binary checked. A version the project
+// names must be the pinned one's (1, 1.4, 1.4.x, or a range it's in) -
+// anything else is refused, as Node's is: no image here is unpinned.
 func TestBunIsPinnedUnlessTheProjectSaysOtherwise(t *testing.T) {
 	elysia := `{"scripts":{"start":"bun src/index.ts"},"dependencies":{"elysia":"^1"}%s}`
 	p := detect(t, js(strings.Replace(elysia, "%s", "", 1), "bun.lock", "{}"), buildplan.Settings{})
 	if p.Image != buildplan.BunImage || p.RuntimeVersion != buildplan.BunVersion || !strings.Contains(p.Command, "a83d263767d839e4d2649ca8e35d07159c7afc99afdc96d731ced29e056dda0c") {
 		t.Fatalf("pinned: %+v", p)
 	}
-	p = detect(t, js(strings.Replace(elysia, "%s", `,"packageManager":"bun@1.2.20"`, 1), "bun.lock", "{}"), buildplan.Settings{})
-	if p.Image != "oven/bun:1.2.20" || p.RuntimeVersion != "1.2.20" || strings.Contains(p.Command, "sha256sum") {
-		t.Fatalf("named: %+v", p)
+	for _, ok := range []string{`,"engines":{"bun":">=1.1"}`, `,"packageManager":"bun@1.4.0"`, `,"engines":{"bun":"1"}`} {
+		p = detect(t, js(strings.Replace(elysia, "%s", ok, 1), "bun.lock", "{}"), buildplan.Settings{})
+		if p.Image != buildplan.BunImage || p.RuntimeVersion != buildplan.BunVersion {
+			t.Errorf("%s: %+v", ok, p)
+		}
 	}
-	p = detect(t, js(strings.Replace(elysia, "%s", `,"engines":{"bun":">=1.1"}`, 1), "bun.lock", "{}"), buildplan.Settings{})
-	if p.Image != buildplan.BunImage {
-		t.Fatalf("a range the pinned one meets: %+v", p)
+	for name, files := range map[string]map[string]string{
+		"packageManager":       js(strings.Replace(elysia, "%s", `,"packageManager":"bun@1.2.20"`, 1), "bun.lock", "{}"),
+		"a minor that floats":  js(strings.Replace(elysia, "%s", "", 1), "bun.lock", "{}", ".bun-version", "1.3\n"),
+		"engines out of range": js(strings.Replace(elysia, "%s", `,"engines":{"bun":"<1.3"}`, 1), "bun.lock", "{}"),
+		// Bun beside Node, in an npm app: refused the same, not forced
+		".bun-version on npm": js(`{"scripts":{"start":"bun src/index.ts"},"dependencies":{"hono":"^4"}}`, ".bun-version", "1.2.0\n"),
+	} {
+		if _, err := buildplan.Detect(repo(files), buildplan.Settings{}); err == nil || !strings.Contains(err.Error(), "Bun "+buildplan.BunVersion) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }
 
@@ -293,7 +304,7 @@ func TestBunIsPinnedUnlessTheProjectSaysOtherwise(t *testing.T) {
 // --compile in its build script. Otherwise a JavaScript server is a bundle
 // - the old guess at a binary is gone.
 func TestABinaryOnlyWhenTheBuildCompilesOne(t *testing.T) {
-	p := detect(t, js(`{"scripts":{"build":"bun build --compile --minify src/index.ts --outfile dist/app"},"dependencies":{"elysia":"^1"}}`, "bun.lock", "{}"), buildplan.Settings{})
+	p := detect(t, js(`{"scripts":{"build":"bun build --compile --minify src/index.ts --outfile dist/app","start":"./dist/app"},"dependencies":{"elysia":"^1"}}`, "bun.lock", "{}"), buildplan.Settings{})
 	if p.Kind != buildplan.Binary || p.Artifact != "dist/app" || p.Command != "bun run build" || p.StaticFallback || p.Runtime != "bun" ||
 		!strings.Contains(p.RuntimeReason, "--compile") || p.Run != "" {
 		t.Fatalf("compiled: %+v", p)
