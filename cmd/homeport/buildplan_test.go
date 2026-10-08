@@ -59,14 +59,14 @@ func TestABunRepoInstallsThenBuilds(t *testing.T) {
 	if p := plan(t, map[string]string{"package.json": `{}`, "bun.lock": "{}", ".bun-version": "1.2.20\n"}); p.Image != "oven/bun:1.2.20" {
 		t.Fatalf(".bun-version: %+v", p)
 	}
-	if p := plan(t, map[string]string{"package.json": `{}`, "bun.lock": "{}"}); p.Image != "oven/bun:1" {
+	if p := plan(t, map[string]string{"package.json": `{}`, "bun.lock": "{}"}); p.Image != buildplan.BunImage {
 		t.Fatalf("no version: %+v", p)
 	}
 }
 
 func TestANodeRepoUsesItsLockfileAndNodeVersion(t *testing.T) {
 	p := plan(t, map[string]string{"package.json": `{"engines":{"node":">=22"}}`, "package-lock.json": "{}", ".nvmrc": "v22.11.0\n"})
-	if p.Toolchain != "node" || p.Image != "node:22.11.0" || p.Install != "npm ci" || p.Command != "npm run build" {
+	if p.Toolchain != "node" || !strings.HasPrefix(p.Image, "node:22.23.3-bookworm@sha256:") || p.Install != "npm ci" || p.Command != "npm run build" {
 		t.Fatalf("%+v", p)
 	}
 }

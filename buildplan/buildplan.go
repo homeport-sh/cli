@@ -1,5 +1,7 @@
 // Package buildplan decides how a repository is built and what it produces -
-// a binary that runs, or a static site that's served - from the repository's
+// a binary that runs, a bundle (a folder run by its bin: a JavaScript app
+// with its runtime, a PHP app with FrankenPHP), or a static site that's
+// served - from the repository's
 // own files. homeport.yaml is never needed: the toolchain's files (go.mod, a
 // lockfile, a framework's config) say enough. Where it exists, its build
 // fields are used; where a person said otherwise (Settings, from the UI),
@@ -60,12 +62,15 @@ type Settings struct {
 	// Octane: a Laravel app served through Octane (true) or not (false);
 	// nil is "whether it requires laravel/octane"
 	Octane *bool `json:"octane,omitempty"`
+	// Runtime: what runs a JavaScript app, bun or node; empty is what the
+	// project says (its engines, version files, start script)
+	Runtime string `json:"runtime,omitempty"`
 }
 
 // IsZero says whether nothing is set.
 func (s Settings) IsZero() bool {
 	return s.Root == "" && s.Kind == "" && s.Install == "" && s.Command == "" && s.Output == "" &&
-		s.Run == "" && s.Release == "" && len(s.Processes) == 0 && s.Octane == nil
+		s.Run == "" && s.Release == "" && len(s.Processes) == 0 && s.Octane == nil && s.Runtime == ""
 }
 
 // With is s with what o sets in its place: one deploy's settings over the
@@ -80,7 +85,8 @@ func (s Settings) With(o Settings) Settings {
 	}
 	out := Settings{Root: pick(s.Root, o.Root), Kind: pick(s.Kind, o.Kind), Install: pick(s.Install, o.Install),
 		Command: pick(s.Command, o.Command), Output: pick(s.Output, o.Output), Run: pick(s.Run, o.Run),
-		Release: pick(s.Release, o.Release), Processes: slices.Clone(s.Processes), Octane: s.Octane}
+		Release: pick(s.Release, o.Release), Processes: slices.Clone(s.Processes), Octane: s.Octane,
+		Runtime: pick(s.Runtime, o.Runtime)}
 	if len(o.Processes) > 0 {
 		out.Processes = slices.Clone(o.Processes)
 	}
@@ -121,6 +127,20 @@ type Plan struct {
 	// OctaneAvailable: it requires laravel/octane, so it could be
 	Octane          bool `json:"octane,omitempty"`
 	OctaneAvailable bool `json:"octane_available,omitempty"`
+
+	// A JavaScript app's runtime - bun or node, the binary its bundle runs
+	// as bin - its version, and why that one (for people: "its start
+	// script runs bun src/index.ts"); the package manager that installs
+	// it; and the path its health is checked on.
+	Runtime        string `json:"runtime,omitempty"`
+	RuntimeVersion string `json:"runtime_version,omitempty"`
+	RuntimeReason  string `json:"runtime_reason,omitempty"`
+	PackageManager string `json:"package_manager,omitempty"`
+	Health         string `json:"health,omitempty"`
+
+	// a bundle's build, and what makes the bundle from what it left
+	// (Command is both): a build command someone sets replaces the first
+	build, assemble string
 }
 
 // Process is one of the app's processes beside the web.
@@ -159,9 +179,9 @@ var SiteFolders = []string{"build", "dist", "out"}
 // Files are the files Detect reads, relative to the app's folder: a control
 // plane fetches just these to show what a build will do.
 func Files() []string {
-	return []string{ConfigFile, "go.mod", "composer.json", "composer.lock", "package.json", "bun.lock", "bun.lockb",
-		"package-lock.json", ".nvmrc", ".bun-version", "index.html",
-		"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"}
+	return slices.Concat([]string{ConfigFile, "go.mod", "composer.json", "composer.lock", "package.json", "bun.lock", "bun.lockb",
+		"package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", ".nvmrc", ".node-version", ".bun-version", "index.html",
+		"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts", "svelte.config.js"}, nextConfigs)
 }
 
 var (
@@ -181,6 +201,7 @@ type fileConfig struct {
 		Image    string `yaml:"image"`
 	} `yaml:"build"`
 	Static    string                   `yaml:"static"`
+	Runtime   string                   `yaml:"runtime"`
 	Run       string                   `yaml:"run"`
 	Release   string                   `yaml:"release"`
 	Processes map[string]processConfig `yaml:"processes"`
@@ -203,7 +224,7 @@ func (p *processConfig) UnmarshalYAML(n *yaml.Node) error {
 
 // Check says whether settings are well-formed, before anything reads them.
 func (s Settings) Check() error {
-	for name, v := range map[string]string{"root directory": s.Root, "kind": s.Kind, "install command": s.Install,
+	for name, v := range map[string]string{"root directory": s.Root, "kind": s.Kind, "runtime": s.Runtime, "install command": s.Install,
 		"build command": s.Command, "output": s.Output, "start command": s.Run, "release command": s.Release} {
 		if err := checkText(name, v); err != nil {
 			return err
@@ -224,6 +245,9 @@ func (s Settings) Check() error {
 	}
 	if s.Kind != "" && s.Kind != Binary && s.Kind != Static {
 		return fmt.Errorf("kind %q: binary or static", s.Kind)
+	}
+	if s.Runtime != "" && s.Runtime != "bun" && s.Runtime != "node" {
+		return fmt.Errorf("runtime %q: bun or node", s.Runtime)
 	}
 	for name, v := range map[string]string{"install": s.Install, "build": s.Command, "run": s.Run} {
 		if len(v) > maxCommandSz || strings.ContainsAny(v, "\n\r\x00") {
@@ -277,20 +301,32 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 		return Plan{}, err
 	}
 
-	p, err := r.detect(cfg)
+	if cfg.Runtime != "" && cfg.Runtime != "bun" && cfg.Runtime != "node" {
+		return Plan{}, fmt.Errorf("%s: runtime %q: bun or node", ConfigFile, cfg.Runtime)
+	}
+	p, err := r.detect(cfg, s)
 	if err != nil {
 		return Plan{}, err
 	}
 	if s.Root != "" {
 		p.Root = r.root
 	}
-	p.Run, p.Release = cfg.Run, cfg.Release
+	if cfg.Run != "" {
+		p.Run = cfg.Run
+	}
+	p.Release = cfg.Release
 	for _, name := range slices.Sorted(maps.Keys(cfg.Processes)) {
 		pc := cfg.Processes[name]
 		p.Processes = append(p.Processes, Process{Name: name, Run: pc.Run, Memory: pc.Memory, CPU: pc.CPU})
 	}
 
 	// the person's say, last
+	if p.assemble != "" && (s.Kind != "" && s.Kind != p.Kind || s.Output != "") {
+		// they said it's a binary or a site: the build is just the build,
+		// and what it makes is theirs to say how to run
+		p.Command, p.assemble, p.Kind, p.Runtime, p.RuntimeVersion, p.RuntimeReason, p.Health = p.build, "", Binary, "", "", "", ""
+		p.Artifact, p.Run = "server", cfg.Run
+	}
 	if s.Kind != "" && s.Kind != p.Kind {
 		p.Kind, p.StaticFallback = s.Kind, false
 		if s.Output == "" {
@@ -304,7 +340,7 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 		p.RSCKit = false // the person said what the build makes
 	}
 	if s.Command != "" {
-		p.Command = s.Command
+		p.Command = join(s.Command, p.assemble) // a bundle is still made from what it leaves
 		if p.Toolchain == "none" {
 			return Plan{}, errors.New("a build command needs a toolchain: there's no package.json, go.mod or composer.json in the app's folder")
 		}
@@ -350,12 +386,14 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	}
 	if p.Kind == Static {
 		p.Run, p.Release, p.Processes = "", "", nil // nothing runs
+		p.Runtime, p.RuntimeVersion, p.RuntimeReason, p.Health = "", "", "", ""
 	}
 	return p, nil
 }
 
-// detect is the plan from the repository's files and homeport.yaml.
-func (r reader) detect(cfg fileConfig) (Plan, error) {
+// detect is the plan from the repository's files, homeport.yaml and the
+// runtime a person set.
+func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 	p := Plan{Kind: Binary, Command: cfg.Build.Command, Artifact: cfg.Build.Artifact}
 	if p.Artifact == "" {
 		p.Artifact, p.StaticFallback = "server", true
@@ -417,39 +455,16 @@ func (r reader) detect(cfg fileConfig) (Plan, error) {
 		if p.Command == "" {
 			p.Command = `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ` + p.Artifact + " ."
 		}
-	case r.exists("package.json") && (r.exists("bun.lock") || r.exists("bun.lockb") || r.packageManager("bun") != ""):
-		v := r.packageManager("bun")
-		if v == "" {
-			v = r.firstLine(".bun-version")
+	case r.exists("package.json") && (r.hasLockfile() || r.packageManagerOf(r.pkg()) != ""):
+		runtime, from := s.Runtime, "the build settings"
+		if runtime == "" && cfg.Runtime != "" {
+			runtime, from = cfg.Runtime, ConfigFile
 		}
-		if v == "" {
-			v = "1"
+		if err := r.js(&p, cfg, runtime, from, s.Run); err != nil {
+			return Plan{}, err
 		}
-		if !versionRe.MatchString(v) {
-			return Plan{}, fmt.Errorf("bun version %q isn't a version", v)
-		}
-		p.Toolchain, p.Image, p.Install, p.Framework = "bun", "oven/bun:"+v, "bun install --frozen-lockfile", "Bun"
-		if p.Command == "" {
-			p.Command = "bun run build"
-		}
-		if r.deps()["@rsc-kit/core"] {
-			r.rscKit(&p, cfg)
-		} else {
-			r.site(&p, cfg)
-		}
-	case r.exists("package.json") && r.exists("package-lock.json"):
-		v := strings.TrimPrefix(r.firstLine(".nvmrc"), "v")
-		if v == "" {
-			v = "22"
-		}
-		if !versionRe.MatchString(v) {
-			return Plan{}, fmt.Errorf(".nvmrc %q isn't a version", v)
-		}
-		p.Toolchain, p.Image, p.Install, p.Framework = "node", "node:"+v, "npm ci", "Node"
-		if p.Command == "" {
-			p.Command = "npm run build"
-		}
-		r.site(&p, cfg)
+	case r.exists("package.json") && !r.exists("index.html"):
+		return Plan{}, errors.New("package.json without a lockfile: commit the lockfile (package-lock.json, pnpm-lock.yaml, yarn.lock or bun.lock), so the build installs what you tested")
 	case r.exists("index.html"):
 		// plain HTML: nothing to build, the folder is the site
 		p.Toolchain, p.Framework, p.Kind, p.Artifact, p.StaticFallback = "none", "HTML", Static, ".", false
@@ -476,14 +491,14 @@ func (r reader) rscKit(p *Plan, cfg fileConfig) {
 
 // servers are packages that mean the app runs a server, not a site.
 var servers = []string{"@rsc-kit/core", "next", "nuxt", "@remix-run/node", "@react-router/node", "@tanstack/react-start",
-	"hono", "express", "elysia", "fastify", "@sveltejs/adapter-node", "@astrojs/node"}
+	"hono", "express", "elysia", "fastify", "koa", "@nestjs/core", "@sveltejs/adapter-node", "@astrojs/node"}
 
 // site recognises a JavaScript project whose build is a static site, from its
 // packages and config: where the site lands, unless something said otherwise.
-func (r reader) site(p *Plan, cfg fileConfig) {
+func (r reader) site(p *Plan, cfg fileConfig) bool {
 	deps := r.deps()
 	if slices.ContainsFunc(servers, func(s string) bool { return deps[s] }) {
-		return
+		return false
 	}
 	framework, folder := "", ""
 	switch {
@@ -492,19 +507,20 @@ func (r reader) site(p *Plan, cfg fileConfig) {
 	case deps["astro"]:
 		for _, f := range []string{"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"} {
 			if b, err := r.read(f); err == nil && astroServer.Match(b) {
-				return
+				return false
 			}
 		}
 		framework, folder = "Astro", "dist"
 	case deps["vite"] && !deps["@sveltejs/kit"]:
 		framework, folder = "Vite", "dist"
 	default:
-		return
+		return false
 	}
 	p.Framework = framework
 	if cfg.Static == "" && cfg.Build.Artifact == "" {
 		p.Kind, p.Artifact, p.StaticFallback = Static, folder, false
 	}
+	return true
 }
 
 // reader reads the app's files: regular files only, never through a symlink
