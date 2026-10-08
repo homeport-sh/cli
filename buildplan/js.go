@@ -111,12 +111,13 @@ var presets = []struct {
 }
 
 var (
-	nextOutputRe = regexp.MustCompile(`output\s*:\s*['"](standalone|export)['"]`)
-	astroMiddle  = regexp.MustCompile(`mode\s*:\s*['"]middleware['"]`)
-	svelteOutRe  = regexp.MustCompile(`adapter\s*\(\s*\{[^}]*\bout\s*:\s*['"]([^'"]+)['"]`)
-	outfileRe    = regexp.MustCompile(`--outfile(?:=|\s+)(\S+)`)
-	entryFileRe  = regexp.MustCompile(`^\S+\.(m|c)?(j|t)sx?$`)
-	nextConfigs  = []string{"next.config.js", "next.config.mjs", "next.config.ts", "next.config.cjs", "next.config.mts"}
+	nextOutputRe  = regexp.MustCompile(`output\s*:\s*['"](standalone|export)['"]`)
+	astroMiddle   = regexp.MustCompile(`mode\s*:\s*['"]middleware['"]`)
+	svelteOutRe   = regexp.MustCompile(`adapter\s*\(\s*\{[^}]*\bout\s*:\s*['"]([^'"]+)['"]`)
+	outfileRe     = regexp.MustCompile(`--outfile(?:=|\s+)(\S+)`)
+	entryFileRe   = regexp.MustCompile(`^\S+\.(m|c)?(j|t)sx?$`)
+	svelteConfigs = []string{"svelte.config.js", "vite.config.js", "vite.config.ts", "vite.config.mjs", "vite.config.mts"}
+	nextConfigs   = []string{"next.config.js", "next.config.mjs", "next.config.ts", "next.config.cjs", "next.config.mts"}
 )
 
 // pkgJSON is what's read of package.json.
@@ -459,9 +460,14 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 	case pr != nil && pr.layout != "app":
 		// the framework's own output has its own entry
 	case pr != nil && pr.name == "SvelteKit":
-		if b, err := r.read("svelte.config.js"); err == nil {
-			if m := svelteOutRe.FindSubmatch(b); m != nil && relPath(string(m[1])) {
-				entry = clean(string(m[1])) + "/index.js"
+		// the adapter's out: in svelte.config.js, or (SvelteKit 3) in the
+		// sveltekit() plugin's options in the Vite config
+		for _, f := range svelteConfigs {
+			if b, err := r.read(f); err == nil {
+				if m := svelteOutRe.FindSubmatch(b); m != nil && relPath(string(m[1])) {
+					entry = clean(string(m[1])) + "/index.js"
+					break
+				}
 			}
 		}
 	case pr != nil && pr.name == "Astro":

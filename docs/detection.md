@@ -40,7 +40,7 @@ health path (`/`). Each one can be overridden in the build settings.
 |---|---|---|---|
 | Next.js | `next` | `.next/standalone` with `.next/static` and `public/` | `server.js` |
 | Nuxt | `nuxt` | Nitro's `.output/` | `server/index.mjs` |
-| SvelteKit | `@sveltejs/adapter-node` | the app with production dependencies | `build/index.js` (or the adapter's `out`) |
+| SvelteKit | `@sveltejs/adapter-node` | the app with production dependencies | `build/index.js` (or the adapter's `out`, from `svelte.config.js` or, in SvelteKit 3, the Vite config) |
 | Astro | `@astrojs/node`, standalone mode | the app with production dependencies | `dist/server/entry.mjs` |
 | React Router | `@react-router/*` | the app with production dependencies | the start script (`react-router-serve …`) |
 | Remix | `@remix-run/*` | the app with production dependencies | the start script (`remix-serve …`) |

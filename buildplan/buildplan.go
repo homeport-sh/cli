@@ -183,7 +183,7 @@ var SiteFolders = []string{"build", "dist", "out"}
 func Files() []string {
 	return slices.Concat([]string{ConfigFile, "go.mod", "composer.json", "composer.lock", "package.json", "bun.lock", "bun.lockb",
 		"package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", ".nvmrc", ".node-version", ".bun-version", "index.html",
-		"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts", "svelte.config.js"}, nextConfigs)
+		"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"}, svelteConfigs, nextConfigs)
 }
 
 var (

@@ -199,3 +199,20 @@ func TestALinkOutOfTheAppIsRefused(t *testing.T) {
 		t.Fatalf("outside: %v %s", err, out)
 	}
 }
+
+// SvelteKit 3 has no svelte.config.js: its adapter is passed to the
+// sveltekit() Vite plugin, where its out is read too.
+func TestSvelteKit3sAdapterIsInTheViteConfig(t *testing.T) {
+	p := detect(t, js(`{"scripts":{"build":"vite build"},"devDependencies":{"@sveltejs/kit":"^3","@sveltejs/adapter-node":"^6"}}`,
+		"vite.config.ts", "export default defineConfig({ plugins: [sveltekit({ adapter: adapter({ out: 'server-out' }) })] })\n"), buildplan.Settings{})
+	if p.Run != "--import ./.homeport/boot.mjs server-out/index.js" {
+		t.Fatalf("%+v", p)
+	}
+	have := map[string]bool{}
+	for _, f := range buildplan.Files() {
+		have[f] = true
+	}
+	if !have["vite.config.ts"] || !have["vite.config.js"] {
+		t.Fatal("vite.config not listed")
+	}
+}
