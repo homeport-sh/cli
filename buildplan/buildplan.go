@@ -139,8 +139,10 @@ type Plan struct {
 	Health         string `json:"health,omitempty"`
 
 	// a bundle's build, and what makes the bundle from what it left
-	// (Command is both): a build command someone sets replaces the first
-	build, assemble string
+	// (Command is both): a build command someone sets replaces the first;
+	// setup is what the image needs before any install (Bun in a Node
+	// image, corepack's pnpm), which an install someone sets keeps
+	build, assemble, setup string
 }
 
 // Process is one of the app's processes beside the web.
@@ -334,7 +336,7 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 		}
 	}
 	if s.Install != "" {
-		p.Install = s.Install
+		p.Install = join(p.setup, s.Install)
 	}
 	if s.Kind != "" || s.Command != "" || s.Output != "" {
 		p.RSCKit = false // the person said what the build makes
@@ -347,6 +349,10 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	}
 	if s.Output != "" {
 		p.Artifact, p.StaticFallback = clean(s.Output), false
+	}
+	if p.Command == "" && p.Install != "" {
+		// an install with nothing after it: the builder runs install && build
+		return Plan{}, errors.New("nothing builds this app: package.json has no build script - set a build command")
 	}
 	if s.Run != "" {
 		p.Run = s.Run
@@ -455,7 +461,7 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 		if p.Command == "" {
 			p.Command = `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ` + p.Artifact + " ."
 		}
-	case r.exists("package.json") && (r.hasLockfile() || r.packageManagerOf(r.pkg()) != ""):
+	case r.exists("package.json") && r.hasLockfile():
 		runtime, from := s.Runtime, "the build settings"
 		if runtime == "" && cfg.Runtime != "" {
 			runtime, from = cfg.Runtime, ConfigFile

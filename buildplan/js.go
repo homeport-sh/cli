@@ -116,7 +116,7 @@ var (
 	svelteOutRe  = regexp.MustCompile(`adapter\s*\(\s*\{[^}]*\bout\s*:\s*['"]([^'"]+)['"]`)
 	outfileRe    = regexp.MustCompile(`--outfile(?:=|\s+)(\S+)`)
 	entryFileRe  = regexp.MustCompile(`^\S+\.(m|c)?(j|t)sx?$`)
-	nextConfigs   = []string{"next.config.js", "next.config.mjs", "next.config.ts", "next.config.cjs", "next.config.mts"}
+	nextConfigs  = []string{"next.config.js", "next.config.mjs", "next.config.ts", "next.config.cjs", "next.config.mts"}
 )
 
 // pkgJSON is what's read of package.json.
@@ -136,27 +136,46 @@ func (r reader) pkg() pkgJSON {
 	return p
 }
 
-// packageManagerOf is the project's package manager: package.json's
-// packageManager, else its lockfile's; "" with neither.
-func (r reader) packageManagerOf(pkg pkgJSON) string {
+// lockfiles: each package manager's, in the order one is told apart
+var lockfiles = []struct{ pm, file string }{
+	{"bun", "bun.lock"}, {"bun", "bun.lockb"}, {"pnpm", "pnpm-lock.yaml"}, {"yarn", "yarn.lock"},
+	{"npm", "package-lock.json"}, {"npm", "npm-shrinkwrap.json"},
+}
+
+// packageManagerOf is the project's package manager: its lockfile's. With
+// lockfiles of more than one, package.json's packageManager picks among
+// them; one naming a manager whose lockfile isn't there is refused - the
+// install would be from nothing.
+func (r reader) packageManagerOf(pkg pkgJSON) (string, error) {
+	var have []string
+	for _, l := range lockfiles {
+		if r.exists(l.file) && !slices.Contains(have, l.pm) {
+			have = append(have, l.pm)
+		}
+	}
 	if name, _, ok := strings.Cut(pkg.PackageManager, "@"); ok && slices.Contains([]string{"npm", "pnpm", "yarn", "bun"}, name) {
-		return name
+		if slices.Contains(have, name) {
+			return name, nil
+		}
+		want := ""
+		for _, l := range lockfiles {
+			if l.pm == name && want == "" {
+				want = l.file
+			}
+		}
+		return "", fmt.Errorf("package.json's packageManager is %s, but there's no %s: commit it (or correct packageManager), so the build installs what you tested", pkg.PackageManager, want)
 	}
-	switch {
-	case r.exists("bun.lock") || r.exists("bun.lockb"):
-		return "bun"
-	case r.exists("pnpm-lock.yaml"):
-		return "pnpm"
-	case r.exists("yarn.lock"):
-		return "yarn"
-	case r.exists("package-lock.json") || r.exists("npm-shrinkwrap.json"):
-		return "npm"
+	switch len(have) {
+	case 0:
+		return "", errors.New("no lockfile")
+	case 1:
+		return have[0], nil
 	}
-	return ""
+	return "", fmt.Errorf("lockfiles of %s: keep the one you install with, or name it in package.json's packageManager", strings.Join(have, " and "))
 }
 
 func (r reader) hasLockfile() bool {
-	return slices.ContainsFunc([]string{"bun.lock", "bun.lockb", "pnpm-lock.yaml", "yarn.lock", "package-lock.json", "npm-shrinkwrap.json"}, r.exists)
+	return slices.ContainsFunc(lockfiles, func(l struct{ pm, file string }) bool { return r.exists(l.file) })
 }
 
 // yarnBerry: Yarn 2+, by packageManager or the lockfile's own header.
@@ -198,8 +217,12 @@ func (r reader) pmFor(name string, pkg pkgJSON, pinnedBun bool) pm {
 		if pinnedBun {
 			linker = " --linker=hoisted"
 		}
+		// it reinstalls node_modules: what the build generated into it
+		// (Prisma's client in node_modules/.prisma) is kept aside, and back
+		keep := `{ mkdir -p /tmp/homeport/keep && for d in node_modules/.[!.]*; do if [ -e "$d" ] && [ "$d" != node_modules/.bin ] && [ "$d" != node_modules/.cache ]; then mv "$d" /tmp/homeport/keep/; fi; done; }`
+		back := `{ for d in /tmp/homeport/keep/.[!.]*; do if [ -e "$d" ]; then rm -rf "node_modules/${d##*/}" && mv "$d" node_modules/; fi; done; }`
 		return pm{name: name, install: "bun install --frozen-lockfile" + linker,
-			prune: "rm -rf node_modules && bun install --frozen-lockfile --production" + linker, run: "bun run"}
+			prune: keep + " && rm -rf node_modules && bun install --frozen-lockfile --production" + linker + " && " + back, run: "bun run"}
 	}
 	return pm{name: "npm", install: "npm ci", prune: "npm prune --omit=dev", run: "npm run"}
 }
@@ -211,10 +234,15 @@ type start struct {
 	bin     string   // or a package's command
 	args    []string // the runtime's flags before file, then file's args after
 	flags   []string
-	says    string // the command, for the reason
+	says    string   // the command, for the reason
+	vars    []string // the variables it sets first (errEnv)
 }
 
-var errShell = errors.New("needs a shell")
+var (
+	errShell = errors.New("needs a shell")
+	// it sets a variable before its command
+	errEnv = errors.New("sets a variable")
+)
 
 // parseStart reads a script (package.json's scripts, by name) as the
 // command it runs, following npm run / bun run / pnpm / yarn to the script
@@ -229,12 +257,22 @@ func parseStart(scripts map[string]string, name string, depth int) (start, error
 		return start{says: cmd}, errShell
 	}
 	f := strings.Fields(cmd)
-	// env first: NODE_ENV=production node x, cross-env A=b node x
+	// variables first (A=b node x, cross-env A=b node x): an app's
+	// variables are set as such, not dropped - NODE_ENV=production is
+	// what homeport sets anyway
+	var vars []string
 	for len(f) > 0 && (strings.Contains(f[0], "=") || f[0] == "cross-env") {
+		if f[0] != "cross-env" && f[0] != "NODE_ENV=production" {
+			k, _, _ := strings.Cut(f[0], "=")
+			vars = append(vars, k)
+		}
 		f = f[1:]
 	}
 	if len(f) == 0 {
 		return start{says: cmd}, errShell
+	}
+	if len(vars) > 0 {
+		return start{says: cmd, vars: vars}, errEnv
 	}
 	s := start{says: cmd}
 	switch f[0] {
@@ -271,7 +309,7 @@ func parseStart(scripts map[string]string, name string, depth int) (start, error
 				if bunFlag {
 					inner.runtime = "bun"
 				}
-				if err == nil || errors.Is(err, errShell) {
+				if err == nil || errors.Is(err, errShell) || errors.Is(err, errEnv) {
 					inner.says = cmd + " (" + inner.says + ")"
 				}
 				return inner, err
@@ -315,13 +353,18 @@ func parseStart(scripts map[string]string, name string, depth int) (start, error
 func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun string) error {
 	pkg := r.pkg()
 	deps := r.deps()
-	pmName := r.packageManagerOf(pkg)
+	pmName, err := r.packageManagerOf(pkg)
+	if err != nil {
+		return err
+	}
 	p.PackageManager = pmName
 
 	// rsc-kit: its build says what it made (Bun only, as before)
 	if pmName == "bun" && deps["@rsc-kit/core"] {
-		img, _, _ := r.bunImage(pkg)
-		p.Toolchain, p.Image, p.Install, p.Framework = "bun", img, "bun install --frozen-lockfile", "Bun"
+		if err := r.bunVersion(pkg); err != nil {
+			return err
+		}
+		p.Toolchain, p.Image, p.Install, p.Framework = "bun", BunImage, "bun install --frozen-lockfile", "Bun"
 		if p.Command == "" {
 			p.Command = "bun run build"
 		}
@@ -330,22 +373,44 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		return nil
 	}
 
-	// the project's own build compiles a binary: that's what runs
-	if build := pkg.Scripts["build"]; cfg.Build.Artifact == "" && cfg.Static == "" && strings.Contains(build, "bun build") && strings.Contains(build, "--compile") {
-		img, v, _ := r.bunImage(pkg)
+	var pr *preset
+	for _, c := range presets {
+		if slices.ContainsFunc(c.deps, func(d string) bool { return deps[d] }) {
+			pr = &c.p
+			break
+		}
+	}
+
+	// the project's own build compiles a binary: that's what runs - unless
+	// a framework's server is what starts, and the binary is a part (a
+	// worker) of it
+	build := pkg.Scripts["build"]
+	compiles := strings.Contains(build, "bun build") && strings.Contains(build, "--compile")
+	startsIt := false
+	if f := strings.Fields(pkg.Scripts["start"]); compiles && len(f) > 0 {
+		startsIt = clean(f[0]) == compiledName(build)
+	}
+	if cfg.Build.Artifact == "" && cfg.Static == "" && compiles && (pr == nil || startsIt) {
+		if err := r.bunVersion(pkg); err != nil {
+			return err
+		}
 		m := r.pmFor(pmName, pkg, false)
 		p.Toolchain, p.Kind, p.Framework, p.StaticFallback = "bun", Binary, "Bun", false
+		if pr != nil {
+			p.Framework = pr.name
+		}
 		if pmName == "bun" {
-			p.Image, p.Install = img, m.install
+			p.Image, p.Install = BunImage, m.install
 		} else {
 			nv, _, err := r.nodeVersion(pkg)
 			if err != nil {
 				return err
 			}
 			p.Toolchain, p.Image = "node", nodeImage(nv)
-			p.Install = join(fetchBun, m.setup, m.install)
+			p.setup = join(fetchBun, m.setup)
+			p.Install = join(p.setup, m.install)
 		}
-		p.Runtime, p.RuntimeVersion, p.RuntimeReason = "bun", v, "its build script compiles it with bun build --compile"
+		p.Runtime, p.RuntimeVersion, p.RuntimeReason = "bun", BunVersion, "its build script compiles it with bun build --compile"
 		if p.Command == "" {
 			p.Command = m.run + " build"
 		}
@@ -362,18 +427,10 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		return r.siteToolchain(p, pkg, pmName)
 	}
 
-	var pr *preset
-	for _, c := range presets {
-		if slices.ContainsFunc(c.deps, func(d string) bool { return deps[d] }) {
-			pr = &c.p
-			break
-		}
-	}
-
 	// what the developer runs: the start script, else (a Bun app's) dev
 	st, stErr := parseStart(pkg.Scripts, "start", 0)
 	stFrom := "start script"
-	if stErr != nil && !errors.Is(stErr, errShell) {
+	if stErr != nil && !errors.Is(stErr, errShell) && !errors.Is(stErr, errEnv) {
 		if d, err := parseStart(pkg.Scripts, "dev", 0); err == nil && d.runtime == "bun" && d.file != "" {
 			st, stErr, stFrom = d, nil, "dev script"
 		}
@@ -413,8 +470,15 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 				return errors.New("Astro's node adapter is in middleware mode, which needs a server of yours to run it: set mode: 'standalone' in " + f)
 			}
 		}
+	case errors.Is(stErr, errEnv):
+		return fmt.Errorf("the start script (%s) sets %s before its command: set %s as an environment variable of the app instead, and drop it from the script",
+			st.says, strings.Join(st.vars, ", "), map[bool]string{true: "them", false: "it"}[len(st.vars) > 1])
 	case stErr == nil && st.file != "":
 		entry, args, flags = st.file, st.args, st.flags
+		if st.runtime != "" && st.runtime != rt {
+			// its flags are the other runtime's
+			flags = nil
+		}
 	case stErr == nil && st.bin != "" && st.bin != "nest":
 		binName, args = st.bin, st.args
 	case pr != nil && pr.entry != "":
@@ -439,34 +503,32 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		return fmt.Errorf("the start script runs %q, which isn't a file in the app's folder", entry)
 	}
 
-	m := r.pmFor(pmName, pkg, false)
 	// the toolchain: Bun's image when Bun installs and runs it, else Node's
 	// (with Bun beside it when either is Bun)
-	bunImg, bunV, bunPinned := r.bunImage(pkg)
+	m := r.pmFor(pmName, pkg, true)
+	usesBun := pmName == "bun" || rt == "bun"
+	if usesBun {
+		if err := r.bunVersion(pkg); err != nil {
+			return err
+		}
+	}
 	nodeV, nodeWhy, err := r.nodeVersion(pkg)
 	if err != nil && rt == "node" {
 		return err
 	}
 	if rt == "bun" && pmName == "bun" {
-		m = r.pmFor(pmName, pkg, bunPinned)
-		p.Toolchain, p.Image, p.Install = "bun", bunImg, m.install
+		p.Toolchain, p.Image = "bun", BunImage
 	} else {
 		if err != nil {
 			nodeV, nodeWhy = DefaultNode, ""
 		}
-		if pmName == "bun" || rt == "bun" {
-			if pmName == "bun" {
-				m = r.pmFor(pmName, pkg, true)
-			}
-			bunV, bunPinned = BunVersion, true
-		}
 		p.Toolchain, p.Image = "node", nodeImage(nodeV)
-		fetch := ""
-		if pmName == "bun" || rt == "bun" {
-			fetch = fetchBun
+		if usesBun {
+			p.setup = fetchBun
 		}
-		p.Install = join(fetch, m.setup, m.install)
 	}
+	p.setup = join(p.setup, m.setup)
+	p.Install = join(p.setup, m.install)
 	p.Runtime, p.RuntimeReason, p.Framework, p.Kind, p.Artifact, p.StaticFallback = rt, reason, name, Bundle, BundleDir, false
 	p.Health = "/"
 	if rt == "node" {
@@ -475,11 +537,11 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 			p.RuntimeReason += "; " + nodeWhy
 		}
 	} else {
-		p.RuntimeVersion = bunV
+		p.RuntimeVersion = BunVersion
 	}
 
 	// the build, then the bundle made from what it left
-	build := cfg.Build.Command
+	build = cfg.Build.Command
 	if build == "" && pkg.Scripts["build"] != "" {
 		build = m.run + " build"
 		if name == "Next.js" && !r.nextStandalone() {
@@ -493,12 +555,9 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 	keepMaps := slices.Contains(flags, "--enable-source-maps")
 	bin, sums := "/usr/local/bin/node", nodeSum(nodeV)
 	if rt == "bun" {
-		bin, sums = "/usr/local/bin/bun", map[string]string(nil)
+		bin, sums = "/usr/local/bin/bun", bunSum
 		if p.Toolchain == "node" {
 			bin = "/tmp/homeport/bin/bun"
-		}
-		if bunPinned {
-			sums = bunSum
 		}
 	}
 	p.build, p.assemble = build, assemble(layout, m, rt, bin, sums, binName, keepMaps, env)
@@ -561,10 +620,8 @@ func (r reader) runtimeFor(pkg pkgJSON, pr *preset, st start, stErr error, stFro
 	case stErr == nil && st.runtime == "node":
 		rt, why = "node", "its "+stFrom+" runs "+st.says
 	}
-	if pr != nil && pr.needs != "" && rt != pr.needs {
-		if rt != "" {
-			return pr.needs, pr.name + " runs on " + title(pr.needs) + " (though " + why + ")"
-		}
+	// a framework that runs on one only: only when nothing else said
+	if rt == "" && pr != nil && pr.needs != "" {
 		return pr.needs, pr.name + " runs on " + title(pr.needs)
 	}
 	if rt == "" {
@@ -592,9 +649,11 @@ func (r reader) guess(p *Plan, pkg pkgJSON, pmName string) error {
 // image, its install and build.
 func (r reader) siteToolchain(p *Plan, pkg pkgJSON, pmName string) error {
 	if pmName == "bun" {
-		img, _, pinned := r.bunImage(pkg)
-		m := r.pmFor(pmName, pkg, pinned)
-		p.Toolchain, p.Image, p.Install = "bun", img, m.install
+		if err := r.bunVersion(pkg); err != nil {
+			return err
+		}
+		m := r.pmFor(pmName, pkg, true)
+		p.Toolchain, p.Image, p.Install = "bun", BunImage, m.install
 		if p.Command == "" {
 			p.Command = m.run + " build"
 		}
@@ -604,7 +663,8 @@ func (r reader) siteToolchain(p *Plan, pkg pkgJSON, pmName string) error {
 			return err
 		}
 		m := r.pmFor(pmName, pkg, false)
-		p.Toolchain, p.Image, p.Install = "node", nodeImage(v), join(m.setup, m.install)
+		p.Toolchain, p.Image, p.setup = "node", nodeImage(v), m.setup
+		p.Install = join(p.setup, m.install)
 		if p.Command == "" {
 			p.Command = m.run + " build"
 		}
@@ -665,33 +725,33 @@ func compiledName(build string) string {
 	return "server"
 }
 
-// bunImage: Bun's image and version - the pinned one, unless the project
-// names another exact version (packageManager, .bun-version or engines).
-func (r reader) bunImage(pkg pkgJSON) (image, version string, pinned bool) {
-	v := r.packageManager("bun")
-	if v == "" {
-		v = r.firstLine(".bun-version")
+// bunVersion: whether the Bun the project names - packageManager,
+// .bun-version, engines.bun - is the pinned one: 1, 1.4, 1.4.x, or a range
+// it's in. Anything else is refused, as Node outside its pinned lines is:
+// every Bun homeport runs is pinned by digest and checksum.
+func (r reader) bunVersion(pkg pkgJSON) error {
+	asked := []struct{ from, v string }{{"package.json's packageManager", r.packageManager("bun")}, {".bun-version", r.firstLine(".bun-version")}}
+	if e, ok := pkg.Engines["bun"].(string); ok {
+		asked = append(asked, struct{ from, v string }{"engines.bun", e})
 	}
-	if v == "" {
-		if e, ok := pkg.Engines["bun"].(string); ok {
-			if rng, err := parseRange(e); err == nil && rng.has(mustVersion(BunVersion)) {
-				v = ""
-			} else if versionRe.MatchString(strings.TrimPrefix(e, "v")) {
-				v = strings.TrimPrefix(e, "v")
+	pinned := mustVersion(BunVersion)
+	for _, a := range asked {
+		v := strings.TrimPrefix(strings.TrimSpace(a.v), "v")
+		if v == "" {
+			continue
+		}
+		if versionRe.MatchString(v) {
+			// a bare version is its line: 1, 1.4 and 1.4.x are 1.4.2's
+			f := strings.Split(v, ".")
+			if f[0] == "1" && (len(f) == 1 || f[1] == strings.Split(BunVersion, ".")[1]) {
+				continue
 			}
+		} else if rng, err := parseRange(v); err == nil && rng.has(pinned) {
+			continue
 		}
+		return fmt.Errorf("%s asks for Bun %q: homeport runs Bun %s - ask for 1.4 (or a range it's in)", a.from, a.v, BunVersion)
 	}
-	v = strings.TrimPrefix(v, "v")
-	if v == "" || v == BunVersion || !versionRe.MatchString(v) {
-		return BunImage, BunVersion, true
-	}
-	if !strings.Contains(v, ".") || strings.Count(v, ".") < 2 {
-		// a major or major.minor the pinned one is in
-		if strings.HasPrefix(BunVersion, v+".") {
-			return BunImage, BunVersion, true
-		}
-	}
-	return "oven/bun:" + v, v, false
+	return nil
 }
 
 func nodeImage(v string) string {
@@ -807,26 +867,30 @@ func assemble(layout string, m pm, rt, bin string, sums map[string]string, binNa
 		for _, e := range exclude {
 			ex += " --exclude=" + e
 		}
-		return "find " + src + " -xtype l -delete && (cd " + src + " && tar -chf - --hard-dereference" + ex + " .) | tar -xf - -C " + dst
+		// links: dangling ones dropped, and none out of the app's folder
+		// (tar -h would copy what it points at: / or the repository)
+		return "find " + src + " -xtype l -delete && " +
+			`{ r=$(pwd -P) && find ` + src + ` -type l | while read -r l; do t=$(readlink -f "$l"); case "$t" in "$r"|"$r"/*) ;; *) echo "homeport: $l links outside the app ($t)" >&2; exit 1 ;; esac; done; }` +
+			" && (cd " + src + " && tar -chf - --hard-dereference" + ex + " .) | tar -xf - -C " + dst
 	}
 	steps := []string{"rm -rf " + b + " && mkdir -p " + b + "/.homeport"}
 	switch layout {
 	case "standalone":
 		steps = append(steps,
-			`[ -f .next/standalone/server.js ] || { echo 'homeport: the build made no .next/standalone/server.js - set output: "standalone" in next.config' >&2; exit 1; }`,
+			`{ [ -f .next/standalone/server.js ] || { echo 'homeport: the build made no .next/standalone/server.js - set output: "standalone" in next.config' >&2; exit 1; }; }`,
 			put(".next/standalone", b, "./.next/cache"),
 			"mkdir -p "+b+"/.next/static && "+put(".next/static", b+"/.next/static"),
 			"{ [ ! -d public ] || { mkdir -p "+b+"/public && "+put("public", b+"/public")+"; }; }")
 	case "output":
 		steps = append(steps,
-			`[ -f .output/server/index.mjs ] || { echo 'homeport: the build made no .output/server/index.mjs' >&2; exit 1; }`,
+			`{ [ -f .output/server/index.mjs ] || { echo 'homeport: the build made no .output/server/index.mjs' >&2; exit 1; }; }`,
 			put(".output", b))
 	default:
 		steps = append(steps, m.prune)
 		if binName != "" {
 			// a package's command: its file, found through node_modules/.bin
 			steps = append(steps,
-				"t=$(readlink -f node_modules/.bin/"+binName+") && [ -f \"$t\" ] || { echo 'homeport: the start script runs "+binName+", which is in no production dependency' >&2; exit 1; }",
+				"{ t=$(readlink -f node_modules/.bin/"+binName+") && [ -f \"$t\" ] || { echo 'homeport: the start script runs "+binName+", which is in no production dependency' >&2; exit 1; }; }",
 				"t=${t#\"$(pwd -P)\"/}",
 				`printf 'process.argv[1] = new URL("../%s", import.meta.url).pathname;\nawait import("../%s");\n' "$t" "$t" > `+b+"/.homeport/start.mjs")
 		}

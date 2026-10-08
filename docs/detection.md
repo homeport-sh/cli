@@ -24,7 +24,9 @@ uses as `bin`. homeport runs the app the way its start script does.
 
 It ships a **binary** only when the project's own build makes one. If the
 `build` script runs `bun build --compile`, homeport runs the file that
-`--outfile` names. Compiling an app that doesn't compile itself can leave
+`--outfile` names, as long as no framework's server is what starts (a Next.js
+app that compiles a worker is still a Next.js bundle) or its start script
+runs that file. Compiling an app that doesn't compile itself can leave
 out files it loads at runtime: native modules (sharp, bcrypt, Prisma's
 engines), workers, and lookups by node_modules path.
 
@@ -79,8 +81,9 @@ applies wins:
      `bun --bun`.
    - `npm run x`, `bun run x`, `pnpm x` and `yarn x` are followed to the
      script they name.
-5. **A framework that only runs on one runtime**: Elysia runs on Bun, even
-   if a version file says Node (the plan's reason says so).
+5. **A framework that only runs on one runtime**: Elysia runs on Bun when
+   nothing above said otherwise. A version file or start script that says
+   Node wins, as with any app.
 6. **Otherwise Node.**
 
 The lockfile decides only how dependencies install, never what runs. A
@@ -106,9 +109,10 @@ Test that before you rely on it. Elysia and Bun's own `Bun.serve` need Bun.
   that line, `node` runs the newest, and a range (`>=20`, `^22`) runs the
   default if it's in the range, else the newest that is. Any other version
   is refused.
-- **Bun.** homeport pins 1.4.2. A project that names another exact version
-  (`packageManager`, `.bun-version`, `engines.bun`) gets that version's
-  image, with no checksum to check it against.
+- **Bun.** homeport runs 1.4.2. A version the project names
+  (`packageManager`, `.bun-version`, `engines.bun`) must be that one's: `1`,
+  `1.4`, `1.4.x`, or a range it's in. Any other is refused, because every
+  Bun homeport runs is pinned by digest and checksum.
 
 The build image is the official one, pinned by digest (`node:<v>-bookworm`,
 `oven/bun:<v>`). The binary that ships as `bin` is the image's, checked
@@ -126,10 +130,13 @@ Each package manager installs with a frozen lockfile:
 | pnpm | `pnpm install --frozen-lockfile --config.node-linker=hoisted` | `pnpm prune --prod` |
 | Yarn 1 | `yarn install --frozen-lockfile` | `yarn install --production` |
 | Yarn 2+ | `yarn install --immutable` (node-modules linker) | `yarn workspaces focus --all --production` |
-| Bun | `bun install --frozen-lockfile --linker=hoisted` | `bun install --production` |
+| Bun | `bun install --frozen-lockfile --linker=hoisted` | `bun install --production`, keeping what the build generated in `node_modules`' dot folders (`node_modules/.prisma`) |
 
-The package manager comes from `package.json`'s `packageManager` field,
-else from the lockfile. Without a lockfile the build is refused. pnpm and
+The package manager is the lockfile's. With lockfiles of more than one
+manager, `package.json`'s `packageManager` picks among them; without it, the
+build is refused. A `packageManager` whose lockfile isn't there is refused,
+and so is an app with no lockfile. If you set an install command, it
+replaces the install, not what the image needs first (Bun or corepack). pnpm and
 Yarn run through corepack, which is installed when the image lacks it
 (Node 25 stopped shipping it). For a Node app, Bun is fetched into the Node
 image and its checksum checked.
@@ -146,7 +153,9 @@ image and its checksum checked.
   …                    what the framework or the app needs to run
 ```
 
-The bundle holds only files: no links and no `node_modules/.bin`. It holds
+The bundle holds only files: links are copied as the files they point to,
+and a link out of the app's folder fails the build. There's no
+`node_modules/.bin`. It holds
 no source maps unless the app starts with `--enable-source-maps`. Its
 `run` is the args to `bin`, for example
 `--import ./.homeport/boot.mjs server.js`.
@@ -174,7 +183,11 @@ must listen on `$PORT`.
 
 The app runs as args to `bin`, without a shell. A start script with `&&`,
 pipes or variables (`prisma migrate deploy && node server.js`) is refused,
-with a message. Set a start command instead, and run anything that comes
+with a message. So is one that sets a variable before its command
+(`NODE_OPTIONS=… node server.js`): set it as an environment variable of
+the app instead (`NODE_ENV=production` is allowed, since homeport sets it
+anyway). A start script's runtime flags (`bun --smol`) are dropped when
+another rule picks the other runtime. Set a start command instead, and run anything that comes
 before it, such as migrations, as the release command:
 
 ```
@@ -190,7 +203,7 @@ A command from a dependency is run by its file under `node_modules`, since
   it leaves.
 - **Start command**: the args to `bin`.
 - **Output**, or **kind** `binary`: you build the binary yourself, and the
-  bundle isn't made.
+  bundle isn't made. With no build script, set a build command too.
 - **Kind** `static`: the output folder is served as a site.
 - **Runtime** (`bun` or `node`): see above.
 
