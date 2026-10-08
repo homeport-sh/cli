@@ -88,7 +88,7 @@ func (a *app) run(args []string) int {
 	case "build-plan":
 		err = cmdBuildPlan(rest)
 	case "mcp":
-		err = errors.New("the MCP server comes back soon, on `homeport login`'s sign-in")
+		err = a.mcp(ctx, rest)
 	case "version", "-v", "--version":
 		fmt.Fprintln(a.out, "homeport", version)
 	case "help", "-h", "--help":

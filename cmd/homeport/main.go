@@ -36,6 +36,8 @@ func (a *app) usage() {
                       [--save] [--unset run|release|processes|octane]…
                       [--team <slug> --app <name> [--env <name>]]
                       [--detach] [--timeout 30m]
+  homeport mcp        an MCP server on stdio, for your editor or agent:
+                      claude mcp add homeport -- homeport mcp
   homeport build-plan [--settings file.json] [dir]
                       what a hosted build runs for this repository (JSON):
                       detected without a homeport.yaml, or from one

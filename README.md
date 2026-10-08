@@ -84,6 +84,42 @@ address once it's live. Exit codes, for CI:
 
 `logs`, `env` and `cron` from the terminal come next.
 
+## MCP: homeport in your editor
+
+`homeport mcp` is an [MCP](https://modelcontextprotocol.io) server on stdio,
+for Claude Code, Cursor or any agent on your computer. It signs in the way
+`homeport login` does, with the same credentials file and the same token,
+so it can do what you can do and nothing more. Sign in first.
+
+```sh
+claude mcp add homeport -- homeport mcp
+```
+
+Cursor (`~/.cursor/mcp.json`, or `.cursor/mcp.json` in a project):
+
+```json
+{ "mcpServers": { "homeport": { "command": "homeport", "args": ["mcp"] } } }
+```
+
+| Tool | What it does |
+| --- | --- |
+| `list_apps` | your teams, their apps and environments (reads) |
+| `deploy` | deploys a folder's working tree, as `homeport deploy`, and answers the address (**changes it**) |
+| `deploy_status` | a build's status and log, then its release's (reads) |
+| `runtime_logs` | an environment's runtime logs (reads) |
+| `list_variables` | an environment's variables, **names only** (reads) |
+| `set_variables` | sets or removes variables (**changes it**) |
+| `get_database` | an environment's database, never its password (reads) |
+| `create_database`, `attach_database`, `detach_database` | its database (**change it**) |
+| `usage` | a team's month so far and its estimate (reads) |
+
+Tools that change things are marked as such and need `confirm: true`, so
+the agent has to ask you first. Each says what it changes, and that it acts
+on production unless you name another environment. No tool returns a
+variable's value or a secret. No tool deletes anything: an app, a database
+and a domain are deleted from the dashboard. The server makes at most 20
+changes a minute.
+
 ## `build-plan`
 
 `homeport build-plan [--settings file.json] [dir]` reads a repository,

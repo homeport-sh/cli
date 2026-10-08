@@ -119,3 +119,55 @@ func TestADeployWaitsLongerThanARead(t *testing.T) {
 		t.Fatalf("deploy %q %v", b, err)
 	}
 }
+
+func TestTheRestOfTheTokenAPI(t *testing.T) {
+	var calls []string
+	var setBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.RequestURI())
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/env") && r.Method == "POST":
+			json.NewDecoder(r.Body).Decode(&setBody)
+			io.WriteString(w, `["A","B"]`)
+		case strings.HasSuffix(r.URL.Path, "/env"):
+			io.WriteString(w, `{"Names":["A","B"]}`)
+		case strings.HasSuffix(r.URL.Path, "/logs"):
+			io.WriteString(w, `{"Cursor":"c2","Lines":[{"Time":"2026-10-08T12:00:00Z","Level":"info","Message":"hi","Process":"web"}]}`)
+		default:
+			io.WriteString(w, `{"ok":true}`)
+		}
+	}))
+	defer srv.Close()
+	c := &Client{Base: srv.URL, Token: "t"}
+	ctx := context.Background()
+	if names, err := c.EnvNames(ctx, "t1", "a1"); err != nil || strings.Join(names, ",") != "A,B" {
+		t.Fatalf("names %v %v", names, err)
+	}
+	if names, err := c.SetEnv(ctx, "t1", "a1", map[string]string{"A": "1"}, []string{"C"}); err != nil || len(names) != 2 {
+		t.Fatalf("set %v %v", names, err)
+	}
+	if set, _ := setBody["set"].(map[string]any); set["A"] != "1" {
+		t.Fatalf("sent %v", setBody)
+	}
+	logs, err := c.Logs(ctx, "t1", "a1", "c1")
+	if err != nil || logs.Cursor != "c2" || logs.Lines[0].Message != "hi" {
+		t.Fatalf("logs %+v %v", logs, err)
+	}
+	for _, f := range []func() (json.RawMessage, error){
+		func() (json.RawMessage, error) { return c.Database(ctx, "t1", "a1") },
+		func() (json.RawMessage, error) { return c.CreateDatabase(ctx, "t1", "a1") },
+		func() (json.RawMessage, error) { return c.AttachDatabase(ctx, "t1", "a1", "db1") },
+		func() (json.RawMessage, error) { return c.DetachDatabase(ctx, "t1", "a1") },
+		func() (json.RawMessage, error) { return c.Usage(ctx, "t1") },
+	} {
+		if out, err := f(); err != nil || len(out) == 0 {
+			t.Fatalf("%s %v", out, err)
+		}
+	}
+	want := []string{"GET /v1/cli/teams/t1/apps/a1/env", "POST /v1/cli/teams/t1/apps/a1/env", "GET /v1/cli/teams/t1/apps/a1/logs?cursor=c1",
+		"GET /v1/cli/teams/t1/apps/a1/database", "POST /v1/cli/teams/t1/apps/a1/database", "POST /v1/cli/teams/t1/apps/a1/database/attach",
+		"POST /v1/cli/teams/t1/apps/a1/database/detach", "GET /v1/cli/teams/t1/usage"}
+	if strings.Join(calls, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("calls\n%s", strings.Join(calls, "\n"))
+	}
+}
