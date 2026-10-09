@@ -36,10 +36,13 @@ func (a *app) usage() {
                       [--save] [--unset run|release|processes|octane]…
                       [--team <slug> --app <name> [--env <name>]]
                       [--detach] [--timeout 30m]
+  homeport token create --name <where>
+                      a token for CI (HOMEPORT_TOKEN), printed once
   homeport mcp        an MCP server on stdio, for your editor or agent:
                       claude mcp add homeport -- homeport mcp
-                      every change is asked of you through the editor;
-                      [--allow-changes] for one that can't ask
+                      every change is asked of you through the editor
+                      [--allow-changes] makes changes with nobody asked -
+                      production included; only for an editor that can't ask
   homeport build-plan [--settings file.json] [dir]
                       what a hosted build runs for this repository (JSON):
                       detected without a homeport.yaml, or from one
@@ -47,9 +50,6 @@ func (a *app) usage() {
 
 --run, --release and --process change this deploy alone, as the dashboard's
 "Redeploy with changes" does; --save keeps them for every deploy after it.
-
-  homeport token create --name <where>
-                      a token for CI (HOMEPORT_TOKEN), printed once
 
 In CI, set HOMEPORT_TOKEN to a token from homeport token create. Exit codes:
 0 live, 1 error, 2 usage, 3 not signed in, 4 build failed, 5 release

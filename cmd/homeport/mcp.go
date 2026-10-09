@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -40,7 +41,7 @@ const mcpWritesPerMinute = 20
 
 func (a *app) mcp(ctx context.Context, args []string) error {
 	fs := a.flags("mcp")
-	allow := fs.Bool("allow-changes", false, "let tools change things without asking, for an editor that can't ask (MCP elicitation)")
+	allow := fs.Bool("allow-changes", false, "make changes with nobody asked - production included; only for an editor that can't ask (MCP elicitation)")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
@@ -169,14 +170,16 @@ func (a *app) mcpServer() *mcp.Server {
 		}
 		x := sub(io.Discard, a.wd)
 		if in.App != "" || in.Team != "" {
-			t, err := x.resolve(ctx, c, in.Team, in.App, in.Environment)
+			t, err := x.resolve(ctx, c, in.Team, in.App, in.Environment, false)
 			return c, t, err
 		}
 		l, _, err := config.FindLink(a.wd)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w (or name team and app)", err)
 		}
-		return c, &target{link: *l}, nil
+		// named as the API names its ids, never by the link's own labels
+		t, err := x.linked(ctx, c, *l, false)
+		return c, t, err
 	}
 	// approve has the person approve what, before a change: asked through
 	// their editor (an input request - the SDK asks the older way for an
@@ -184,9 +187,13 @@ func (a *app) mcpServer() *mcp.Server {
 	// request state; an editor that can't ask gets no change unless the
 	// server was started with --allow-changes. ask is the result to answer
 	// with while the question is out; nil, nil: go ahead.
-	approve := func(req *mcp.CallToolRequest, what string) (ask *mcp.CallToolResult, err error) {
+	approve := func(req *mcp.CallToolRequest, what string, unshown ...string) (ask *mcp.CallToolResult, err error) {
+		// the change the answer is for: what's shown, and what isn't (a
+		// variable's value) by its hash
+		h := sha256.Sum256([]byte(strings.Join(unshown, "\x00")))
+		change := req.Params.Name + "\n" + what + "\n" + hex.EncodeToString(h[:])
 		if resp, ok := req.Params.InputResponses["approve"]; ok {
-			if !pending.take(req.Params.RequestState, req.Params.Name+"\n"+what) {
+			if !pending.take(req.Params.RequestState, change) {
 				return nil, errors.New("that approval was for another change, or was used already: nothing was changed")
 			}
 			r, ok := resp.(*mcp.ElicitResult)
@@ -204,7 +211,7 @@ func (a *app) mcpServer() *mcp.Server {
 			}
 			return nil, errors.New("this editor can't ask you to approve a change, so none is made: make it yourself, or start the server with `homeport mcp --allow-changes`")
 		}
-		state, err := pending.put(req.Params.Name + "\n" + what)
+		state, err := pending.put(change)
 		if err != nil {
 			return nil, err
 		}
@@ -265,18 +272,27 @@ func (a *app) mcpServer() *mcp.Server {
 			if err != nil {
 				return refused(fmt.Errorf("%w in the folder this server runs in", err))
 			}
-			t := &target{link: *l}
-			what := fmt.Sprintf("Deploy %s (its working tree, uncommitted changes included) to %s, replacing what runs there?", dir, envName(t))
+			c, err := a.client()
+			if err != nil {
+				return refused(err)
+			}
+			// named as the API names the link's ids: what's asked is what's deployed
+			t, err := sub(io.Discard, dir).linked(ctx, c, *l, true)
+			if err != nil {
+				return refused(err)
+			}
+			what := fmt.Sprintf("Deploy %q (its working tree, uncommitted changes included) to %s, replacing what runs there?", dir, envName(t))
+			// one order, every time: the question asked is the question answered
 			args := []string{}
-			for k, v := range map[string]string{"--run": in.Run, "--release": in.Release} {
-				if v != "" {
-					args = append(args, k, v)
-					what += fmt.Sprintf("\n%s %s", k, v)
+			for _, f := range []struct{ flag, value string }{{"--run", in.Run}, {"--release", in.Release}} {
+				if f.value != "" {
+					args = append(args, f.flag, f.value)
+					what += fmt.Sprintf("\n%s %q", f.flag, f.value)
 				}
 			}
-			for name, cmd := range in.Processes {
-				args = append(args, "--process", name+"="+cmd)
-				what += fmt.Sprintf("\n--process %s=%s", name, cmd)
+			for _, name := range slices.Sorted(maps.Keys(in.Processes)) {
+				args = append(args, "--process", name+"="+in.Processes[name])
+				what += fmt.Sprintf("\n--process %q", name+"="+in.Processes[name])
 			}
 			if in.Save {
 				args = append(args, "--save")
@@ -396,7 +412,12 @@ func (a *app) mcpServer() *mcp.Server {
 			if len(in.Set) == 0 {
 				return refused(errors.New("set names no variable"))
 			}
-			if ask, err := approve(req, fmt.Sprintf("Set %s on %s? (The values aren't shown here.)", strings.Join(slices.Sorted(maps.Keys(in.Set)), ", "), envName(t))); err != nil {
+			setting := slices.Sorted(maps.Keys(in.Set))
+			var values []string
+			for _, n := range setting {
+				values = append(values, n+"="+in.Set[n])
+			}
+			if ask, err := approve(req, fmt.Sprintf("Set %s on %s? (The values aren't shown here.)", quoted(setting), envName(t)), values...); err != nil {
 				return refused(err)
 			} else if ask != nil {
 				return ask, nil, nil
@@ -422,7 +443,7 @@ func (a *app) mcpServer() *mcp.Server {
 			if len(in.Names) == 0 {
 				return refused(errors.New("names no variable"))
 			}
-			if ask, err := approve(req, fmt.Sprintf("Remove %s from %s? Their values are gone for good.", strings.Join(in.Names, ", "), envName(t))); err != nil {
+			if ask, err := approve(req, fmt.Sprintf("Remove %s from %s? Their values are gone for good.", quoted(in.Names), envName(t))); err != nil {
 				return refused(err)
 			} else if ask != nil {
 				return ask, nil, nil
@@ -478,7 +499,32 @@ func (a *app) mcpServer() *mcp.Server {
 			if err != nil {
 				return refused(err)
 			}
-			if ask, err := approve(req, fmt.Sprintf("Attach database %s to %s? The app there will read and write it.", in.Database, envName(t))); err != nil {
+			raw, err := c.Database(ctx, t.link.Team, t.link.App)
+			if err != nil {
+				return refused(err)
+			}
+			var tab struct {
+				Attachable []struct {
+					ID, Name string
+					UsedBy   []string
+				}
+			}
+			_ = json.Unmarshal(raw, &tab)
+			i := slices.IndexFunc(tab.Attachable, func(d struct {
+				ID, Name string
+				UsedBy   []string
+			}) bool {
+				return d.ID == in.Database
+			})
+			if i < 0 {
+				return refused(fmt.Errorf("%q isn't one of the team's databases %s can attach: get_database lists them", in.Database, envName(t)))
+			}
+			db := tab.Attachable[i]
+			also := "nothing else"
+			if len(db.UsedBy) > 0 {
+				also = quoted(db.UsedBy)
+			}
+			if ask, err := approve(req, fmt.Sprintf("Attach the database %q to %s? It's also attached to %s; the app here will read and write it.", db.Name, envName(t), also), db.ID); err != nil {
 				return refused(err)
 			} else if ask != nil {
 				return ask, nil, nil
@@ -536,6 +582,16 @@ var (
 	buildPage = regexp.MustCompile(`==> building: (\S+/builds/(\S+))`)
 	liveAt    = regexp.MustCompile(`Live: (https://\S+)`)
 )
+
+// quoted is names, each quoted: what an agent wrote never reads as the
+// question's own words.
+func quoted(names []string) string {
+	q := make([]string, len(names))
+	for i, n := range names {
+		q[i] = fmt.Sprintf("%q", n)
+	}
+	return strings.Join(q, ", ")
+}
 
 // teamID is the id of the person's team at slug.
 func teamID(ctx context.Context, c *cloud.Client, slug string) (string, error) {

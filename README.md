@@ -119,6 +119,9 @@ a file. So **a change is never the agent's to approve: you are asked**,
 through your editor, what exactly will change and where. The approval holds
 for that change, once. An editor that can't ask (MCP elicitation) gets no
 changes unless you start the server with `homeport mcp --allow-changes`.
+**With `--allow-changes` nobody is asked: the agent's changes are made as
+it asks, production included.** Use it only for an editor that can't ask,
+and only if you'd let that agent change production unattended.
 No tool takes a folder: `deploy` deploys the one the server runs in. No
 tool returns a variable's value or a secret, and none deletes: apps,
 databases and domains are deleted from the dashboard. The server makes at

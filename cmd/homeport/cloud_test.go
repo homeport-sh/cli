@@ -218,7 +218,8 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 		f.write(w, 200, map[string]any{"Cursor": "c2", "Lines": []map[string]any{{"Time": "2026-10-08T12:00:00Z", "Level": "error", "Message": "panic: boom", "Process": "web"}}})
 	case strings.Contains(p, "/database"):
 		f.dbCalls = append(f.dbCalls, r.Method+" "+p[strings.Index(p, "/database"):])
-		f.write(w, 200, map[string]any{"Available": true, "Database": map[string]any{"ID": "db1", "Name": "blog-production"}})
+		f.write(w, 200, map[string]any{"Available": true, "Database": nil,
+			"Attachable": []map[string]any{{"ID": "db2", "Name": "api-production", "UsedBy": []string{"api-production"}}}})
 	case strings.HasSuffix(p, "/usage"):
 		f.write(w, 200, map[string]any{"Plan": "Starter", "Estimate": map[string]any{"TotalCents": 900}})
 	case r.Method == "GET" && p == "/v1/cli/teams/"+team1+"/deploys/d1":

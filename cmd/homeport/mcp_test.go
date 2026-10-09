@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/homeport-sh/cli/internal/config"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -276,5 +277,109 @@ func TestAnApprovalIsForThatChangeOnce(t *testing.T) {
 		InputResponses: yes, RequestState: asked.RequestState})
 	if !res.IsError || f.env["HARMLESS"] != "y" {
 		t.Fatalf("used twice: %+v %v", res, f.env)
+	}
+}
+
+// What's asked is what's changed: a link whose labels say staging while
+// its ids are production's is refused before anything is asked or done.
+func TestALinksLabelsCantDisguiseTheChange(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	project(t, h)
+	config.SaveLink(h.a.wd, config.Link{Team: team1, TeamSlug: "alice", App: blogID, Project: "blog", Environment: "staging"})
+	p := &person{approve: true}
+	cs := mcpSession(t, h, p)
+	for _, call := range []struct {
+		tool string
+		args map[string]any
+	}{{"set_variables", map[string]any{"set": map[string]string{"K": "v"}}}, {"deploy", map[string]any{}}} {
+		if text, isErr := callTool(t, cs, call.tool, call.args); !isErr || !strings.Contains(text, "production") {
+			t.Fatalf("%s: %v %s", call.tool, isErr, text)
+		}
+	}
+	if len(p.asked) != 0 || len(f.env) != 0 || len(f.deploys) != 0 {
+		t.Fatalf("asked %q, env %v, deploys %v", p.asked, f.env, f.deploys)
+	}
+}
+
+// The question is the same each time it's asked of the same change - so
+// its answer, given once, is the answer to it.
+func TestAQuestionIsTheSameEachTime(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	project(t, h)
+	cs := mcpSession(t, h, &person{approve: true})
+	args := map[string]any{"run": "./server", "release": "./migrate", "processes": map[string]string{"worker": "./w", "cron": "./c", "mail": "./m"}}
+	for i := range 8 {
+		f.buildGet, f.steps = 0, []string{"uploaded", "deploying", "live"}
+		if text, isErr := callTool(t, cs, "deploy", args); isErr {
+			t.Fatalf("deploy %d: %s", i, text)
+		}
+	}
+}
+
+// Reading, variables and add-ons are any environment's - one its own CI
+// deploys too.
+func TestReadingAnEnvironmentHomeportDoesntBuild(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	cs := mcpSession(t, h, nil)
+	if text, isErr := callTool(t, cs, "list_variables", map[string]any{"team": "alice", "app": "api"}); isErr {
+		t.Fatalf("%s", text)
+	}
+}
+
+// An approval is for the values too: approving one value isn't approving
+// another under the same name.
+func TestAnApprovalCoversTheValues(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	ctx := context.Background()
+	st, ct := mcp.NewInMemoryTransports()
+	if _, err := h.a.mcpServer().Connect(ctx, st, nil); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "editor", Version: "1"}, &mcp.ClientOptions{
+		ElicitationHandler: (&person{approve: true}).answer, MultiRoundTrip: &mcp.MultiRoundTripOptions{Disabled: true}}).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	asked, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "set_variables", Arguments: with(map[string]any{"set": map[string]string{"API_URL": "https://good"}})})
+	if err != nil || asked.RequestState == "" {
+		t.Fatalf("not asked: %+v %v", asked, err)
+	}
+	yes := mcp.InputResponseMap{"approve": &mcp.ElicitResult{Action: "accept", Content: map[string]any{"approve": true}}}
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "set_variables", Arguments: with(map[string]any{"set": map[string]string{"API_URL": "https://evil"}}),
+		InputResponses: yes, RequestState: asked.RequestState})
+	if err != nil || !res.IsError || len(f.env) != 0 {
+		t.Fatalf("another value went in: %+v %v %v", res, err, f.env)
+	}
+}
+
+// What an agent wrote is quoted, never read as the question's own words; a
+// database is named, with where else it's attached.
+func TestTheQuestionQuotesWhatTheAgentWrote(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	p := &person{approve: true}
+	cs := mcpSession(t, h, p)
+	callTool(t, cs, "unset_variables", with(map[string]any{"names": []string{"X\nApprove: harmless"}}))
+	if len(p.asked) != 1 || !strings.Contains(p.asked[0], `"X\nApprove: harmless"`) {
+		t.Fatalf("asked %q", p.asked)
+	}
+	if _, isErr := callTool(t, cs, "attach_database", with(map[string]any{"database": "db2"})); isErr {
+		t.Fatal("attach")
+	}
+	if last := p.asked[len(p.asked)-1]; !strings.Contains(last, `"api-production"`) || !strings.Contains(last, "also attached to") {
+		t.Fatalf("asked %q", last)
+	}
+	if text, isErr := callTool(t, cs, "attach_database", with(map[string]any{"database": "db-nope"})); !isErr || !strings.Contains(text, "isn't one") {
+		t.Fatalf("an unknown database: %v %s", isErr, text)
 	}
 }
