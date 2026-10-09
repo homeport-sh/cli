@@ -308,9 +308,11 @@ named `reverb`:
 reverb: php-cli artisan reverb:start --host=$HOST --port=$PORT
 ```
 
-Requests to the app's `/app` and `/apps` paths, on each of its domains, go
-to it: WebSocket connections and the HTTP API that Laravel broadcasts
-through. homeport sets the variables Laravel's Reverb and Echo configuration
+On each of the app's domains, WebSocket connections to `/app/…` and
+signed calls to Reverb's API on `/apps/…`, which Laravel broadcasts
+through, go to it. Other requests under `/app` and `/apps` stay the app's.
+Open connections stay open when homeport's routing changes. A deploy
+restarts Reverb, and Echo reconnects on its own. homeport sets the variables Laravel's Reverb and Echo configuration
 read, unless you set them yourself:
 
 | Variable | Value |
