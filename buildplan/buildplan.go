@@ -477,6 +477,7 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 					return Plan{}, fmt.Errorf("Inertia's SSR: %w", err)
 				}
 				p.SSR, p.Runtime, p.RuntimeVersion, p.RuntimeReason = SSRInertia, x.rt, x.version, x.why
+				p.Warnings = append(p.Warnings, ssrMemoryNote)
 				p.Command = join(p.Command, ssrAssemble(p.Artifact, x))
 			}
 		}

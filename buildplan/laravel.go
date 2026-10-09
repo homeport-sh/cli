@@ -46,6 +46,14 @@ import (
 // $PORT).
 const ReverbRun = "php-cli artisan reverb:start --host=$HOST --port=$PORT"
 
+// ReverbMemory is the reverb process's size: one PHP process holding
+// connections, billed at it rather than at the whole app's (an app's
+// smallest size is 256M). An app that declares its own reverb sizes it.
+const ReverbMemory = "128M"
+
+// ssrMemoryNote: the renderer runs in the app's memory.
+const ssrMemoryNote = "Inertia's SSR renderer runs in the app's memory (about 60-70 MB beside the web): give the app at least 512 MB"
+
 // SSRInertia is Plan.SSR for Inertia's server-side rendering.
 const SSRInertia = "inertia"
 
@@ -281,7 +289,9 @@ func (r reader) ssrFor(cfg fileConfig, s Settings) (ssr, error) {
 // the runtime, checked), the supervisor and .homeport/wrap.
 func ssrAssemble(b string, x ssr) string {
 	var steps []string
-	beside := x.out
+	// held to the app's memory: the supervisor fills in %heap% (a quarter
+	// of HOMEPORT_MEMORY_MB) and %heapbytes%
+	beside := "BUN_JSC_forceRAMSize=%heapbytes% " + x.out
 	if x.out != "" {
 		steps = append(steps,
 			"case $(uname -m) in x86_64) a=x64 t=x64 ;; aarch64) a=aarch64 t=arm64 ;; *) echo \"homeport: no Bun for $(uname -m)\" >&2; exit 1 ;; esac",
@@ -295,7 +305,11 @@ func ssrAssemble(b string, x ssr) string {
 			"cp "+x.out+" "+b+"/"+x.out, "chmod 755 "+b+"/"+x.out)
 	} else {
 		bin := ".homeport/" + x.rt
-		beside = bin + " bootstrap/ssr/ssr.mjs"
+		beside = bin + " --smol bootstrap/ssr/ssr.mjs"
+		if x.rt == "node" {
+			// its compile cache in the release's writable folder (boot.mjs)
+			beside = bin + " --max-old-space-size=%heap% --import ./" + bootFile + " bootstrap/ssr/ssr.mjs"
+		}
 		steps = append(steps,
 			// where Inertia looks for it, in its order
 			`{ s=; for f in bootstrap/ssr/ssr.js bootstrap/ssr/app.js bootstrap/ssr/ssr.mjs bootstrap/ssr/app.mjs; do if [ -f "$f" ]; then s=$f; break; fi; done; `+
@@ -312,7 +326,9 @@ func ssrAssemble(b string, x ssr) string {
 			steps = append(steps,
 				"case $(uname -m) in x86_64) a=x64 ;; aarch64) a=arm64 ;; *) echo \"homeport: no Node for $(uname -m)\" >&2; exit 1 ;; esac",
 				"curl -fsSL https://nodejs.org/dist/v"+x.version+"/node-v"+x.version+"-linux-$a.tar.gz | tar -xzO node-v"+x.version+"-linux-$a/bin/node > "+b+"/"+bin,
-				"chmod 755 "+b+"/"+bin, checkSum(b+"/"+bin, nodeSum(x.version), "Node"))
+				"chmod 755 "+b+"/"+bin, checkSum(b+"/"+bin, nodeSum(x.version), "Node"),
+				"printf '%s' '"+boot(nil)+"' > "+b+"/"+bootFile,
+				"mkdir -p "+b+"/"+CacheDir+" && echo "+CacheDir+" >> "+b+"/.homeport/writable")
 		}
 	}
 	steps = append(steps,
@@ -329,13 +345,12 @@ func reverbProcess(p *Plan) error {
 		return nil
 	}
 	if len(p.Processes) >= MaxProcesses {
-		return fmt.Errorf("Reverb runs as a process of its own, and the app has %d already: at most %d in all - drop one, or run Reverb as one of them (named reverb)",
-			len(p.Processes), MaxProcesses)
+		// the build goes on without it, and says so
+		p.Warnings = append(p.Warnings, fmt.Sprintf("Reverb isn't run: the app has %d processes already, the most it may have - drop one, "+
+			"or run Reverb as one of them (named reverb, listening on $PORT)", len(p.Processes)))
+		return nil
 	}
-	p.Processes = slices.SortedFunc(slices.Values(append(slices.Clone(p.Processes), Process{Name: "reverb", Run: ReverbRun})),
+	p.Processes = slices.SortedFunc(slices.Values(append(slices.Clone(p.Processes), Process{Name: "reverb", Run: ReverbRun, Memory: ReverbMemory})),
 		func(a, b Process) int { return strings.Compare(a.Name, b.Name) })
 	return nil
 }
-
-// ReverbMemory: stub, the test first.
-const ReverbMemory = ""

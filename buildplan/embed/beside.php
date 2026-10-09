@@ -18,16 +18,28 @@ $say = function (string $message): void {
 };
 $io = [0 => STDIN, 1 => STDOUT, 2 => STDERR];
 
+// held to the app's memory (homeportd's HOMEPORT_MEMORY_MB): %heap% is a
+// quarter of it in MB, at least 64 (128 when it isn't known), %heapbytes% the
+// same in bytes. A word KEY=value before the command is its environment.
+$memory = (int) getenv('HOMEPORT_MEMORY_MB');
+$heap = $memory > 0 ? max(64, intdiv($memory, 4)) : 128;
+$vars = ['%heap%' => (string) $heap, '%heapbytes%' => (string) ($heap * 1048576)];
+
 $beside = [];
 foreach (@file(__DIR__.'/beside', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
-    $cmd = preg_split('/\s+/', trim($line), -1, PREG_SPLIT_NO_EMPTY);
-    if ($cmd) {
-        $beside[] = ['cmd' => $cmd, 'proc' => null, 'at' => 0.0, 'next' => 0.0, 'wait' => 1.0];
+    $words = preg_split('/\s+/', strtr(trim($line), $vars), -1, PREG_SPLIT_NO_EMPTY);
+    $env = getenv();
+    while ($words && preg_match('/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/', $words[0], $m)) {
+        $env[$m[1]] = $m[2];
+        array_shift($words);
+    }
+    if ($words) {
+        $beside[] = ['cmd' => $words, 'env' => $env, 'proc' => null, 'at' => 0.0, 'next' => 0.0, 'wait' => 1.0];
     }
 }
 
 $start = function (array &$b) use ($io, $say): void {
-    $b['proc'] = @proc_open($b['cmd'], $io, $pipes) ?: null;
+    $b['proc'] = @proc_open($b['cmd'], $io, $pipes, null, $b['env']) ?: null;
     $b['at'] = microtime(true);
     if ($b['proc'] === null) {
         $say(implode(' ', $b['cmd']).' did not start');
