@@ -51,6 +51,8 @@ type fakeAPI struct {
 	steps    []string // the deploy's statuses, poll by poll
 	detail   string
 	buildGet int
+
+	tokenNames []string // tokens made for CI, by name
 }
 
 func newFakeAPI(t *testing.T) *fakeAPI {
@@ -116,7 +118,8 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 		case f.ending == "expire":
 			f.write(w, 400, map[string]string{"error": cloud.Expired})
 		default:
-			tok := "hpcli_secret" + strings.Repeat("x", len(f.issued))
+			// each API's tokens its own
+			tok := "hpcli_secret" + strings.Repeat("x", len(f.issued)) + "-" + f.srv.URL[strings.LastIndex(f.srv.URL, ":")+1:]
 			f.issued = append(f.issued, tok)
 			f.write(w, 200, map[string]any{"token": tok, "token_id": "t1", "name": "alice-laptop",
 				"expires_at": time.Now().Add(90 * 24 * time.Hour), "user": map[string]string{"name": "Alice Doe", "email": "alice@example.com", "login": "alice"}})
@@ -143,6 +146,11 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 			"token":     map[string]any{"id": "t1", "name": "alice-laptop", "created_at": time.Now(), "expires_at": time.Now().Add(90 * 24 * time.Hour)},
 			"teams":     []map[string]string{{"ID": team1, "Name": "alice", "Slug": "alice", "Role": "owner"}},
 			"dashboard": "https://app.homeport.test"})
+	case r.Method == "POST" && p == "/v1/cli/tokens":
+		var in struct{ Name string }
+		json.NewDecoder(r.Body).Decode(&in)
+		f.tokenNames = append(f.tokenNames, in.Name)
+		f.write(w, 200, map[string]any{"Token": "hpcli_ci-token", "Session": map[string]any{"ID": "c9", "Name": in.Name}})
 	case r.Method == "DELETE" && p == "/v1/cli/token":
 		f.revoked = append(f.revoked, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 		w.WriteHeader(204)
@@ -528,4 +536,78 @@ func keys(m map[string]string) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// A token goes only to the API it was given by: HOMEPORT_API pointing
+// elsewhere is signed out there, not a way to send it anywhere.
+func TestATokenGoesOnlyWhereItWasGiven(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	other := newFakeAPI(t)
+	t.Setenv("HOMEPORT_API", other.srv.URL)
+	if code := h.run("whoami"); code != exitSignedOut || !strings.Contains(h.err.String(), f.srv.URL) {
+		t.Fatalf("another API: %d %s", code, h.said())
+	}
+	// signing in there logs the old token out where it was given, not there
+	h.login(t)
+	if len(f.revoked) != 1 || len(other.revoked) != 0 {
+		t.Fatalf("revoked at its own %v, at the other %v", f.revoked, other.revoked)
+	}
+	// plain http is refused but on this computer
+	t.Setenv("HOMEPORT_API", "http://api.example.com")
+	if code := h.run("login"); code != exitUsage || !strings.Contains(h.err.String(), "https") {
+		t.Fatalf("http: %d %s", code, h.said())
+	}
+}
+
+// Without a terminal, a question with a default takes it: CI and the MCP
+// server link production without --env.
+func TestWithoutATerminalTheDefaultIsTaken(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	if code := h.run("link", "--app", "blog"); code != 0 {
+		t.Fatalf("%d %s", code, h.said())
+	}
+	if l, _, _ := config.FindLink(h.a.wd); l.Environment != "production" {
+		t.Fatalf("%+v", l)
+	}
+}
+
+func TestDeployingSaysWhatSecretsItLeftOut(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	project(t, h)
+	os.WriteFile(filepath.Join(h.a.wd, ".env"), []byte("KEY=s3cret"), 0o644)
+	if code := h.run("deploy"); code != 0 {
+		t.Fatalf("%d %s", code, h.said())
+	}
+	if _, ok := untar(t, f.uploads["s1"])["source/.env"]; ok {
+		t.Fatal("uploaded .env")
+	}
+	if !strings.Contains(h.said(), "left out .env") {
+		t.Fatalf("didn't say: %s", h.said())
+	}
+}
+
+// `homeport token create`: a named token for CI, printed once to stdout and
+// nowhere else.
+func TestMakingATokenForCI(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	if code := h.run("token", "create", "--name", "github-actions"); code != 0 {
+		t.Fatalf("%d %s", code, h.said())
+	}
+	if strings.TrimSpace(h.out.String()) != "hpcli_ci-token" || strings.Contains(h.err.String(), "hpcli_") {
+		t.Fatalf("out %q err %q", h.out.String(), h.err.String())
+	}
+	if f.tokenNames[0] != "github-actions" {
+		t.Fatalf("%v", f.tokenNames)
+	}
+	if code := h.run("token", "create"); code != exitUsage {
+		t.Fatalf("no name: %d", code)
+	}
 }

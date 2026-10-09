@@ -222,3 +222,47 @@ func mustReal(t *testing.T, p string) string {
 	}
 	return r
 }
+
+// A link through a link is judged as the filesystem would follow it: s -> .
+// and e -> s/s/../.. reads as inside, and leads out.
+func TestALinkThroughALinkIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, map[string]string{"a.txt": "a"})
+	os.Symlink(".", filepath.Join(dir, "s"))
+	os.Symlink("s/s/../..", filepath.Join(dir, "e"))
+	tree, err := Collect(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Pack(tree, io.Discard, 1<<20); err == nil || !strings.Contains(err.Error(), "outside") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// What looks like a secret stays home, even when git doesn't ignore it:
+// variables belong in the environment, keys nowhere.
+func TestSecretsAreLeftOut(t *testing.T) {
+	dir := repo(t, map[string]string{"go.mod": "module m\n", ".env.example": "KEY=\n"})
+	write(t, dir, map[string]string{
+		".env": "KEY=s3cret", ".env.production": "x", "web/.env.local": "x", "deploy/key.pem": "x", "id_ed25519": "x", "keys/id_rsa": "x",
+		"id_generator.go": "package main\n",
+	})
+	tree, err := Collect(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{".env.example", "go.mod", "id_generator.go"}
+	if !slices.Equal(tree.Files, want) {
+		t.Fatalf("files %v", tree.Files)
+	}
+	left := []string{".env", ".env.production", "deploy/key.pem", "id_ed25519", "keys/id_rsa", "web/.env.local"}
+	if !slices.Equal(tree.Secrets, left) {
+		t.Fatalf("left out %v", tree.Secrets)
+	}
+	// a folder that isn't a checkout: the same
+	plain := t.TempDir()
+	write(t, plain, map[string]string{"index.html": "x", ".env": "x"})
+	if tree, _ := Collect(plain); len(tree.Files) != 1 || len(tree.Secrets) != 1 {
+		t.Fatalf("%+v", tree)
+	}
+}

@@ -7,6 +7,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -81,6 +83,8 @@ func (a *app) run(args []string) int {
 		err = a.link(ctx, rest)
 	case "deploy":
 		err = a.deploy(ctx, rest)
+	case "token":
+		err = a.token(ctx, rest)
 	case "build-plan":
 		err = cmdBuildPlan(rest)
 	case "mcp":
@@ -130,33 +134,58 @@ func parse(fs *flag.FlagSet, args []string) error {
 	return nil
 }
 
-// apiBase is where the API is: HOMEPORT_API, else where the sign-in was
-// made, else homeport.sh's.
-func apiBase(c *config.Credentials) string {
+// apiBase is where to sign in: HOMEPORT_API, else homeport.sh's.
+func apiBase() (string, error) {
+	base := cloud.DefaultAPI
 	if v := os.Getenv("HOMEPORT_API"); v != "" {
-		return strings.TrimRight(v, "/")
+		base = strings.TrimRight(v, "/")
 	}
-	if c != nil && c.API != "" {
-		return c.API
+	return base, checkBase(base)
+}
+
+// checkBase refuses an API a token would travel to in the clear: https, or
+// http on this computer alone.
+func checkBase(base string) error {
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" {
+		return usageErr("HOMEPORT_API %q isn't an address", base)
 	}
-	return cloud.DefaultAPI
+	if u.Scheme == "https" {
+		return nil
+	}
+	host := u.Hostname()
+	if ip, err := netip.ParseAddr(host); u.Scheme == "http" && (host == "localhost" || err == nil && ip.IsLoopback()) {
+		return nil
+	}
+	return usageErr("HOMEPORT_API must be https (or http on this computer): %s", base)
 }
 
 func userAgent() string {
 	return "homeport/" + version + " (" + runtime.GOOS + "/" + runtime.GOARCH + ")"
 }
 
-// client is the API as the signed-in CLI: HOMEPORT_TOKEN (CI) or the saved
-// sign-in.
+// client is the API as the signed-in CLI: HOMEPORT_TOKEN (CI), sent to
+// HOMEPORT_API or homeport.sh's - or the saved sign-in, sent only to the
+// API that gave it: HOMEPORT_API naming another is signed out there.
 func (a *app) client() (*cloud.Client, error) {
 	if tok := os.Getenv("HOMEPORT_TOKEN"); tok != "" {
-		return &cloud.Client{Base: apiBase(nil), Token: tok, UserAgent: userAgent()}, nil
+		base, err := apiBase()
+		if err != nil {
+			return nil, err
+		}
+		return &cloud.Client{Base: base, Token: tok, UserAgent: userAgent()}, nil
 	}
 	c, err := config.LoadCredentials()
 	if err != nil {
 		return nil, err
 	}
-	return &cloud.Client{Base: apiBase(c), Token: c.Token, UserAgent: userAgent()}, nil
+	if v := os.Getenv("HOMEPORT_API"); v != "" && strings.TrimRight(v, "/") != c.API {
+		return nil, withCode(exitSignedOut, fmt.Errorf("signed in to %s, not HOMEPORT_API %s: run `homeport login` to sign in there", c.API, v))
+	}
+	if err := checkBase(c.API); err != nil {
+		return nil, err
+	}
+	return &cloud.Client{Base: c.API, Token: c.Token, UserAgent: userAgent()}, nil
 }
 
 // line reads one answer from the person.
@@ -176,6 +205,9 @@ func (a *app) line() (string, error) {
 // says what to pass instead.
 func (a *app) choose(what, flag string, options []string, def int) (int, error) {
 	if !a.tty {
+		if def >= 0 {
+			return def, nil // the default needs no question
+		}
 		return 0, usageErr("which %s? pass %s (one of: %s) - there's no terminal to ask in", what, flag, strings.Join(options, ", "))
 	}
 	fmt.Fprintf(a.out, "Which %s?\n", what)

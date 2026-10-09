@@ -93,6 +93,9 @@ func (a *app) deploy(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if len(tree.Secrets) > 0 {
+		fmt.Fprintf(a.out, "    left out %s: they look like secrets. Set variables on the environment instead.\n", strings.Join(tree.Secrets, ", "))
+	}
 	if len(tree.Files) == 0 {
 		return fmt.Errorf("there's nothing to upload in %s", tree.Root)
 	}

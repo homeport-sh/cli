@@ -44,7 +44,10 @@ func (a *app) usage() {
 --run, --release and --process change this deploy alone, as the dashboard's
 "Redeploy with changes" does; --save keeps them for every deploy after it.
 
-In CI, set HOMEPORT_TOKEN to a CLI token instead of signing in. Exit codes:
+  homeport token create --name <where>
+                      a token for CI (HOMEPORT_TOKEN), printed once
+
+In CI, set HOMEPORT_TOKEN to a token from homeport token create. Exit codes:
 0 live, 1 error, 2 usage, 3 not signed in, 4 build failed, 5 release
 failed, 6 timed out.
 

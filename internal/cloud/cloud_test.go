@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/homeport-sh/cli/buildplan"
 )
@@ -100,5 +101,21 @@ func TestUploadingPutsExactlyTheSizeAsked(t *testing.T) {
 	// the bucket's link is signed for this: no token goes to it
 	if length != 5 || ctype != "application/gzip" || auth != "" {
 		t.Fatalf("length %d type %q auth %q", length, ctype, auth)
+	}
+}
+
+// Queueing a deploy waits for the upload to be checked: longer than a read.
+func TestADeployWaitsLongerThanARead(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(150 * time.Millisecond)
+		io.WriteString(w, `{"build":"b1","user":{}}`)
+	}))
+	defer srv.Close()
+	c := &Client{Base: srv.URL, Token: "t", Timeout: 50 * time.Millisecond}
+	if _, err := c.WhoAmI(context.Background()); err == nil {
+		t.Fatal("a read outlived its timeout")
+	}
+	if b, err := c.Deploy(context.Background(), "t", "a", DeployRequest{}); err != nil || b != "b1" {
+		t.Fatalf("deploy %q %v", b, err)
 	}
 }

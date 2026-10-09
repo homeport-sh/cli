@@ -28,8 +28,12 @@ func (a *app) login(ctx context.Context, args []string) error {
 		}
 		*name = h
 	}
+	base, err := apiBase()
+	if err != nil {
+		return err
+	}
 	old, _ := config.LoadCredentials()
-	c := &cloud.Client{Base: apiBase(old), UserAgent: userAgent()}
+	c := &cloud.Client{Base: base, UserAgent: userAgent()}
 	d, err := c.StartDevice(ctx, *name)
 	if err != nil {
 		return err
@@ -77,9 +81,10 @@ func (a *app) login(ctx context.Context, args []string) error {
 			Name: tok.Name, Email: tok.User.Email}); err != nil {
 			return fmt.Errorf("saving the sign-in: %w", err)
 		}
-		// the sign-in this one replaces is ended, not left behind
-		if old != nil && old.Token != tok.Token {
-			_ = (&cloud.Client{Base: apiBase(old), Token: old.Token, UserAgent: userAgent()}).Logout(ctx)
+		// the sign-in this one replaces is ended where it was given, not left
+		// behind - and never sent anywhere else
+		if old != nil && old.Token != tok.Token && checkBase(old.API) == nil {
+			_ = (&cloud.Client{Base: old.API, Token: old.Token, UserAgent: userAgent()}).Logout(ctx)
 		}
 		fmt.Fprintf(a.out, "Signed in as %s (%s) on %s.\n", orLogin(tok.User), tok.User.Email, tok.Name)
 		return nil
@@ -140,5 +145,33 @@ func (a *app) whoami(ctx context.Context, args []string) error {
 		teams = append(teams, fmt.Sprintf("%s (%s)", t.Slug, t.Role))
 	}
 	fmt.Fprintf(a.out, "Teams: %s\n", strings.Join(teams, ", "))
+	return nil
+}
+
+// token makes a token for CI: `homeport token create --name <where>`. It's
+// printed once, to stdout alone, for a CI secret; it's listed in Account →
+// CLI sessions by its name and revoked there.
+func (a *app) token(ctx context.Context, args []string) error {
+	if len(args) == 0 || args[0] != "create" {
+		return usageErr("usage: homeport token create --name <where it's used>")
+	}
+	fs := a.flags("token create")
+	name := fs.String("name", "", "where it's used (github-actions, say): its name in Account → CLI sessions")
+	if err := parse(fs, args[1:]); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*name) == "" {
+		return usageErr("name the token: --name github-actions, say")
+	}
+	c, err := a.client()
+	if err != nil {
+		return err
+	}
+	made, err := c.CreateToken(ctx, *name)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.err, "A token for %s: set it as HOMEPORT_TOKEN in your CI's secrets now - it isn't shown again.\n", made.Session.Name)
+	fmt.Fprintln(a.out, made.Token)
 	return nil
 }

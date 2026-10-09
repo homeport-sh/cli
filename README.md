@@ -25,7 +25,12 @@ the token it receives is never printed.
   unused, and a year after it began whatever.
 - `homeport logout` revokes it on homeport.sh and forgets it here.
 - `homeport whoami` says who you are signed in as, and in which teams.
-- In CI, set `HOMEPORT_TOKEN` to a CLI token instead of signing in.
+- In CI, set `HOMEPORT_TOKEN` to a token made for it: `homeport token create
+  --name github-actions` prints one, once (or Account → CLI sessions →
+  Create a token for CI). It's listed and revoked like any session.
+- A sign-in is sent only to the API that gave it. Pointing `HOMEPORT_API`
+  elsewhere counts as signed out there, and the API must be https (or
+  http on this computer).
 
 A sign-in from the CLI can do what you can do and nothing more: an
 owner-only action stays owner-only.
@@ -44,7 +49,10 @@ on disk now, uncommitted changes included. homeport builds and releases it
 exactly as it would a pushed commit. In a git checkout the whole repository
 goes, from its top, and the app's folder within it is the app's setting.
 Outside git, the folder goes, with its `.gitignore`s honoured. `.git` and
-`.homeport` are never uploaded. The upload is capped by your plan (the CLI
+`.homeport` are never uploaded, and neither is anything that looks like a
+secret, even when git doesn't ignore it: `.env` and `.env.*` files (but
+`.env.example`), `*.pem`, and `id_rsa`, `id_ed25519` and the like. The
+command says what it left out. Variables belong on the environment. The upload is capped by your plan (the CLI
 stops at 2,000 MB). The build is named after HEAD when the tree is clean,
 and otherwise after a digest of what was uploaded.
 

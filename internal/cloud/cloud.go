@@ -39,12 +39,18 @@ type Client struct {
 	Base      string
 	Token     string
 	UserAgent string
-	HTTP      *http.Client // nil: a client with a 30s timeout
+	// Timeout is a call's longest (0: 30s); queueing a deploy, which waits
+	// for its upload to be checked, gets DeployTimeout
+	Timeout time.Duration
 }
 
+// DeployTimeout is how long queueing a deploy may take: its upload is
+// copied and read through before it answers.
+const DeployTimeout = 10 * time.Minute
+
 func (c *Client) http() *http.Client {
-	if c.HTTP != nil {
-		return c.HTTP
+	if c.Timeout > 0 {
+		return &http.Client{Timeout: c.Timeout}
 	}
 	return &http.Client{Timeout: 30 * time.Second}
 }
@@ -52,6 +58,10 @@ func (c *Client) http() *http.Client {
 // call sends in (nil: none) as JSON and decodes a 2xx answer into out (nil:
 // ignore it).
 func (c *Client) call(ctx context.Context, method, path string, in, out any) error {
+	return c.callWith(ctx, c.http(), method, path, in, out)
+}
+
+func (c *Client) callWith(ctx context.Context, hc *http.Client, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -74,7 +84,7 @@ func (c *Client) call(ctx context.Context, method, path string, in, out any) err
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
-	res, err := c.http().Do(req)
+	res, err := hc.Do(req)
 	if err != nil {
 		var ue *url.Error
 		if errors.As(err, &ue) {
@@ -284,7 +294,7 @@ type DeployRequest struct {
 // Deploy queues a build of an uploaded working tree; its id.
 func (c *Client) Deploy(ctx context.Context, team, app string, in DeployRequest) (string, error) {
 	var out struct{ Build string }
-	err := c.call(ctx, "POST", "/v1/cli/teams/"+url.PathEscape(team)+"/apps/"+url.PathEscape(app)+"/deploys", in, &out)
+	err := c.callWith(ctx, &http.Client{Timeout: DeployTimeout}, "POST", "/v1/cli/teams/"+url.PathEscape(team)+"/apps/"+url.PathEscape(app)+"/deploys", in, &out)
 	return out.Build, err
 }
 
@@ -310,5 +320,21 @@ func (c *Client) Build(ctx context.Context, team, build string) (*Build, error) 
 func (c *Client) DeployStatus(ctx context.Context, team, deploy string) (*Deploy, error) {
 	var out Deploy
 	err := c.call(ctx, "GET", "/v1/cli/teams/"+url.PathEscape(team)+"/deploys/"+url.PathEscape(deploy), nil, &out)
+	return &out, err
+}
+
+// NewToken is a token made for CI: shown once.
+type NewToken struct {
+	Token   string
+	Session struct {
+		ID   string
+		Name string
+	}
+}
+
+// CreateToken makes a named token for CI, as the signed-in person.
+func (c *Client) CreateToken(ctx context.Context, name string) (*NewToken, error) {
+	var out NewToken
+	err := c.call(ctx, "POST", "/v1/cli/tokens", map[string]string{"name": name}, &out)
 	return &out, err
 }

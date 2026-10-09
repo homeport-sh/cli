@@ -38,6 +38,32 @@ type Tree struct {
 	Git   bool     // Root is a git checkout: git said what's ignored
 	Head  string   // HEAD's commit ("" none)
 	Clean bool     // nothing differs from HEAD, untracked files included
+	// Secrets are files that look like secrets - .env files, private keys -
+	// left out even when nothing ignores them: variables belong in the
+	// environment, keys nowhere
+	Secrets []string
+}
+
+// secret reports whether a file looks like a secret, by its name.
+func secret(rel string) bool {
+	base := path.Base(rel)
+	switch {
+	case base == ".env":
+		return true
+	case strings.HasPrefix(base, ".env."):
+		switch strings.TrimPrefix(base, ".env.") {
+		case "example", "sample", "dist", "template":
+			return false
+		}
+		return true
+	case strings.HasSuffix(base, ".pem"):
+		return true
+	case base == "id_rsa" || base == "id_dsa" || base == "id_ecdsa" || base == "id_ed25519":
+		return true
+	case strings.HasSuffix(rel, "homeport/credentials"):
+		return true
+	}
+	return false
 }
 
 // never is what's never uploaded, wherever it is: git's own folder, and
@@ -87,9 +113,14 @@ func collectGit(root string) (*Tree, error) {
 		if err != nil || info.IsDir() {
 			continue // deleted since its commit, or a submodule
 		}
+		if secret(f) {
+			t.Secrets = append(t.Secrets, f)
+			continue
+		}
 		t.Files = append(t.Files, f)
 	}
 	slices.Sort(t.Files)
+	slices.Sort(t.Secrets)
 	if head, err := gitOut(root, "rev-parse", "--verify", "-q", "HEAD"); err == nil {
 		t.Head = strings.TrimSpace(head)
 	}
@@ -137,6 +168,10 @@ func collectDir(dir string) (*Tree, error) {
 		if never(rel) || ign.ignored(rel, false) {
 			return nil
 		}
+		if secret(rel) {
+			t.Secrets = append(t.Secrets, rel)
+			return nil
+		}
 		t.Files = append(t.Files, rel)
 		return nil
 	})
@@ -144,7 +179,42 @@ func collectDir(dir string) (*Tree, error) {
 		return nil, err
 	}
 	slices.Sort(t.Files)
+	slices.Sort(t.Secrets)
 	return t, nil
+}
+
+// linkInside walks a link's target from its folder a part at a time, as the
+// filesystem would follow it: never above root, and never through another
+// link (which would change where the rest leads). Only its last part may be
+// a link, judged on its own.
+func linkInside(root, rel, to string) bool {
+	if path.IsAbs(to) {
+		return false
+	}
+	at := []string{}
+	if d := path.Dir(rel); d != "." {
+		at = strings.Split(d, "/")
+	}
+	parts := strings.Split(to, "/")
+	for i, part := range parts {
+		switch part {
+		case "", ".":
+			continue
+		case "..":
+			if len(at) == 0 {
+				return false
+			}
+			at = at[:len(at)-1]
+			continue
+		}
+		at = append(at, part)
+		if i < len(parts)-1 {
+			if info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(strings.Join(at, "/")))); err == nil && info.Mode()&fs.ModeSymlink != 0 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // Summary is what was packed.
@@ -208,7 +278,7 @@ func Pack(t *Tree, w io.Writer, max int64) (Summary, error) {
 				return Summary{}, err
 			}
 			to = filepath.ToSlash(to)
-			if path.IsAbs(to) || strings.HasPrefix(path.Clean(path.Join(path.Dir(rel), to)), "..") {
+			if !linkInside(t.Root, rel, to) {
 				return Summary{}, fmt.Errorf("%s links outside the project (to %s): a build couldn't follow it; ignore it in .gitignore, or copy what it points to in", rel, to)
 			}
 			h.Typeflag, h.Linkname, h.Mode = tar.TypeSymlink, to, 0o777
