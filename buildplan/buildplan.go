@@ -472,12 +472,12 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 			// puts FrankenPHP there as frankenphp
 			p.Command = "frankenphp-bundle . " + p.Artifact + " && mv -T " + p.Artifact + "/frankenphp " + p.Artifact + "/bin"
 			if ssr {
-				rt, v, why, err := r.ssrRuntime(cfg, s)
+				x, err := r.ssrFor(cfg, s)
 				if err != nil {
-					return Plan{}, fmt.Errorf("Inertia's SSR server: %w", err)
+					return Plan{}, fmt.Errorf("Inertia's SSR: %w", err)
 				}
-				p.SSR, p.Runtime, p.RuntimeVersion, p.RuntimeReason = SSRInertia, rt, v, why
-				p.Command = join(p.Command, ssrAssemble(p.Artifact, rt, v))
+				p.SSR, p.Runtime, p.RuntimeVersion, p.RuntimeReason = SSRInertia, x.rt, x.version, x.why
+				p.Command = join(p.Command, ssrAssemble(p.Artifact, x))
 			}
 		}
 	case r.exists("go.mod"):

@@ -1,10 +1,13 @@
 package buildplan
 
 import (
+	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -14,20 +17,29 @@ import (
 //
 // Inertia's server-side rendering: a Laravel app that requires
 // inertiajs/inertia-laravel and has an SSR build (package.json's build:ssr,
-// or an ssr entry for laravel-vite-plugin in the Vite config) builds its SSR
-// bundle too, made one file with the packages it imports (no node_modules
-// ships), and runs Inertia's SSR server in the web's own sandbox: PHP reaches
-// it at Inertia's default, 127.0.0.1:13714. Its runtime - Node or Bun, the
-// pinned official binary, checked - ships in the bundle, chosen as a
-// JavaScript app's is. homeportd runs the web through .homeport/wrap when the
-// bundle has one: `<runtime> .homeport/ssr.mjs ./bin <the web's args>`. The
-// wrapper starts the SSR server, then the web as its child; a stop reaches the
-// web, and the web's exit is its exit. So the SSR server starts, sleeps, wakes
-// and stops with the web, one beside each copy.
+// or an ssr entry in the Vite config) builds its SSR bundle too, and runs
+// Inertia's SSR renderer in the web's own sandbox: PHP reaches it at
+// Inertia's default, 127.0.0.1:13714, as it would locally. The renderer is
+// one of three things, by the JavaScript app's rule:
+//
+//   - the binary the project's own SSR build compiles (bun build --compile):
+//     it runs as it is, and no runtime ships - compiled for the sandbox's
+//     Linux (glibc), as the same command with a --target, when the command
+//     names none (the build image is Alpine's musl);
+//   - else the SSR bundle, made one file with the packages it imports (no
+//     node_modules ships), on Node or Bun, the pinned official binary,
+//     checked, chosen as a JavaScript app's runtime is.
+//
+// homeportd runs the web through .homeport/wrap when the bundle has one:
+// `./bin php-cli .homeport/beside.php ./bin <the web's args>`, a supervisor
+// in the app's own PHP, which starts each command in .homeport/beside, then
+// the web; starts one that exits again; passes a stop to the web; and exits
+// as the web does. So the renderer starts, sleeps, wakes and stops with the
+// web, one beside each copy.
 //
 // Laravel Reverb (laravel/reverb) runs as a process of its own, reverb, on
-// the port homeportd gives it: homeportd sends the app's WebSocket paths
-// (/app, /apps) to it.
+// the port homeportd gives it: homeportd sends the app's WebSocket and
+// signed API requests (/app/…, /apps/…) to it.
 
 // ReverbRun is how the reverb process runs: Reverb's server on the process's
 // own port, on every address of its sandbox (homeportd substitutes $HOST and
@@ -37,11 +49,16 @@ const ReverbRun = "php-cli artisan reverb:start --host=$HOST --port=$PORT"
 // SSRInertia is Plan.SSR for Inertia's server-side rendering.
 const SSRInertia = "inertia"
 
-// the bundle's wrapper and the file homeportd reads it from
+// what the bundle says runs beside the web, and how homeportd runs it
 const (
-	wrapFile = ".homeport/wrap"
-	ssrFile  = ".homeport/ssr.mjs"
+	wrapFile   = ".homeport/wrap"
+	besideFile = ".homeport/beside"
+	besidePHPF = ".homeport/beside.php"
+	wrapArgs   = "bin php-cli " + besidePHPF
 )
+
+//go:embed embed/beside.php
+var besidePHP string
 
 // an SSR entry for laravel-vite-plugin in the Vite config: ssr: '…' or [ … ]
 var viteSSRRe = regexp.MustCompile(`\bssr\s*:\s*['"\x60\[]`)
@@ -176,52 +193,126 @@ func (r reader) composerStartSSR() (string, string) {
 	return "", ""
 }
 
-// ssrAssemble puts Inertia's SSR server in the bundle b: the SSR bundle as
-// one file (bootstrap/ssr/ssr.mjs, where Inertia finds it: the only file
-// there), the runtime,
-// checked, the wrapper, and .homeport/wrap, which homeportd runs the web
-// through.
-func ssrAssemble(b, rt, version string) string {
-	bin := ".homeport/" + rt
-	steps := []string{
-		// where Inertia looks for it, in its order
-		`{ s=; for f in bootstrap/ssr/ssr.js bootstrap/ssr/app.js bootstrap/ssr/ssr.mjs bootstrap/ssr/app.mjs; do if [ -f "$f" ]; then s=$f; break; fi; done; ` +
-			`[ -n "$s" ] || { echo 'homeport: the SSR build made no bootstrap/ssr/ssr.js, app.js, ssr.mjs or app.mjs' >&2; exit 1; }; }`,
-		// its packages in it: the bundle ships no node_modules
-		"rm -rf " + b + "/bootstrap/ssr && mkdir -p " + b + "/bootstrap/ssr " + b + "/.homeport",
-		`bun build "./$s" --target=node --format=esm --outfile=` + b + "/bootstrap/ssr/ssr.mjs",
-	}
-	if rt == "bun" {
-		steps = append(steps,
-			"case $(uname -m) in x86_64) a=x64 ;; aarch64) a=aarch64 ;; *) echo \"homeport: no Bun for $(uname -m)\" >&2; exit 1 ;; esac",
-			"curl -fsSL https://registry.npmjs.org/@oven/bun-linux-$a/-/bun-linux-$a-"+BunVersion+".tgz | tar -xzO package/bin/bun > "+b+"/"+bin)
-		steps = append(steps, "chmod 755 "+b+"/"+bin, checkSum(b+"/"+bin, bunSum, "Bun"))
-	} else {
-		steps = append(steps,
-			"case $(uname -m) in x86_64) a=x64 ;; aarch64) a=arm64 ;; *) echo \"homeport: no Node for $(uname -m)\" >&2; exit 1 ;; esac",
-			"curl -fsSL https://nodejs.org/dist/v"+version+"/node-v"+version+"-linux-$a.tar.gz | tar -xzO node-v"+version+"-linux-$a/bin/node > "+b+"/"+bin)
-		steps = append(steps, "chmod 755 "+b+"/"+bin, checkSum(b+"/"+bin, nodeSum(version), "Node"))
-	}
-	steps = append(steps,
-		"printf '%s' '"+ssrWrapper+"' > "+b+"/"+ssrFile,
-		"printf '%s\\n' '"+bin+" "+ssrFile+"' > "+b+"/"+wrapFile)
-	return join(steps...)
+// ssr is how an app's SSR renderer runs: compiled (the binary at out, made
+// by compile, which is run again with target when it's set), or the bundle
+// on rt at version.
+type ssr struct {
+	rt, version, why string
+	compile, target  string
+	out              string
 }
 
-// ssrWrapper is .homeport/ssr.mjs: `<runtime> .homeport/ssr.mjs ./bin <args>`.
-// Inertia's SSR server starts in it (an SSR bundle that fails to load is
-// said, and the web serves on: pages render in the browser), then the web,
-// as its child; a stop is passed on to the web, and the web's exit is the
-// wrapper's. One line, no single quotes: it's written in some.
-var ssrWrapper = `import { spawn } from "node:child_process";import { existsSync } from "node:fs";import { constants } from "node:os";` +
-	`const [bin, ...args] = process.argv.slice(2);let web;` +
-	`for (const s of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(s, () => (web ? web.kill(s) : process.exit(0)));` +
-	`const ssr = ["../bootstrap/ssr/ssr.mjs", "../bootstrap/ssr/ssr.js"].map((f) => new URL(f, import.meta.url)).find((u) => existsSync(u));` +
-	`try { if (!ssr) throw new Error("no bootstrap/ssr/ssr.mjs"); await import(ssr.href); } ` +
-	`catch (e) { console.error("homeport: Inertia SSR server did not start, so pages render in the browser:", e); }` +
-	`web = spawn(bin, args, { stdio: "inherit" });` +
-	`web.on("error", (e) => { console.error("homeport: the web did not start:", e); process.exit(1); });` +
-	`web.on("exit", (code, sig) => process.exit(code ?? 128 + (constants.signals[sig] ?? 0)));`
+// ssrCompiled: the project's own SSR build compiles the SSR bundle - a
+// bun build --compile in build:ssr, or in a script it runs - and the binary
+// it makes.
+func (r reader) ssrCompiled() (cmd, out string, err error) {
+	scripts := r.pkg().Scripts
+	var find func(name string, depth int) string
+	find = func(name string, depth int) string {
+		if depth > 4 {
+			return ""
+		}
+		for _, seg := range strings.Split(scripts[name], "&&") {
+			seg = strings.TrimSpace(seg)
+			f := strings.Fields(seg)
+			switch {
+			case len(f) >= 2 && f[0] == "bun" && f[1] == "build" && slices.Contains(f, "--compile"):
+				return seg
+			case len(f) == 3 && f[1] == "run" && slices.Contains([]string{"npm", "bun", "pnpm", "yarn"}, f[0]) && scripts[f[2]] != "":
+				if c := find(f[2], depth+1); c != "" {
+					return c
+				}
+			case len(f) == 2 && (f[0] == "pnpm" || f[0] == "yarn") && scripts[f[1]] != "":
+				if c := find(f[1], depth+1); c != "" {
+					return c
+				}
+			}
+		}
+		return ""
+	}
+	cmd = find("build:ssr", 0)
+	if cmd == "" {
+		return "", "", nil
+	}
+	out = compiledName(cmd)
+	if !relPath(out) {
+		return "", "", fmt.Errorf("its SSR build compiles to %q, which isn't a file in the app's folder", out)
+	}
+	return cmd, clean(out), nil
+}
+
+// ssrFor decides how the SSR renderer runs: the project's compiled binary,
+// else the bundle on the runtime the project's signals choose.
+func (r reader) ssrFor(cfg fileConfig, s Settings) (ssr, error) {
+	cmd, out, err := r.ssrCompiled()
+	if err != nil {
+		return ssr{}, err
+	}
+	if cmd != "" {
+		if err := r.bunVersion(r.pkg()); err != nil {
+			return ssr{}, err
+		}
+		x := ssr{rt: "bun", version: BunVersion, out: out, compile: cmd,
+			why: "its SSR build compiles the renderer (" + cmd + "): that binary runs, and no runtime ships"}
+		switch t := regexp.MustCompile(`--target[= ](\S+)`).FindStringSubmatch(cmd); {
+		case t == nil:
+			x.target = " --target=bun-linux-$a" // the sandbox's glibc, not the image's musl
+		case strings.Contains(t[1], "musl"):
+			return ssr{}, fmt.Errorf("its SSR build compiles for %s, which the sandbox can't run: compile for bun-linux-x64 or bun-linux-arm64 (glibc), or drop --target", t[1])
+		default:
+			x.compile = "" // as it is: already for glibc
+		}
+		return x, nil
+	}
+	rt, v, why, err := r.ssrRuntime(cfg, s)
+	return ssr{rt: rt, version: v, why: why}, err
+}
+
+// ssrAssemble puts Inertia's SSR renderer in the bundle b, beside the web:
+// what runs (the compiled binary, or the SSR bundle as one file at
+// bootstrap/ssr/ssr.mjs - where Inertia finds it, the only file there - and
+// the runtime, checked), the supervisor and .homeport/wrap.
+func ssrAssemble(b string, x ssr) string {
+	var steps []string
+	beside := x.out
+	if x.out != "" {
+		if x.compile != "" {
+			steps = append(steps,
+				"case $(uname -m) in x86_64) a=x64 ;; aarch64) a=arm64 ;; *) echo \"homeport: no Bun for $(uname -m)\" >&2; exit 1 ;; esac",
+				x.compile+x.target)
+		}
+		steps = append(steps,
+			`{ [ -f `+x.out+` ] || { echo 'homeport: the SSR build made no `+x.out+`' >&2; exit 1; }; }`,
+			"mkdir -p "+path.Dir(b+"/"+x.out)+" "+b+"/.homeport",
+			"cp "+x.out+" "+b+"/"+x.out, "chmod 755 "+b+"/"+x.out)
+	} else {
+		bin := ".homeport/" + x.rt
+		beside = bin + " bootstrap/ssr/ssr.mjs"
+		steps = append(steps,
+			// where Inertia looks for it, in its order
+			`{ s=; for f in bootstrap/ssr/ssr.js bootstrap/ssr/app.js bootstrap/ssr/ssr.mjs bootstrap/ssr/app.mjs; do if [ -f "$f" ]; then s=$f; break; fi; done; `+
+				`[ -n "$s" ] || { echo 'homeport: the SSR build made no bootstrap/ssr/ssr.js, app.js, ssr.mjs or app.mjs' >&2; exit 1; }; }`,
+			// its packages in it: the bundle ships no node_modules
+			"rm -rf "+b+"/bootstrap/ssr && mkdir -p "+b+"/bootstrap/ssr "+b+"/.homeport",
+			`bun build "./$s" --target=node --format=esm --outfile=`+b+"/bootstrap/ssr/ssr.mjs")
+		if x.rt == "bun" {
+			steps = append(steps,
+				"case $(uname -m) in x86_64) a=x64 ;; aarch64) a=aarch64 ;; *) echo \"homeport: no Bun for $(uname -m)\" >&2; exit 1 ;; esac",
+				"curl -fsSL https://registry.npmjs.org/@oven/bun-linux-$a/-/bun-linux-$a-"+BunVersion+".tgz | tar -xzO package/bin/bun > "+b+"/"+bin,
+				"chmod 755 "+b+"/"+bin, checkSum(b+"/"+bin, bunSum, "Bun"))
+		} else {
+			steps = append(steps,
+				"case $(uname -m) in x86_64) a=x64 ;; aarch64) a=arm64 ;; *) echo \"homeport: no Node for $(uname -m)\" >&2; exit 1 ;; esac",
+				"curl -fsSL https://nodejs.org/dist/v"+x.version+"/node-v"+x.version+"-linux-$a.tar.gz | tar -xzO node-v"+x.version+"-linux-$a/bin/node > "+b+"/"+bin,
+				"chmod 755 "+b+"/"+bin, checkSum(b+"/"+bin, nodeSum(x.version), "Node"))
+		}
+	}
+	steps = append(steps,
+		"printf '%s' '"+base64.StdEncoding.EncodeToString([]byte(besidePHP))+"' | base64 -d > "+b+"/"+besidePHPF,
+		"printf '%s\\n' '"+beside+"' > "+b+"/"+besideFile,
+		"printf '%s\\n' '"+wrapArgs+"' > "+b+"/"+wrapFile)
+	return join(steps...)
+}
 
 // reverbProcess adds Reverb's process to the plan, unless the app runs one of
 // its own by that name.
@@ -237,6 +328,3 @@ func reverbProcess(p *Plan) error {
 		func(a, b Process) int { return strings.Compare(a.Name, b.Name) })
 	return nil
 }
-
-// besidePHP is .homeport/beside.php (a stub: the tests come first).
-var besidePHP = ""

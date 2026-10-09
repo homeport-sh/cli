@@ -63,7 +63,9 @@ func TestTheSupervisorRunsTheWebBesideItsRenderer(t *testing.T) {
 			dir, port := supervised(t, php)
 			besides(t, dir, make(t, dir))
 			cmd, out := supervise(t, php, dir, port, "")
-			waitFor(t, func() bool { return get(port) == "rendered" && strings.Contains(out.String(), "web php-server --listen :8080") }, out)
+			waitFor(t, func() bool {
+				return get(port) == "rendered" && strings.Contains(out.String(), "web php-server --listen :8080")
+			}, out)
 			_ = cmd.Process.Signal(syscall.SIGTERM)
 			if err := waitExit(cmd); err != nil {
 				t.Fatalf("stopped: %v\n%s", err, out)
@@ -107,7 +109,9 @@ func TestTheSupervisorRunsTheWebBesideItsRenderer(t *testing.T) {
 		dir, port = supervised(t, php)
 		besides(t, dir, "bootstrap/ssr/missing")
 		cmd, out = supervise(t, php, dir, port, "")
-		waitFor(t, func() bool { return strings.Contains(out.String(), "web php-server") && strings.Contains(out.String(), "bootstrap/ssr/missing") }, out)
+		waitFor(t, func() bool {
+			return strings.Contains(out.String(), "web php-server") && strings.Contains(out.String(), "bootstrap/ssr/missing")
+		}, out)
 		_ = cmd.Process.Signal(syscall.SIGTERM)
 		if err := waitExit(cmd); err != nil {
 			t.Errorf("stopped: %v\n%s", err, out)
@@ -134,7 +138,7 @@ func supervised(t *testing.T, php string) (string, int) {
 	dir := t.TempDir()
 	write(t, dir, ".homeport/beside.php", besidePHP, 0o644)
 	write(t, dir, "package.json", `{"type":"module"}`, 0o644)
-	write(t, dir, "bin", "#!/bin/sh\nif [ \"$1\" = php-cli ]; then shift; exec "+php+" \"$@\"; fi\n"+
+	write(t, dir, "bin", "#!/bin/sh\nif [ \"$1\" = php-cli ]; then shift; exec '"+php+"' \"$@\"; fi\n"+
 		"echo \"web $*\"\ntrap 'echo web-stopped; exit 0' TERM\n"+
 		"[ -n \"$EXIT_WITH\" ] && exit \"$EXIT_WITH\"\nwhile :; do sleep 0.05; done\n", 0o755)
 	l, err := net.Listen("tcp", "127.0.0.1:0")

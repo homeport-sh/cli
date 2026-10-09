@@ -250,18 +250,29 @@ for `laravel-vite-plugin` or `@inertiajs/vite`). Then:
 - **The build** runs `bun run build:ssr` in place of `bun run build`, since
   that script builds both. With no `build:ssr`, it runs `bun run build`, then
   `vite build --ssr`.
-- **The SSR bundle** that Vite made (`bootstrap/ssr/ssr.js`, `app.js`,
-  `ssr.mjs` or `app.mjs`, in the order Inertia looks) is bundled again into
-  one file with every package it imports, at `bootstrap/ssr/ssr.mjs`. No
-  `node_modules` ships, and a cold start reads one file.
+- **What runs** is one of three things, as for a JavaScript app:
+  - **The binary your SSR build compiles.** If `build:ssr`, or a script it
+    runs, has `bun build --compile`, that binary runs as it is, and no
+    runtime ships. With no `--target`, the command is run once more with
+    `--target=bun-linux-x64` (or `-arm64`), so the binary is for the Linux
+    the app runs on (glibc). A `-musl` target is refused.
+  - **Otherwise the SSR bundle** that Vite made (`bootstrap/ssr/ssr.js`,
+    `app.js`, `ssr.mjs` or `app.mjs`, in the order Inertia looks), bundled
+    again into one file with every package it imports, at
+    `bootstrap/ssr/ssr.mjs`, on Node or Bun (below). No `node_modules`
+    ships, and a cold start reads one file.
 - **It runs beside the web, in the same sandbox**, so PHP reaches it at
   Inertia's default address, `http://127.0.0.1:13714`, with nothing to
-  configure. homeport starts the web through `.homeport/ssr.mjs`, which
-  starts Inertia's SSR renderer first and then the web. A stop reaches the
-  web, and when the web exits, so does the renderer. Each copy of the app has
-  its own. An app that sleeps when idle sleeps and wakes with its renderer.
-- **If the SSR bundle fails to load**, the app logs why and serves anyway:
-  Inertia renders those pages in the browser instead.
+  configure, whichever of the three it is. homeport starts the web through
+  `.homeport/beside.php`, a small supervisor in the app's own PHP. It starts
+  what `.homeport/beside` lists (the renderer), then the web. A renderer
+  that exits is started again after a second, then longer, up to 30
+  seconds. A stop reaches the web, and when the web exits, so does the
+  renderer. Each copy of the app has its own. An app that sleeps when idle
+  sleeps and wakes with its renderer.
+- **While the renderer isn't answering** (it failed, or a request came in
+  as it started), Inertia renders those pages in the browser instead, and
+  the app logs why.
 
 The renderer's memory is part of the app's.
 
@@ -278,12 +289,12 @@ The renderer's memory is part of the app's.
 5. A Bun lockfile (`bun.lock`, `bun.lockb`).
 6. Otherwise Node.
 
-The pinned official binary ships in the bundle as `.homeport/node` or
-`.homeport/bun`, checked against its sha256: Node from nodejs.org's
+Unless the renderer is compiled, the pinned official binary ships in the
+bundle as `.homeport/node` or `.homeport/bun`, checked against its sha256: Node from nodejs.org's
 tarball, at the version `.nvmrc`, `.node-version` or `engines.node` asks
 for (24 by default), or Bun 1.4.2. The plan says which runtime it chose and
-why (`runtime`, `runtime_version`, `runtime_reason`), and `ssr` is
-`inertia`.
+why (`runtime`, `runtime_version`, `runtime_reason`; a compiled renderer
+is `bun`, and its reason says it's compiled), and `ssr` is `inertia`.
 
 If you set a build command, it replaces the build and the bundle, so the
 renderer isn't added.
