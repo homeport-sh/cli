@@ -22,11 +22,24 @@ A JavaScript app runs what its build produces. A server ships as a
 files with only its production dependencies, plus the runtime the project
 uses as `bin`. homeport runs the app the way its start script does.
 
-It ships a **binary** only when the project's own build makes one. If the
-`build` script runs `bun build --compile`, homeport runs the file that
-`--outfile` names, as long as no framework's server is what starts (a Next.js
-app that compiles a worker is still a Next.js bundle) or its start script
-runs that file. Compiling an app that doesn't compile itself can leave
+It ships a **binary** only when the project's own build compiles its
+server. That happens in three ways:
+
+- **A tool that compiles it.** next-bun-compile is a Next.js build adapter
+  (set by `adapterPath` in next.config, or `NEXT_ADAPTER_PATH=next-bun-compile`)
+  and writes `./server`. svelte-smol is a SvelteKit adapter that writes
+  `<out>/server`, or the `outfile`/`name` you give it. On SvelteKit 2 it
+  serves `client/` and `prerendered/` from beside the binary, so homeport
+  ships that folder as a bundle, with the binary as its `bin`.
+- **`bun build --compile` of the framework's own server output**, such as
+  Nitro's `.output/server/index.mjs` from `nuxt build --preset bun`.
+  homeport runs the file that `--outfile` names.
+- **`bun build --compile` in an app with no framework**, or one whose start
+  script runs the compiled file.
+
+A Next.js app whose build also compiles a worker is still a Next.js bundle,
+because the worker isn't the server. Builds that compile run with the
+pinned Bun. Compiling an app that doesn't compile itself can leave
 out files it loads at runtime: native modules (sharp, bcrypt, Prisma's
 engines), workers, and lookups by node_modules path.
 

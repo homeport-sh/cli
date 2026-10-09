@@ -216,3 +216,48 @@ func TestSvelteKit3sAdapterIsInTheViteConfig(t *testing.T) {
 		t.Fatal("vite.config not listed")
 	}
 }
+
+// A framework app whose own build compiles its server ships that binary:
+// the compiled file IS the server. next-bun-compile (a Next.js build
+// adapter, writing ./server), Nitro's output compiled with bun build
+// --compile, and svelte-smol (a SvelteKit adapter that compiles).
+func TestAFrameworkWhoseBuildCompilesItsServerShipsTheBinary(t *testing.T) {
+	for name, c := range map[string]struct {
+		files     map[string]string
+		framework string
+		artifact  string
+	}{
+		"next-bun-compile, by adapterPath": {js(`{"scripts":{"build":"next build","start":"next start"},"dependencies":{"next":"16"},"devDependencies":{"next-bun-compile":"^2"}}`,
+			"next.config.ts", "export default { adapterPath: \"next-bun-compile\" }\n"), "Next.js", "server"},
+		"next-bun-compile, by NEXT_ADAPTER_PATH": {js(`{"scripts":{"build":"NEXT_ADAPTER_PATH=next-bun-compile next build"},"dependencies":{"next":"16","next-bun-compile":"^2"}}`, "bun.lock", "{}"),
+			"Next.js", "server"},
+		"Nitro's bun preset, compiled": {js(`{"scripts":{"build":"nuxt build --preset bun && bun build --compile .output/server/index.mjs --outfile server"},"dependencies":{"nuxt":"^4"}}`, "bun.lock", "{}"),
+			"Nuxt", "server"},
+		"svelte-smol on SvelteKit 3": {js(`{"scripts":{"build":"vite build"},"devDependencies":{"@sveltejs/kit":"^3","@orochibraru/svelte-smol":"^1"}}`, "bun.lock", "{}",
+			"vite.config.ts", "import adapter from '@orochibraru/svelte-smol'\nexport default defineConfig({ plugins: [sveltekit({ adapter: adapter() })] })\n"), "SvelteKit", "build/server"},
+		"svelte-smol on SvelteKit 3, named": {js(`{"scripts":{"build":"vite build"},"devDependencies":{"@sveltejs/kit":"^3","@orochibraru/svelte-smol":"^1"}}`, "bun.lock", "{}",
+			"vite.config.ts", "import adapter from '@orochibraru/svelte-smol'\nexport default defineConfig({ plugins: [sveltekit({ adapter: adapter({ out: 'dist', buildOptions: { compile: { outfile: 'app' } } }) })] })\n"), "SvelteKit", "dist/app"},
+	} {
+		p := detect(t, c.files, buildplan.Settings{})
+		if p.Kind != buildplan.Binary || p.Framework != c.framework || p.Artifact != c.artifact || p.Runtime != "bun" || p.StaticFallback ||
+			strings.Contains(p.Command, buildplan.BundleDir) || strings.Contains(p.Command, "NEXT_PRIVATE_STANDALONE") || p.RuntimeReason == "" {
+			t.Errorf("%s: %+v", name, p)
+		}
+		if p.Toolchain == "node" && !strings.Contains(p.Install, "bun-linux-") {
+			t.Errorf("%s: no Bun to compile with: %s", name, p.Install)
+		}
+	}
+	// svelte-smol on SvelteKit 2 compiles build/server with client/ and
+	// prerendered/ beside it: a bundle, the binary its bin
+	p := detect(t, js(`{"scripts":{"build":"vite build"},"devDependencies":{"@sveltejs/kit":"^2","@orochibraru/svelte-smol":"^1"}}`, "bun.lock", "{}",
+		"svelte.config.js", "import adapter from '@orochibraru/svelte-smol'\nexport default { kit: { adapter: adapter() } }\n"), buildplan.Settings{})
+	if p.Kind != buildplan.Bundle || p.Framework != "SvelteKit" || p.Run != "" || p.Runtime != "bun" ||
+		!strings.Contains(p.Command, "mv "+buildplan.BundleDir+"/server "+buildplan.BundleDir+"/bin") {
+		t.Errorf("SvelteKit 2: %+v", p)
+	}
+	// next-bun-compile isn't standalone's business
+	p = detect(t, js(`{"scripts":{"build":"next build"},"dependencies":{"next":"16"},"devDependencies":{"next-bun-compile":"^2"}}`), buildplan.Settings{})
+	if p.Kind != buildplan.Bundle {
+		t.Errorf("installed but not the adapter: %+v", p)
+	}
+}

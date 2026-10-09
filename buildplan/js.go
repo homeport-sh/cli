@@ -382,27 +382,18 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		}
 	}
 
-	// the project's own build compiles a binary: that's what runs - unless
-	// a framework's server is what starts, and the binary is a part (a
-	// worker) of it
+	// the project's own build compiles its server: that binary is what runs
 	build := pkg.Scripts["build"]
-	compiles := strings.Contains(build, "bun build") && strings.Contains(build, "--compile")
-	startsIt := false
-	if f := strings.Fields(pkg.Scripts["start"]); compiles && len(f) > 0 {
-		startsIt = clean(f[0]) == compiledName(build)
-	}
-	if cfg.Build.Artifact == "" && cfg.Static == "" && compiles && (pr == nil || startsIt) {
+	if c := r.compiled(pkg, deps, pr, build); c.kind != "" && cfg.Build.Artifact == "" && cfg.Static == "" {
 		if err := r.bunVersion(pkg); err != nil {
 			return err
 		}
 		m := r.pmFor(pmName, pkg, false)
-		p.Toolchain, p.Kind, p.Framework, p.StaticFallback = "bun", Binary, "Bun", false
-		if pr != nil {
-			p.Framework = pr.name
-		}
+		p.Toolchain, p.Kind, p.Framework, p.StaticFallback = "bun", c.kind, c.framework, false
 		if pmName == "bun" {
 			p.Image, p.Install = BunImage, m.install
 		} else {
+			// Bun beside Node, for the compile
 			nv, _, err := r.nodeVersion(pkg)
 			if err != nil {
 				return err
@@ -411,11 +402,20 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 			p.setup = join(fetchBun, m.setup)
 			p.Install = join(p.setup, m.install)
 		}
-		p.Runtime, p.RuntimeVersion, p.RuntimeReason = "bun", BunVersion, "its build script compiles it with bun build --compile"
+		p.Runtime, p.RuntimeVersion, p.RuntimeReason = "bun", BunVersion, c.reason
 		if p.Command == "" {
 			p.Command = m.run + " build"
 		}
-		p.Artifact = compiledName(build)
+		p.Artifact = c.artifact
+		if c.kind == Bundle {
+			// the binary with what it serves beside it: the folder, the
+			// binary its bin
+			const b = BundleDir
+			p.build = p.Command
+			p.assemble = join("rm -rf "+b, "cp -R "+path.Dir(c.artifact)+" "+b, "mv "+b+"/"+path.Base(c.artifact)+" "+b+"/bin")
+			p.Command, p.Artifact = join(p.build, p.assemble), b
+			p.Health = "/"
+		}
 		return nil
 	}
 
@@ -718,6 +718,89 @@ func (r reader) nextExport(p *Plan, cfg fileConfig, deps map[string]bool) bool {
 
 // compiledName: the binary bun build --compile makes - its --outfile, else
 // named after its entry.
+// compiledServer is a build that compiles the app's server.
+type compiledServer struct {
+	kind, artifact, framework, reason string
+}
+
+var (
+	smolOutfileRe = regexp.MustCompile(`\boutfile\s*:\s*['"]([^'"]+)['"]`)
+	smolNameRe    = regexp.MustCompile(`\bname\s*:\s*['"]([^'"]+)['"]`)
+	nbcConfigRe   = regexp.MustCompile(`adapterPath[^\n]*next-bun-compile`)
+)
+
+// compiled: whether the project's own build compiles its server, and to
+// what. A tool that does (next-bun-compile, svelte-smol), or bun build
+// --compile in the build script - when no framework's server is what
+// starts, or the compiled file is that server (its output, or what the
+// start script runs), not a part of it like a worker.
+func (r reader) compiled(pkg pkgJSON, deps map[string]bool, pr *preset, build string) compiledServer {
+	if deps["next"] && deps["next-bun-compile"] {
+		said := strings.Contains(build, "NEXT_ADAPTER_PATH=next-bun-compile")
+		for _, f := range nextConfigs {
+			if b, err := r.read(f); err == nil && nbcConfigRe.Match(b) {
+				said = true
+			}
+		}
+		if said {
+			return compiledServer{Binary, "server", "Next.js", "its build compiles it with next-bun-compile (Bun)"}
+		}
+	}
+	if deps["@orochibraru/svelte-smol"] {
+		for _, f := range svelteConfigs {
+			b, err := r.read(f)
+			if err != nil || !strings.Contains(string(b), "svelte-smol") {
+				continue
+			}
+			out := "build"
+			if m := svelteOutRe.FindSubmatch(b); m != nil && relPath(string(m[1])) {
+				out = clean(string(m[1]))
+			}
+			if f == "svelte.config.js" {
+				// SvelteKit 2: client/ and prerendered/ beside the binary
+				name := "server"
+				if m := smolNameRe.FindSubmatch(b); m != nil && relPath(string(m[1])) {
+					name = string(m[1])
+				}
+				return compiledServer{Bundle, out + "/" + name, "SvelteKit", "its adapter, svelte-smol, compiles it with Bun"}
+			}
+			name := "server"
+			if m := smolOutfileRe.FindSubmatch(b); m != nil && relPath(string(m[1])) {
+				name = string(m[1])
+			}
+			return compiledServer{Binary, out + "/" + name, "SvelteKit", "its adapter, svelte-smol, compiles it with Bun"}
+		}
+	}
+	at := strings.Index(build, "bun build")
+	if at < 0 || !strings.Contains(build[at:], "--compile") {
+		return compiledServer{}
+	}
+	name := compiledName(build[at:])
+	starts := false
+	if f := strings.Fields(pkg.Scripts["start"]); len(f) > 0 {
+		starts = clean(f[0]) == name
+	}
+	entry := ""
+	for _, f := range strings.Fields(build[at:]) {
+		if entryFileRe.MatchString(f) && relPath(f) {
+			entry = clean(f)
+			break
+		}
+	}
+	framework := "Bun"
+	if pr != nil {
+		framework = pr.name
+		server := map[string]string{"Next.js": ".next/standalone/server.js", "Nuxt": ".output/server/index.mjs"}[pr.name]
+		if server == "" {
+			server = pr.entry
+		}
+		if !starts && (entry == "" || entry != server) {
+			return compiledServer{} // a part of the server, not the server
+		}
+	}
+	return compiledServer{Binary, name, framework, "its build script compiles it with bun build --compile"}
+}
+
 func compiledName(build string) string {
 	if m := outfileRe.FindStringSubmatch(build); m != nil && relPath(m[1]) {
 		return clean(m[1])
