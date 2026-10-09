@@ -69,7 +69,7 @@ func TestServerRenderedAppsAreNotStatic(t *testing.T) {
 		"bun.lock":        bunLock,
 		"astro.config.ts": "export default defineConfig({ output: 'server', adapter: node() })\n",
 	}, buildplan.Settings{})
-	if p.Kind != buildplan.Binary {
+	if p.Kind != buildplan.Bundle || p.Framework != "Astro" {
 		t.Fatalf("astro server: %+v", p)
 	}
 	// an rsc-kit app builds with vite but compiles a server binary

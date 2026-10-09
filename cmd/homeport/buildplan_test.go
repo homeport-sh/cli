@@ -48,25 +48,25 @@ func TestAGoRepoBuildsAStaticBinaryWithItsGoVersion(t *testing.T) {
 
 func TestABunRepoInstallsThenBuilds(t *testing.T) {
 	p := plan(t, map[string]string{
-		"package.json": `{"name":"app","packageManager":"bun@1.3.2","scripts":{"build":"bun build --compile src/index.ts --outfile server"}}`,
+		"package.json": `{"name":"app","packageManager":"bun@1.4.2","scripts":{"build":"bun build --compile src/index.ts --outfile server"}}`,
 		"bun.lock":     "{}",
 	})
-	if p.Toolchain != "bun" || p.Image != "oven/bun:1.3.2" || p.Install != "bun install --frozen-lockfile" ||
+	if p.Toolchain != "bun" || p.Image != buildplan.BunImage || p.Install != "bun install --frozen-lockfile" ||
 		p.Command != "bun run build" || p.Artifact != "server" {
 		t.Fatalf("%+v", p)
 	}
 	// .bun-version, and the major alone without either
-	if p := plan(t, map[string]string{"package.json": `{}`, "bun.lock": "{}", ".bun-version": "1.2.20\n"}); p.Image != "oven/bun:1.2.20" {
+	if p := plan(t, map[string]string{"package.json": `{}`, "bun.lock": "{}", ".bun-version": "1.4\n"}); p.Image != buildplan.BunImage {
 		t.Fatalf(".bun-version: %+v", p)
 	}
-	if p := plan(t, map[string]string{"package.json": `{}`, "bun.lock": "{}"}); p.Image != "oven/bun:1" {
+	if p := plan(t, map[string]string{"package.json": `{}`, "bun.lock": "{}"}); p.Image != buildplan.BunImage {
 		t.Fatalf("no version: %+v", p)
 	}
 }
 
 func TestANodeRepoUsesItsLockfileAndNodeVersion(t *testing.T) {
 	p := plan(t, map[string]string{"package.json": `{"engines":{"node":">=22"}}`, "package-lock.json": "{}", ".nvmrc": "v22.11.0\n"})
-	if p.Toolchain != "node" || p.Image != "node:22.11.0" || p.Install != "npm ci" || p.Command != "npm run build" {
+	if p.Toolchain != "node" || !strings.HasPrefix(p.Image, "node:22.23.3-bookworm@sha256:") || p.Install != "npm ci" || p.Command != "npm run build" {
 		t.Fatalf("%+v", p)
 	}
 }
