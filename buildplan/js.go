@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path"
 	"regexp"
 	"slices"
@@ -49,9 +50,8 @@ var nodeLTS = map[string]string{"jod": "22", "krypton": "24"}
 
 // Bun, pinned the same way: the official image by digest, and its binary's
 // sha256 (the release's, by its SHASUMS256.txt; npm's @oven/bun-linux-*
-// and the image carry the same bytes). A project that names another
-// version gets that version's image, unchecked: there's no checksum here
-// to check it by.
+// and the image carry the same bytes). A Bun version the project names
+// must be this one's (bunVersion): no other is run.
 const (
 	BunVersion = "1.4.2"
 	BunImage   = "oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895"
@@ -111,9 +111,10 @@ var presets = []struct {
 }
 
 var (
-	nextOutputRe  = regexp.MustCompile(`output\s*:\s*['"](standalone|export)['"]`)
-	astroMiddle   = regexp.MustCompile(`mode\s*:\s*['"]middleware['"]`)
-	svelteOutRe   = regexp.MustCompile(`adapter\s*\(\s*\{[^}]*\bout\s*:\s*['"]([^'"]+)['"]`)
+	nextOutputRe = regexp.MustCompile(`output\s*:\s*['"](standalone|export)['"]`)
+	astroMiddle  = regexp.MustCompile(`mode\s*:\s*['"]middleware['"]`)
+	// an option in an adapter( call's text (adapterCall)
+	adapterOutRe  = regexp.MustCompile(`\bout\s*:\s*['"]([^'"]+)['"]`)
 	outfileRe     = regexp.MustCompile(`--outfile(?:=|\s+)(\S+)`)
 	entryFileRe   = regexp.MustCompile(`^\S+\.(m|c)?(j|t)sx?$`)
 	svelteConfigs = []string{"svelte.config.js", "vite.config.js", "vite.config.ts", "vite.config.mjs", "vite.config.mts"}
@@ -145,9 +146,10 @@ var lockfiles = []struct{ pm, file string }{
 
 // packageManagerOf is the project's package manager: its lockfile's. With
 // lockfiles of more than one, package.json's packageManager picks among
-// them; one naming a manager whose lockfile isn't there is refused - the
-// install would be from nothing.
-func (r reader) packageManagerOf(pkg pkgJSON) (string, error) {
+// them, else the order homeport always had (bun, pnpm, Yarn, npm), with a
+// warning; a packageManager naming a manager whose lockfile isn't there is
+// refused - the install would be from nothing.
+func (r reader) packageManagerOf(pkg pkgJSON) (name, warning string, err error) {
 	var have []string
 	for _, l := range lockfiles {
 		if r.exists(l.file) && !slices.Contains(have, l.pm) {
@@ -156,7 +158,7 @@ func (r reader) packageManagerOf(pkg pkgJSON) (string, error) {
 	}
 	if name, _, ok := strings.Cut(pkg.PackageManager, "@"); ok && slices.Contains([]string{"npm", "pnpm", "yarn", "bun"}, name) {
 		if slices.Contains(have, name) {
-			return name, nil
+			return name, "", nil
 		}
 		want := ""
 		for _, l := range lockfiles {
@@ -164,15 +166,22 @@ func (r reader) packageManagerOf(pkg pkgJSON) (string, error) {
 				want = l.file
 			}
 		}
-		return "", fmt.Errorf("package.json's packageManager is %s, but there's no %s: commit it (or correct packageManager), so the build installs what you tested", pkg.PackageManager, want)
+		return "", "", fmt.Errorf("package.json's packageManager is %s, but there's no %s: commit it (or correct packageManager), so the build installs what you tested", pkg.PackageManager, want)
 	}
 	switch len(have) {
 	case 0:
-		return "", errors.New("no lockfile")
+		return "", "", errors.New("no lockfile")
 	case 1:
-		return have[0], nil
+		return have[0], "", nil
 	}
-	return "", fmt.Errorf("lockfiles of %s: keep the one you install with, or name it in package.json's packageManager", strings.Join(have, " and "))
+	file := ""
+	for _, l := range lockfiles {
+		if l.pm == have[0] && r.exists(l.file) && file == "" {
+			file = l.file
+		}
+	}
+	return have[0], fmt.Sprintf("lockfiles of %s: installing with %s (%s) - delete the others, or name one in package.json's packageManager",
+		strings.Join(have, " and "), have[0], file), nil
 }
 
 func (r reader) hasLockfile() bool {
@@ -259,12 +268,12 @@ func parseStart(scripts map[string]string, name string, depth int) (start, error
 	}
 	f := strings.Fields(cmd)
 	// variables first (A=b node x, cross-env A=b node x): an app's
-	// variables are set as such, not dropped - NODE_ENV=production is
-	// what homeport sets anyway
+	// variables are set as such, not dropped - but NODE_ENV=production,
+	// PORT and HOST are homeport's to set anyway
 	var vars []string
 	for len(f) > 0 && (strings.Contains(f[0], "=") || f[0] == "cross-env") {
-		if f[0] != "cross-env" && f[0] != "NODE_ENV=production" {
-			k, _, _ := strings.Cut(f[0], "=")
+		k, _, _ := strings.Cut(f[0], "=")
+		if f[0] != "cross-env" && f[0] != "NODE_ENV=production" && k != "PORT" && k != "HOST" {
 			vars = append(vars, k)
 		}
 		f = f[1:]
@@ -273,7 +282,16 @@ func parseStart(scripts map[string]string, name string, depth int) (start, error
 		return start{says: cmd}, errShell
 	}
 	if len(vars) > 0 {
-		return start{says: cmd, vars: vars}, errEnv
+		// what it runs, read as the rest would be: the runtime it says
+		// still counts; only running it as it is is refused
+		rest := maps.Clone(scripts)
+		rest[name] = strings.Join(f, " ")
+		st, err := parseStart(rest, name, depth)
+		st.says, st.vars = cmd, vars
+		if err != nil {
+			return st, err
+		}
+		return st, errEnv
 	}
 	s := start{says: cmd}
 	switch f[0] {
@@ -354,9 +372,12 @@ func parseStart(scripts map[string]string, name string, depth int) (start, error
 func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun string) error {
 	pkg := r.pkg()
 	deps := r.deps()
-	pmName, err := r.packageManagerOf(pkg)
+	pmName, warning, err := r.packageManagerOf(pkg)
 	if err != nil {
 		return err
+	}
+	if warning != "" {
+		p.Warnings = append(p.Warnings, warning)
 	}
 	p.PackageManager = pmName
 
@@ -385,6 +406,10 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 	// the project's own build compiles its server: that binary is what runs
 	build := pkg.Scripts["build"]
 	if c := r.compiled(pkg, deps, pr, build); c.kind != "" && cfg.Build.Artifact == "" && cfg.Static == "" {
+		if runtime == "node" {
+			return fmt.Errorf("the runtime is node (%s), but %s: a compiled app runs on the Bun it was compiled with - set the runtime to bun, or leave it to detection", runtimeFrom, c.reason)
+		}
+		p.Compiled = true
 		if err := r.bunVersion(pkg); err != nil {
 			return err
 		}
@@ -464,7 +489,7 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		// sveltekit() plugin's options in the Vite config
 		for _, f := range svelteConfigs {
 			if b, err := r.read(f); err == nil {
-				if m := svelteOutRe.FindSubmatch(b); m != nil && relPath(string(m[1])) {
+				if m := adapterOutRe.FindSubmatch(adapterCall(b)); m != nil && relPath(string(m[1])) {
 					entry = clean(string(m[1])) + "/index.js"
 					break
 				}
@@ -476,7 +501,7 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 				return errors.New("Astro's node adapter is in middleware mode, which needs a server of yours to run it: set mode: 'standalone' in " + f)
 			}
 		}
-	case errors.Is(stErr, errEnv):
+	case errors.Is(stErr, errEnv) && settingsRun == "" && cfg.Run == "":
 		return fmt.Errorf("the start script (%s) sets %s before its command: set %s as an environment variable of the app instead, and drop it from the script",
 			st.says, strings.Join(st.vars, ", "), map[bool]string{true: "them", false: "it"}[len(st.vars) > 1])
 	case stErr == nil && st.file != "":
@@ -606,6 +631,8 @@ func (r reader) runtimeFor(pkg pkgJSON, pr *preset, st start, stErr error, stFro
 		return set, "set in " + setFrom
 	}
 	rt, why := "", ""
+	// a start script that sets variables still says what it runs
+	ran := stErr == nil || errors.Is(stErr, errEnv)
 	_, bun := pkg.Engines["bun"]
 	_, node := pkg.Engines["node"]
 	switch {
@@ -619,11 +646,11 @@ func (r reader) runtimeFor(pkg pkgJSON, pr *preset, st start, stErr error, stFro
 		rt, why = "node", "the app has an .nvmrc"
 	case r.exists(".node-version"):
 		rt, why = "node", "the app has a .node-version"
-	case stErr == nil && st.runtime == "bun":
+	case ran && st.runtime == "bun":
 		rt, why = "bun", "its "+stFrom+" runs "+st.says
-	case stErr == nil && st.runtime == "node" && st.bin != "":
+	case ran && st.runtime == "node" && st.bin != "":
 		rt, why = "node", "its "+stFrom+" runs "+st.says+", a Node command (#!/usr/bin/env node: Node even from bun run, unless it says bun --bun)"
-	case stErr == nil && st.runtime == "node":
+	case ran && st.runtime == "node":
 		rt, why = "node", "its "+stFrom+" runs "+st.says
 	}
 	// a framework that runs on one only: only when nothing else said
@@ -738,7 +765,7 @@ func (r reader) compiled(pkg pkgJSON, deps map[string]bool, pr *preset, build st
 	if deps["next"] && deps["next-bun-compile"] {
 		said := strings.Contains(build, "NEXT_ADAPTER_PATH=next-bun-compile")
 		for _, f := range nextConfigs {
-			if b, err := r.read(f); err == nil && nbcConfigRe.Match(b) {
+			if b, err := r.read(f); err == nil && nbcConfigRe.Match(stripComments(b)) {
 				said = true
 			}
 		}
@@ -749,23 +776,24 @@ func (r reader) compiled(pkg pkgJSON, deps map[string]bool, pr *preset, build st
 	if deps["@orochibraru/svelte-smol"] {
 		for _, f := range svelteConfigs {
 			b, err := r.read(f)
-			if err != nil || !strings.Contains(string(b), "svelte-smol") {
+			if err != nil || !strings.Contains(string(stripComments(b)), "svelte-smol") {
 				continue
 			}
+			call := adapterCall(b)
 			out := "build"
-			if m := svelteOutRe.FindSubmatch(b); m != nil && relPath(string(m[1])) {
+			if m := adapterOutRe.FindSubmatch(call); m != nil && relPath(string(m[1])) {
 				out = clean(string(m[1]))
 			}
 			if f == "svelte.config.js" {
 				// SvelteKit 2: client/ and prerendered/ beside the binary
 				name := "server"
-				if m := smolNameRe.FindSubmatch(b); m != nil && relPath(string(m[1])) {
+				if m := smolNameRe.FindSubmatch(call); m != nil && relPath(string(m[1])) {
 					name = string(m[1])
 				}
 				return compiledServer{Bundle, out + "/" + name, "SvelteKit", "its adapter, svelte-smol, compiles it with Bun"}
 			}
 			name := "server"
-			if m := smolOutfileRe.FindSubmatch(b); m != nil && relPath(string(m[1])) {
+			if m := smolOutfileRe.FindSubmatch(call); m != nil && relPath(string(m[1])) {
 				name = string(m[1])
 			}
 			return compiledServer{Binary, out + "/" + name, "SvelteKit", "its adapter, svelte-smol, compiles it with Bun"}
@@ -788,6 +816,9 @@ func (r reader) compiled(pkg pkgJSON, deps map[string]bool, pr *preset, build st
 		}
 	}
 	framework := "Bun"
+	if pr == nil && pkg.Scripts["start"] != "" && !starts {
+		return compiledServer{} // the start script runs something else: the compile made a tool
+	}
 	if pr != nil {
 		framework = pr.name
 		server := map[string]string{"Next.js": ".next/standalone/server.js", "Nuxt": ".output/server/index.mjs"}[pr.name]
@@ -799,6 +830,42 @@ func (r reader) compiled(pkg pkgJSON, deps map[string]bool, pr *preset, build st
 		}
 	}
 	return compiledServer{Binary, name, framework, "its build script compiles it with bun build --compile"}
+}
+
+var (
+	blockCommentRe = regexp.MustCompile(`(?s)/\*.*?\*/`)
+	// a // comment: at a line's start or after a space or punctuation, so
+	// a URL's // (https://) isn't one
+	lineCommentRe = regexp.MustCompile(`(?m)(^|[\s;,{}()\[\]])//.*$`)
+	adapterCallRe = regexp.MustCompile(`\badapter\s*\(`)
+)
+
+// stripComments is config code without its comments.
+func stripComments(b []byte) []byte {
+	return lineCommentRe.ReplaceAll(blockCommentRe.ReplaceAll(b, nil), []byte("$1"))
+}
+
+// adapterCall is the text inside a config's adapter( ... ) call, comments
+// stripped: where an adapter's options are, not any key of the same name
+// elsewhere in the file. Empty without one.
+func adapterCall(b []byte) []byte {
+	b = stripComments(b)
+	loc := adapterCallRe.FindIndex(b)
+	if loc == nil {
+		return nil
+	}
+	depth := 1
+	for i := loc[1]; i < len(b); i++ {
+		switch b[i] {
+		case '(':
+			depth++
+		case ')':
+			if depth--; depth == 0 {
+				return b[loc[1]:i]
+			}
+		}
+	}
+	return b[loc[1]:]
 }
 
 func compiledName(build string) string {
@@ -958,9 +1025,11 @@ func assemble(layout string, m pm, rt, bin string, sums map[string]string, binNa
 		}
 		// links: dangling ones dropped, and none out of the app's folder
 		// (tar -h would copy what it points at: / or the repository)
+		// - every link, whatever its name (find -exec, not a read loop);
+		// the copy through a file, not a pipe, so a failed tar -c fails
 		return "find " + src + " -xtype l -delete && " +
-			`{ r=$(pwd -P) && find ` + src + ` -type l | while read -r l; do t=$(readlink -f "$l"); case "$t" in "$r"|"$r"/*) ;; *) echo "homeport: $l links outside the app ($t)" >&2; exit 1 ;; esac; done; }` +
-			" && (cd " + src + " && tar -chf - --hard-dereference" + ex + " .) | tar -xf - -C " + dst
+			`r=$(pwd -P) && find ` + src + ` -type l -exec sh -c 'r=$1; shift; for l; do t=$(readlink -f -- "$l"); case "$t" in "$r"|"$r"/*) ;; *) printf "homeport: %s links outside the app (%s)\n" "$l" "$t" >&2; exit 1 ;; esac; done' sh "$r" {} + && ` +
+			"(cd " + src + " && tar -chf \"$r/.homeport-copy.tar\" --hard-dereference --exclude=./.homeport-copy.tar" + ex + " .) && tar -xf \"$r/.homeport-copy.tar\" -C " + dst + " && rm -f \"$r/.homeport-copy.tar\""
 	}
 	steps := []string{"rm -rf " + b + " && mkdir -p " + b + "/.homeport"}
 	switch layout {
@@ -984,7 +1053,7 @@ func assemble(layout string, m pm, rt, bin string, sums map[string]string, binNa
 			steps = append(steps,
 				"{ t=$(readlink -f node_modules/.bin/"+binName+") && [ -f \"$t\" ] || { echo 'homeport: the start script runs "+binName+", which is in no production dependency' >&2; exit 1; }; }",
 				"t=${t#\"$(pwd -P)\"/}",
-				`printf 'import Module from "node:module";\nprocess.argv[1] = new URL("../%s", import.meta.url).pathname;\nif (typeof Bun === "undefined") Module.runMain(); else await import("../%s");\n' "$t" "$t" > `+b+"/.homeport/start.mjs")
+				`printf 'import Module, { createRequire } from "node:module";\nprocess.argv[1] = new URL("../%s", import.meta.url).pathname;\nif (typeof Bun === "undefined") Module.runMain();\nelse { Bun.main = process.argv[1]; createRequire(process.argv[1])(process.argv[1]); }\n' "$t" > `+b+"/.homeport/start.mjs")
 		}
 		steps = append(steps,
 			put(".", b, "./.git", "./"+b, "./node_modules/.cache"),
@@ -1035,4 +1104,19 @@ func boot(env map[string]string) string {
 		`net.Server.prototype.listen=function(...a){const x=a[0];` +
 		`if(x&&typeof x==="object"&&Number(x.port)===p&&l.includes(x.host))a[0]={...x,host:"0.0.0.0"};` +
 		`else if(Number(x)===p&&l.includes(a[1]))a[1]="0.0.0.0";return o.apply(this,a)};`
+}
+
+// lockfileAbove: a lockfile in a folder above the app's, up to the
+// repository's root - a workspace's.
+func (r reader) lockfileAbove() bool {
+	for d := path.Dir(r.root); ; d = path.Dir(d) {
+		for _, l := range lockfiles {
+			if st, err := lstat(r.fsys, path.Join(d, l.file)); err == nil && st.Mode().IsRegular() {
+				return true
+			}
+		}
+		if d == "." || d == "/" {
+			return false
+		}
+	}
 }

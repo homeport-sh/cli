@@ -137,6 +137,11 @@ type Plan struct {
 	RuntimeReason  string `json:"runtime_reason,omitempty"`
 	PackageManager string `json:"package_manager,omitempty"`
 	Health         string `json:"health,omitempty"`
+	// Compiled: the project's own build compiled its server with Bun, which
+	// is what runs it (no runtime to choose)
+	Compiled bool `json:"compiled,omitempty"`
+	// Warnings: what detection chose that a person may want to know
+	Warnings []string `json:"warnings,omitempty"`
 
 	// a bundle's build, and what makes the bundle from what it left
 	// (Command is both): a build command someone sets replaces the first;
@@ -469,6 +474,8 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 		if err := r.js(&p, cfg, runtime, from, s.Run); err != nil {
 			return Plan{}, err
 		}
+	case r.exists("package.json") && !r.exists("index.html") && r.root != "." && r.lockfileAbove():
+		return Plan{}, fmt.Errorf("%s looks like a workspace member: its lockfile is above it, in the repository. Workspace members aren't supported yet - give the app a lockfile of its own in %s, or set the root directory to the workspace", r.root, r.root)
 	case r.exists("package.json") && !r.exists("index.html"):
 		return Plan{}, errors.New("package.json without a lockfile: commit the lockfile (package-lock.json, pnpm-lock.yaml, yarn.lock or bun.lock), so the build installs what you tested")
 	case r.exists("index.html"):

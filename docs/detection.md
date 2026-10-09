@@ -34,12 +34,15 @@ server. That happens in three ways:
 - **`bun build --compile` of the framework's own server output**, such as
   Nitro's `.output/server/index.mjs` from `nuxt build --preset bun`.
   homeport runs the file that `--outfile` names.
-- **`bun build --compile` in an app with no framework**, or one whose start
-  script runs the compiled file.
+- **`bun build --compile` in an app with no framework**, when it has no
+  start script or its start script runs the compiled file. If the start
+  script runs something else (`node dist/server.js`), the compile made a
+  tool, and the app is a bundle.
 
 A Next.js app whose build also compiles a worker is still a Next.js bundle,
 because the worker isn't the server. Builds that compile run with the
-pinned Bun. Compiling an app that doesn't compile itself can leave
+pinned Bun, and the binary runs on the Bun it was compiled with: setting
+the runtime to `node` for one is refused. Compiling an app that doesn't compile itself can leave
 out files it loads at runtime: native modules (sharp, bcrypt, Prisma's
 engines), workers, and lookups by node_modules path.
 
@@ -146,8 +149,9 @@ Each package manager installs with a frozen lockfile:
 | Bun | `bun install --frozen-lockfile --linker=hoisted` | `bun install --production`, keeping what the build generated in `node_modules`' dot folders (`node_modules/.prisma`) |
 
 The package manager is the lockfile's. With lockfiles of more than one
-manager, `package.json`'s `packageManager` picks among them; without it, the
-build is refused. A `packageManager` whose lockfile isn't there is refused,
+manager, `package.json`'s `packageManager` picks among them. Without it,
+homeport goes by the order it always had (bun, pnpm, Yarn, npm), and the
+plan's `warnings` say which lockfile it used. A `packageManager` whose lockfile isn't there is refused,
 and so is an app with no lockfile. If you set an install command, it
 replaces the install, not what the image needs first (Bun or corepack). pnpm and
 Yarn run through corepack, which is installed when the image lacks it
@@ -197,9 +201,10 @@ must listen on `$PORT`.
 The app runs as args to `bin`, without a shell. A start script with `&&`,
 pipes or variables (`prisma migrate deploy && node server.js`) is refused,
 with a message. So is one that sets a variable before its command
-(`NODE_OPTIONS=… node server.js`): set it as an environment variable of
-the app instead (`NODE_ENV=production` is allowed, since homeport sets it
-anyway). A start script's runtime flags (`bun --smol`) are dropped when
+(`NODE_OPTIONS=… node server.js`), unless you've set a start command that
+replaces it. Set the variable as an environment variable of the app
+instead. `NODE_ENV=production`, `PORT=…` and `HOST=…` are dropped, because
+homeport sets them anyway. A start script's runtime flags (`bun --smol`) are dropped when
 another rule picks the other runtime. Set a start command instead, and run anything that comes
 before it, such as migrations, as the release command:
 
@@ -208,9 +213,10 @@ release: node_modules/prisma/build/index.js migrate deploy
 ```
 
 A command from a dependency is run by its file under `node_modules`, since
-`node_modules/.bin` isn't shipped. On Node it runs as the main module. On
-Bun it's imported instead, so a CommonJS command that reads `require.main`
-won't find itself there.
+`node_modules/.bin` isn't shipped. It runs as the main module, so
+`require.main` and `import.meta.main` are the command itself. On Node that's
+`Module.runMain`. On Bun, `Bun.main` is set to the command before it's
+required.
 
 ### Overriding
 
@@ -222,5 +228,5 @@ won't find itself there.
 - **Kind** `static`: the output folder is served as a site.
 - **Runtime** (`bun` or `node`): see above.
 
-Not handled yet: monorepos whose lockfile is above the app's folder, Yarn
-Plug'n'Play at runtime, and Deno.
+Not handled yet: workspace members, whose lockfile is above the app's
+folder (refused, saying so), Yarn Plug'n'Play at runtime, and Deno.

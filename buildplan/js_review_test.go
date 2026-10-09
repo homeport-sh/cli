@@ -266,7 +266,7 @@ func TestAFrameworkWhoseBuildCompilesItsServerShipsTheBinary(t *testing.T) {
 // itself; importing it left require.main unset.
 func TestAPackagesCommandRunsAsTheMainModule(t *testing.T) {
 	p := detect(t, js(`{"scripts":{"start":"fastify start -l info app.js"},"dependencies":{"fastify":"^5","fastify-cli":"^7"}}`), buildplan.Settings{})
-	if !strings.Contains(p.Command, `Module.runMain()`) || !strings.Contains(p.Command, `import Module from "node:module"`) {
+	if !strings.Contains(p.Command, `Module.runMain()`) || !strings.Contains(p.Command, `import Module, { createRequire } from "node:module"`) {
 		t.Fatalf("%s", p.Command)
 	}
 }

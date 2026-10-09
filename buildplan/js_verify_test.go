@@ -110,10 +110,11 @@ func TestAWorkspaceMemberSaysSo(t *testing.T) {
 }
 
 // On Bun, a package's command that is CommonJS is loaded as the main module
-// (Module._load, isMain), so require.main is itself; ESM is imported.
+// too: Bun.main is set to it before it is required, so require.main (and
+// import.meta.main) are itself. Bun's Module._load is a no-op stub.
 func TestOnBunAPackagesCommandIsTheMainModuleToo(t *testing.T) {
 	p := detect(t, js(`{"scripts":{"start":"bun --bun fastify start app.js"},"dependencies":{"fastify":"^5","fastify-cli":"^7"}}`, "bun.lock", "{}"), buildplan.Settings{})
-	if p.Runtime != "bun" || !strings.Contains(p.Command, "Module._load(process.argv[1], null, true)") {
+	if p.Runtime != "bun" || !strings.Contains(p.Command, "Bun.main = process.argv[1]") {
 		t.Fatalf("%+v", p)
 	}
 }
