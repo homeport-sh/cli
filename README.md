@@ -4,7 +4,7 @@ The command-line tool for [homeport](https://homeport.sh), the hosted
 platform for single-binary and static apps.
 
 ```sh
-curl -fsSL https://homeport.sh/install.sh | sh
+curl -fsSL https://homeport.sh/install | sh   # or, on macOS: brew install homeport-sh/tap/homeport
 homeport login      # approve this device on the dashboard
 homeport link       # pick the team, app and environment for this folder
 homeport deploy     # upload the working tree, build it, follow it live
