@@ -7,10 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -52,7 +54,9 @@ type fakeAPI struct {
 	detail   string
 	buildGet int
 
-	tokenNames []string // tokens made for CI, by name
+	tokenNames []string          // tokens made for CI, by name
+	env        map[string]string // an environment's variables, as set
+	dbCalls    []string
 }
 
 func newFakeAPI(t *testing.T) *fakeAPI {
@@ -156,7 +160,7 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(204)
 	case r.Method == "GET" && p == "/v1/cli/teams/"+team1+"/apps":
 		f.write(w, 200, f.apps)
-	case r.Method == "GET" && strings.HasPrefix(p, "/v1/cli/teams/"+team1+"/apps/"):
+	case r.Method == "GET" && strings.HasPrefix(p, "/v1/cli/teams/"+team1+"/apps/") && !strings.Contains(strings.TrimPrefix(p, "/v1/cli/teams/"+team1+"/apps/"), "/"):
 		for _, a := range f.apps {
 			if a.ID == strings.TrimPrefix(p, "/v1/cli/teams/"+team1+"/apps/") {
 				f.write(w, 200, a)
@@ -188,6 +192,36 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		f.write(w, 200, map[string]any{"ID": "b1", "Status": status, "Reason": f.reason, "Deploy": deploy, "Log": f.tails[i]})
+	case strings.HasSuffix(p, "/env") && r.Method == "GET":
+		var names []string
+		for k := range f.env {
+			names = append(names, k)
+		}
+		slices.Sort(names)
+		f.write(w, 200, map[string]any{"Names": names})
+	case strings.HasSuffix(p, "/env") && r.Method == "POST":
+		var in struct {
+			Set   map[string]string
+			Unset []string
+		}
+		json.NewDecoder(r.Body).Decode(&in)
+		if f.env == nil {
+			f.env = map[string]string{}
+		}
+		maps.Copy(f.env, in.Set)
+		for _, k := range in.Unset {
+			delete(f.env, k)
+		}
+		names := slices.Sorted(maps.Keys(f.env))
+		f.write(w, 200, names)
+	case strings.HasSuffix(p, "/logs"):
+		f.write(w, 200, map[string]any{"Cursor": "c2", "Lines": []map[string]any{{"Time": "2026-10-08T12:00:00Z", "Level": "error", "Message": "panic: boom", "Process": "web"}}})
+	case strings.Contains(p, "/database"):
+		f.dbCalls = append(f.dbCalls, r.Method+" "+p[strings.Index(p, "/database"):])
+		f.write(w, 200, map[string]any{"Available": true, "Database": nil,
+			"Attachable": []map[string]any{{"ID": "db2", "Name": "api-production", "UsedBy": []string{"api-production"}}}})
+	case strings.HasSuffix(p, "/usage"):
+		f.write(w, 200, map[string]any{"Plan": "Starter", "Estimate": map[string]any{"TotalCents": 900}})
 	case r.Method == "GET" && p == "/v1/cli/teams/"+team1+"/deploys/d1":
 		s := f.steps[0]
 		if len(f.steps) > 1 {

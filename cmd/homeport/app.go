@@ -53,6 +53,9 @@ type app struct {
 	open     func(url string) error
 	sleep    func(ctx context.Context, d time.Duration) error
 	hostname func() (string, error)
+	// mcpAllowChanges: `homeport mcp --allow-changes` - tools may change
+	// things without asking, for an editor that can't ask
+	mcpAllowChanges bool
 
 	lines *bufio.Reader
 }
@@ -88,7 +91,7 @@ func (a *app) run(args []string) int {
 	case "build-plan":
 		err = cmdBuildPlan(rest)
 	case "mcp":
-		err = errors.New("the MCP server comes back soon, on `homeport login`'s sign-in")
+		err = a.mcp(ctx, rest)
 	case "version", "-v", "--version":
 		fmt.Fprintln(a.out, "homeport", version)
 	case "help", "-h", "--help":

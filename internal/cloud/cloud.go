@@ -338,3 +338,77 @@ func (c *Client) CreateToken(ctx context.Context, name string) (*NewToken, error
 	err := c.call(ctx, "POST", "/v1/cli/tokens", map[string]string{"name": name}, &out)
 	return &out, err
 }
+func appPath(team, app string) string {
+	return "/v1/cli/teams/" + url.PathEscape(team) + "/apps/" + url.PathEscape(app)
+}
+
+// EnvNames are an environment's variables, by name: no value comes back.
+func (c *Client) EnvNames(ctx context.Context, team, app string) ([]string, error) {
+	var out struct{ Names []string }
+	err := c.call(ctx, "GET", appPath(team, app)+"/env", nil, &out)
+	return out.Names, err
+}
+
+// SetEnv sets and removes an environment's variables; its names after.
+func (c *Client) SetEnv(ctx context.Context, team, app string, set map[string]string, unset []string) ([]string, error) {
+	var out []string
+	err := c.call(ctx, "POST", appPath(team, app)+"/env", map[string]any{"set": set, "unset": unset}, &out)
+	return out, err
+}
+
+// LogLine is one line of an environment's runtime log.
+type LogLine struct {
+	Time    time.Time
+	Level   string
+	Message string
+	Process string
+}
+
+// Logs is a page of runtime logs, and the cursor to read on from.
+type Logs struct {
+	Cursor string
+	Lines  []LogLine
+}
+
+// Logs are an environment's newest runtime log lines, or those since cursor.
+func (c *Client) Logs(ctx context.Context, team, app, cursor string) (*Logs, error) {
+	p := appPath(team, app) + "/logs"
+	if cursor != "" {
+		p += "?cursor=" + url.QueryEscape(cursor)
+	}
+	var out Logs
+	err := c.call(ctx, "GET", p, nil, &out)
+	return &out, err
+}
+
+// raw calls and answers the JSON as it came: views passed on whole.
+func (c *Client) raw(ctx context.Context, method, path string, in any) (json.RawMessage, error) {
+	var out json.RawMessage
+	err := c.call(ctx, method, path, in, &out)
+	return out, err
+}
+
+// Database is an environment's database: never its password.
+func (c *Client) Database(ctx context.Context, team, app string) (json.RawMessage, error) {
+	return c.raw(ctx, "GET", appPath(team, app)+"/database", nil)
+}
+
+// CreateDatabase makes an environment its database.
+func (c *Client) CreateDatabase(ctx context.Context, team, app string) (json.RawMessage, error) {
+	return c.raw(ctx, "POST", appPath(team, app)+"/database", map[string]any{})
+}
+
+// AttachDatabase attaches one of the team's databases to an environment.
+func (c *Client) AttachDatabase(ctx context.Context, team, app, database string) (json.RawMessage, error) {
+	return c.raw(ctx, "POST", appPath(team, app)+"/database/attach", map[string]string{"database": database})
+}
+
+// DetachDatabase detaches an environment's database (it isn't deleted).
+func (c *Client) DetachDatabase(ctx context.Context, team, app string) (json.RawMessage, error) {
+	return c.raw(ctx, "POST", appPath(team, app)+"/database/detach", map[string]any{})
+}
+
+// Usage is a team's month so far, and what it's likely to cost.
+func (c *Client) Usage(ctx context.Context, team string) (json.RawMessage, error) {
+	return c.raw(ctx, "GET", "/v1/cli/teams/"+url.PathEscape(team)+"/usage", nil)
+}

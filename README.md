@@ -84,6 +84,49 @@ address once it's live. Exit codes, for CI:
 
 `logs`, `env` and `cron` from the terminal come next.
 
+## MCP: homeport in your editor
+
+`homeport mcp` is an [MCP](https://modelcontextprotocol.io) server on stdio,
+for Claude Code, Cursor or any agent on your computer. It signs in the way
+`homeport login` does, with the same credentials file and the same token,
+so it can do what you can do and nothing more. Sign in first.
+
+```sh
+claude mcp add homeport -- homeport mcp
+```
+
+Cursor (`~/.cursor/mcp.json`, or `.cursor/mcp.json` in a project):
+
+```json
+{ "mcpServers": { "homeport": { "command": "homeport", "args": ["mcp"] } } }
+```
+
+| Tool | What it does |
+| --- | --- |
+| `list_apps` | your teams, their apps and environments (reads) |
+| `deploy` | deploys **the folder the server runs in**, as `homeport link` linked it, like `homeport deploy`, and answers the address (**changes it**) |
+| `deploy_status` | a build's status and log, then its release's (reads) |
+| `runtime_logs` | an environment's runtime logs (reads) |
+| `list_variables` | an environment's variables, **names only** (reads) |
+| `set_variables` | sets variables (**changes it**) |
+| `unset_variables` | removes variables, for good (**changes it**) |
+| `get_database` | an environment's database, never its password (reads) |
+| `create_database`, `attach_database`, `detach_database` | its database (**change it**) |
+| `usage` | a team's month so far and its estimate (reads) |
+
+An agent can be talked into things by what it reads, such as a log line or
+a file. So **a change is never the agent's to approve: you are asked**,
+through your editor, what exactly will change and where. The approval holds
+for that change, once. An editor that can't ask (MCP elicitation) gets no
+changes unless you start the server with `homeport mcp --allow-changes`.
+**With `--allow-changes` nobody is asked: the agent's changes are made as
+it asks, production included.** Use it only for an editor that can't ask,
+and only if you'd let that agent change production unattended.
+No tool takes a folder: `deploy` deploys the one the server runs in. No
+tool returns a variable's value or a secret, and none deletes: apps,
+databases and domains are deleted from the dashboard. The server makes at
+most 20 changes a minute.
+
 ## `build-plan`
 
 `homeport build-plan [--settings file.json] [dir]` reads a repository,
