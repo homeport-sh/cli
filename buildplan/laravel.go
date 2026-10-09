@@ -336,3 +336,6 @@ func reverbProcess(p *Plan) error {
 		func(a, b Process) int { return strings.Compare(a.Name, b.Name) })
 	return nil
 }
+
+// ReverbMemory: stub, the test first.
+const ReverbMemory = ""

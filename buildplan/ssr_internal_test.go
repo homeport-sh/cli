@@ -121,6 +121,54 @@ func TestTheSupervisorRunsTheWebBesideItsRenderer(t *testing.T) {
 	})
 }
 
+// %heap% in what's beside the web is a quarter of the app's memory
+// (HOMEPORT_MEMORY_MB, homeportd's), at least 64, 128 when it isn't known.
+func TestTheSupervisorSizesTheRenderersHeap(t *testing.T) {
+	php, err := exec.LookPath("php")
+	if err != nil {
+		t.Skip("no php here")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node here")
+	}
+	for mem, want := range map[string]string{"1024": "256", "256": "64", "128": "64", "": "128"} {
+		dir, port := supervised(t, php)
+		write(t, dir, "args.mjs", `console.error("heap " + process.argv.slice(2).join(" "));`, 0o644)
+		besides(t, dir, node+" args.mjs --max-old-space-size=%heap%")
+		cmd, out := supervise(t, php, dir, port, "", "HOMEPORT_MEMORY_MB="+mem)
+		waitFor(t, func() bool { return strings.Contains(out.String(), "heap ") }, out)
+		if !strings.Contains(out.String(), "heap --max-old-space-size="+want+"\n") {
+			t.Errorf("%q MB: %s", mem, out)
+		}
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		_ = waitExit(cmd)
+	}
+}
+
+// A word KEY=value before the command is its environment (a compiled
+// renderer's heap: BUN_JSC_forceRAMSize=%heapbytes%).
+func TestTheSupervisorGivesTheRendererItsEnvironment(t *testing.T) {
+	php, err := exec.LookPath("php")
+	if err != nil {
+		t.Skip("no php here")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node here")
+	}
+	dir, port := supervised(t, php)
+	write(t, dir, "env.mjs", `console.error("ram " + process.env.BUN_JSC_forceRAMSize);`, 0o644)
+	besides(t, dir, "BUN_JSC_forceRAMSize=%heapbytes% "+node+" env.mjs")
+	cmd, out := supervise(t, php, dir, port, "", "HOMEPORT_MEMORY_MB=1024")
+	waitFor(t, func() bool { return strings.Contains(out.String(), "ram ") }, out)
+	if !strings.Contains(out.String(), "ram 268435456\n") {
+		t.Errorf("env: %s", out)
+	}
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+	_ = waitExit(cmd)
+}
+
 func write(t *testing.T, dir, name, body string, mode os.FileMode) {
 	t.Helper()
 	p := filepath.Join(dir, name)
@@ -162,12 +210,12 @@ type syncBuf struct {
 func (s *syncBuf) Write(p []byte) (int, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.b.Write(p) }
 func (s *syncBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
 
-func supervise(t *testing.T, php, dir string, port int, exitWith string) (*exec.Cmd, *syncBuf) {
+func supervise(t *testing.T, php, dir string, port int, exitWith string, env ...string) (*exec.Cmd, *syncBuf) {
 	t.Helper()
 	out := &syncBuf{}
 	cmd := exec.Command("./bin", "php-cli", ".homeport/beside.php", "./bin", "php-server", "--listen", ":8080")
 	cmd.Dir, cmd.Stdout, cmd.Stderr = dir, out, out
-	cmd.Env = append(os.Environ(), fmt.Sprintf("SSR_TEST_PORT=%d", port), "EXIT_WITH="+exitWith)
+	cmd.Env = append(append(os.Environ(), fmt.Sprintf("SSR_TEST_PORT=%d", port), "EXIT_WITH="+exitWith), env...)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

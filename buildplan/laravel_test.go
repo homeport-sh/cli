@@ -117,12 +117,12 @@ func TestTheSSRRuntimeIsChosenByTheProjectsSignals(t *testing.T) {
 		switch c.rt {
 		case "node":
 			if !strings.Contains(p.Command, "https://nodejs.org/dist/v"+p.RuntimeVersion+"/node-v"+p.RuntimeVersion+"-linux-") ||
-				!strings.Contains(p.Command, "sha256sum -c") || !strings.Contains(p.Command, besideLine(".homeport/node bootstrap/ssr/ssr.mjs")) {
+				!strings.Contains(p.Command, "sha256sum -c") || !strings.Contains(p.Command, besideLine(".homeport/node --max-old-space-size=%heap% --import ./.homeport/boot.mjs bootstrap/ssr/ssr.mjs")) {
 				t.Errorf("%s: node isn't fetched and checked: %s", name, p.Command)
 			}
 		case "bun":
 			if p.RuntimeVersion != buildplan.BunVersion || !strings.Contains(p.Command, "bun-linux-$a-"+buildplan.BunVersion+".tgz") ||
-				!strings.Contains(p.Command, "sha256sum -c") || !strings.Contains(p.Command, besideLine(".homeport/bun bootstrap/ssr/ssr.mjs")) {
+				!strings.Contains(p.Command, "sha256sum -c") || !strings.Contains(p.Command, besideLine(".homeport/bun --smol bootstrap/ssr/ssr.mjs")) {
 				t.Errorf("%s: bun isn't fetched and checked: %s", name, p.Command)
 			}
 		}
@@ -174,7 +174,7 @@ func TestACompiledSSRBinaryRunsAsItIs(t *testing.T) {
 			continue
 		}
 		for _, want := range []string{compile + glibc, "bun-linux-$a-" + buildplan.BunVersion + ".tgz", "sha256sum -c",
-			"cp bootstrap/ssr/server .homeport-bundle/bootstrap/ssr/server", besideLine("bootstrap/ssr/server"), ".homeport/wrap"} {
+			"cp bootstrap/ssr/server .homeport-bundle/bootstrap/ssr/server", besideLine("BUN_JSC_forceRAMSize=%heapbytes% bootstrap/ssr/server"), ".homeport/wrap"} {
 			if !strings.Contains(p.Command, want) {
 				t.Errorf("%s: no %q in %s", name, want, p.Command)
 			}
@@ -188,7 +188,7 @@ func TestACompiledSSRBinaryRunsAsItIs(t *testing.T) {
 	// a target of its own is the build's arch on glibc, as any
 	own := `"build:ssr":"vite build --ssr && bun build --compile --target=bun-linux-x64 bootstrap/ssr/app.js --outfile=ssr-bin"`
 	p := detect(t, laravel([]string{inertia}, "package.json", `{"scripts":{`+own+`}}`, "package-lock.json", "{}"), buildplan.Settings{})
-	if !strings.Contains(p.Command, "bun build --compile bootstrap/ssr/app.js --outfile=ssr-bin"+glibc) || !strings.Contains(p.Command, besideLine("ssr-bin")) {
+	if !strings.Contains(p.Command, "bun build --compile bootstrap/ssr/app.js --outfile=ssr-bin"+glibc) || !strings.Contains(p.Command, besideLine("BUN_JSC_forceRAMSize=%heapbytes% ssr-bin")) {
 		t.Errorf("its own target: %s", p.Command)
 	}
 	musl := `"build:ssr":"vite build --ssr && bun build --compile --target=bun-linux-x64-musl bootstrap/ssr/app.js --outfile=ssr-bin"`
@@ -236,10 +236,42 @@ func TestReverbRunsAsAProcess(t *testing.T) {
 	if r := reverb(p); r == nil || !strings.HasSuffix(r.Run, "--debug") || r.Memory != "256M" || len(p.Processes) != 1 {
 		t.Errorf("its own: %+v", p.Processes)
 	}
-	// four of the app's own leave no room for Reverb
+	// four of the app's own leave no room for Reverb: it's left out, and
+	// the plan says so - the build goes on
 	four := []buildplan.Process{{Name: "a", Run: "x"}, {Name: "b", Run: "x"}, {Name: "c", Run: "x"}, {Name: "d", Run: "x"}}
-	if _, err := buildplan.Detect(repo(laravel([]string{"laravel/reverb"})), buildplan.Settings{Processes: four}); err == nil || !strings.Contains(err.Error(), "Reverb") {
-		t.Errorf("five: %v", err)
+	p = detect(t, laravel([]string{"laravel/reverb"}), buildplan.Settings{Processes: four})
+	if reverb(p) != nil || len(p.Processes) != 4 || !slices.ContainsFunc(p.Warnings, func(w string) bool { return strings.Contains(w, "Reverb") }) {
+		t.Errorf("five: %+v %v", p.Processes, p.Warnings)
+	}
+}
+
+// Reverb's process is sized for itself, not at the app's memory: 128M (an
+// app's smallest size is 256M), unless the app declares its own reverb.
+func TestReverbIsSizedForItself(t *testing.T) {
+	p := detect(t, laravel([]string{"laravel/reverb"}), buildplan.Settings{})
+	if len(p.Processes) != 1 || p.Processes[0].Memory != buildplan.ReverbMemory || buildplan.ReverbMemory != "128M" {
+		t.Errorf("size: %+v", p.Processes)
+	}
+}
+
+// The renderer is held to the app's memory: Node's heap at a quarter of it
+// (the supervisor fills in %heap% from HOMEPORT_MEMORY_MB), with Node's
+// compile cache kept in the release's writable folder; Bun in --smol. The
+// plan says the renderer shares the app's memory.
+func TestTheRendererIsHeldToTheAppsMemory(t *testing.T) {
+	pkg := `{"scripts":{"build":"vite build","build:ssr":"vite build && vite build --ssr"}}`
+	p := detect(t, laravel([]string{inertia}, "package.json", pkg, "package-lock.json", "{}"), buildplan.Settings{})
+	for _, want := range []string{"--max-old-space-size=%heap%", ".homeport-bundle/.homeport/boot.mjs", "echo homeport-cache >> .homeport-bundle/.homeport/writable"} {
+		if !strings.Contains(p.Command, want) {
+			t.Errorf("node: no %q", want)
+		}
+	}
+	if !slices.ContainsFunc(p.Warnings, func(w string) bool { return strings.Contains(w, "512 MB") }) {
+		t.Errorf("no memory note: %v", p.Warnings)
+	}
+	p = detect(t, laravel([]string{inertia}, "package.json", pkg, "bun.lock", "{}"), buildplan.Settings{})
+	if !strings.Contains(p.Command, "--smol") || strings.Contains(p.Command, "max-old-space-size") {
+		t.Errorf("bun: %s", p.Command)
 	}
 }
 
