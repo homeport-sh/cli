@@ -208,7 +208,9 @@ release: node_modules/prisma/build/index.js migrate deploy
 ```
 
 A command from a dependency is run by its file under `node_modules`, since
-`node_modules/.bin` isn't shipped.
+`node_modules/.bin` isn't shipped. On Node it runs as the main module. On
+Bun it's imported instead, so a CommonJS command that reads `require.main`
+won't find itself there.
 
 ### Overriding
 

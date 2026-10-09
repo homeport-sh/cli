@@ -977,11 +977,14 @@ func assemble(layout string, m pm, rt, bin string, sums map[string]string, binNa
 	default:
 		steps = append(steps, m.prune)
 		if binName != "" {
-			// a package's command: its file, found through node_modules/.bin
+			// a package's command: its file, found through node_modules/.bin,
+			// run as the main module on Node (Module.runMain: a CommonJS bin
+			// reading require.main finds itself); Bun has no working
+			// runMain, so there it's imported
 			steps = append(steps,
 				"{ t=$(readlink -f node_modules/.bin/"+binName+") && [ -f \"$t\" ] || { echo 'homeport: the start script runs "+binName+", which is in no production dependency' >&2; exit 1; }; }",
 				"t=${t#\"$(pwd -P)\"/}",
-				`printf 'process.argv[1] = new URL("../%s", import.meta.url).pathname;\nawait import("../%s");\n' "$t" "$t" > `+b+"/.homeport/start.mjs")
+				`printf 'import Module from "node:module";\nprocess.argv[1] = new URL("../%s", import.meta.url).pathname;\nif (typeof Bun === "undefined") Module.runMain(); else await import("../%s");\n' "$t" "$t" > `+b+"/.homeport/start.mjs")
 		}
 		steps = append(steps,
 			put(".", b, "./.git", "./"+b, "./node_modules/.cache"),

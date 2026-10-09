@@ -261,3 +261,13 @@ func TestAFrameworkWhoseBuildCompilesItsServerShipsTheBinary(t *testing.T) {
 		t.Errorf("installed but not the adapter: %+v", p)
 	}
 }
+
+// A package's command is run as the main module on Node (Module.runMain),
+// so a CommonJS bin that reads require.main - fastify-cli does - finds
+// itself; importing it left require.main unset.
+func TestAPackagesCommandRunsAsTheMainModule(t *testing.T) {
+	p := detect(t, js(`{"scripts":{"start":"fastify start -l info app.js"},"dependencies":{"fastify":"^5","fastify-cli":"^7"}}`), buildplan.Settings{})
+	if !strings.Contains(p.Command, `Module.runMain()`) || !strings.Contains(p.Command, `import Module from "node:module"`) {
+		t.Fatalf("%s", p.Command)
+	}
+}
