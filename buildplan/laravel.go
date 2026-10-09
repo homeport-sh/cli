@@ -237,3 +237,6 @@ func reverbProcess(p *Plan) error {
 		func(a, b Process) int { return strings.Compare(a.Name, b.Name) })
 	return nil
 }
+
+// besidePHP is .homeport/beside.php (a stub: the tests come first).
+var besidePHP = ""

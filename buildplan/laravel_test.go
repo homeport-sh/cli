@@ -40,7 +40,7 @@ func TestInertiaSSRIsDetectedAndBuilt(t *testing.T) {
 		t.Errorf("install: %s", p.Install)
 	}
 	// the SSR bundle is one file, its packages in it: no node_modules ships
-	for _, want := range []string{"bun build", "--target=node", "bootstrap/ssr/ssr.mjs", ".homeport/wrap", ".homeport/ssr.mjs"} {
+	for _, want := range []string{"bun build", "--target=node", "bootstrap/ssr/ssr.mjs", ".homeport/wrap", ".homeport/beside.php", ".homeport/beside"} {
 		if !strings.Contains(p.Command, want) {
 			t.Errorf("command has no %q: %s", want, p.Command)
 		}
@@ -117,12 +117,12 @@ func TestTheSSRRuntimeIsChosenByTheProjectsSignals(t *testing.T) {
 		switch c.rt {
 		case "node":
 			if !strings.Contains(p.Command, "https://nodejs.org/dist/v"+p.RuntimeVersion+"/node-v"+p.RuntimeVersion+"-linux-") ||
-				!strings.Contains(p.Command, "sha256sum -c") || !strings.Contains(p.Command, ".homeport/node .homeport/ssr.mjs") {
+				!strings.Contains(p.Command, "sha256sum -c") || !strings.Contains(p.Command, besideLine(".homeport/node bootstrap/ssr/ssr.mjs")) {
 				t.Errorf("%s: node isn't fetched and checked: %s", name, p.Command)
 			}
 		case "bun":
 			if p.RuntimeVersion != buildplan.BunVersion || !strings.Contains(p.Command, "bun-linux-$a-"+buildplan.BunVersion+".tgz") ||
-				!strings.Contains(p.Command, "sha256sum -c") || !strings.Contains(p.Command, ".homeport/bun .homeport/ssr.mjs") {
+				!strings.Contains(p.Command, "sha256sum -c") || !strings.Contains(p.Command, besideLine(".homeport/bun bootstrap/ssr/ssr.mjs")) {
 				t.Errorf("%s: bun isn't fetched and checked: %s", name, p.Command)
 			}
 		}
@@ -146,6 +146,50 @@ func TestTheSSRRuntimeIsChosenByTheProjectsSignals(t *testing.T) {
 	// a runtime setting means nothing to a PHP app with no SSR
 	if p := detect(t, laravel(nil), buildplan.Settings{Runtime: "bun"}); p.Runtime != "" || p.SSR != "" {
 		t.Errorf("no ssr: %+v", p)
+	}
+}
+
+// besideLine is how the command writes .homeport/beside's line.
+func besideLine(cmd string) string {
+	return "printf '%s\\n' '" + cmd + "' > .homeport-bundle/.homeport/beside"
+}
+
+// When the project's own SSR build compiles the SSR bundle (bun build
+// --compile), that binary is what runs beside the web, and no runtime ships:
+// compiled again for the sandbox's Linux (glibc), as the same command with
+// its --target, when the command names none.
+func TestACompiledSSRBinaryRunsAsItIs(t *testing.T) {
+	compile := "bun build --compile bootstrap/ssr/app.js --outfile bootstrap/ssr/server"
+	for name, scripts := range map[string]string{
+		"in build:ssr":            `"build:ssr":"vite build && vite build --ssr && ` + compile + `"`,
+		"a script build:ssr runs": `"build:ssr":"vite build && vite build --ssr && bun run ssr:compile","ssr:compile":"` + compile + `"`,
+	} {
+		p := detect(t, laravel([]string{inertia}, "package.json", `{"scripts":{"build":"vite build",`+scripts+`}}`, "package-lock.json", "{}"), buildplan.Settings{})
+		if p.SSR != "inertia" || p.Runtime != "bun" || p.RuntimeVersion != buildplan.BunVersion || !strings.Contains(p.RuntimeReason, "--compile") {
+			t.Errorf("%s: %+v", name, p)
+			continue
+		}
+		for _, want := range []string{compile + " --target=bun-linux-$a", "cp bootstrap/ssr/server .homeport-bundle/bootstrap/ssr/server",
+			besideLine("bootstrap/ssr/server"), ".homeport/wrap"} {
+			if !strings.Contains(p.Command, want) {
+				t.Errorf("%s: no %q in %s", name, want, p.Command)
+			}
+		}
+		for _, not := range []string{"nodejs.org", "bun-linux-$a-" + buildplan.BunVersion + ".tgz", "--target=node"} {
+			if strings.Contains(p.Command, not) {
+				t.Errorf("%s: %q in %s", name, not, p.Command)
+			}
+		}
+	}
+	// a target of its own is kept; musl's can't run in the sandbox
+	glibc := `"build:ssr":"vite build --ssr && bun build --compile --target=bun-linux-x64 bootstrap/ssr/app.js --outfile=ssr-bin"`
+	p := detect(t, laravel([]string{inertia}, "package.json", `{"scripts":{`+glibc+`}}`, "package-lock.json", "{}"), buildplan.Settings{})
+	if strings.Contains(p.Command, "--target=bun-linux-$a") || !strings.Contains(p.Command, besideLine("ssr-bin")) {
+		t.Errorf("its own target: %s", p.Command)
+	}
+	musl := `"build:ssr":"vite build --ssr && bun build --compile --target=bun-linux-x64-musl bootstrap/ssr/app.js --outfile=ssr-bin"`
+	if _, err := buildplan.Detect(repo(laravel([]string{inertia}, "package.json", `{"scripts":{`+musl+`}}`, "package-lock.json", "{}")), buildplan.Settings{}); err == nil || !strings.Contains(err.Error(), "musl") {
+		t.Errorf("musl: %v", err)
 	}
 }
 
