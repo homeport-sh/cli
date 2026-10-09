@@ -53,6 +53,9 @@ type app struct {
 	open     func(url string) error
 	sleep    func(ctx context.Context, d time.Duration) error
 	hostname func() (string, error)
+	// mcpAllowChanges: `homeport mcp --allow-changes` - tools may change
+	// things without asking, for an editor that can't ask
+	mcpAllowChanges bool
 
 	lines *bufio.Reader
 }

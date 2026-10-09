@@ -38,6 +38,8 @@ func (a *app) usage() {
                       [--detach] [--timeout 30m]
   homeport mcp        an MCP server on stdio, for your editor or agent:
                       claude mcp add homeport -- homeport mcp
+                      every change is asked of you through the editor;
+                      [--allow-changes] for one that can't ask
   homeport build-plan [--settings file.json] [dir]
                       what a hosted build runs for this repository (JSON):
                       detected without a homeport.yaml, or from one

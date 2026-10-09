@@ -104,21 +104,25 @@ Cursor (`~/.cursor/mcp.json`, or `.cursor/mcp.json` in a project):
 | Tool | What it does |
 | --- | --- |
 | `list_apps` | your teams, their apps and environments (reads) |
-| `deploy` | deploys a folder's working tree, as `homeport deploy`, and answers the address (**changes it**) |
+| `deploy` | deploys **the folder the server runs in**, as `homeport link` linked it, like `homeport deploy`, and answers the address (**changes it**) |
 | `deploy_status` | a build's status and log, then its release's (reads) |
 | `runtime_logs` | an environment's runtime logs (reads) |
 | `list_variables` | an environment's variables, **names only** (reads) |
-| `set_variables` | sets or removes variables (**changes it**) |
+| `set_variables` | sets variables (**changes it**) |
+| `unset_variables` | removes variables, for good (**changes it**) |
 | `get_database` | an environment's database, never its password (reads) |
 | `create_database`, `attach_database`, `detach_database` | its database (**change it**) |
 | `usage` | a team's month so far and its estimate (reads) |
 
-Tools that change things are marked as such and need `confirm: true`, so
-the agent has to ask you first. Each says what it changes, and that it acts
-on production unless you name another environment. No tool returns a
-variable's value or a secret. No tool deletes anything: an app, a database
-and a domain are deleted from the dashboard. The server makes at most 20
-changes a minute.
+An agent can be talked into things by what it reads, such as a log line or
+a file. So **a change is never the agent's to approve: you are asked**,
+through your editor, what exactly will change and where. The approval holds
+for that change, once. An editor that can't ask (MCP elicitation) gets no
+changes unless you start the server with `homeport mcp --allow-changes`.
+No tool takes a folder: `deploy` deploys the one the server runs in. No
+tool returns a variable's value or a secret, and none deletes: apps,
+databases and domains are deleted from the dashboard. The server makes at
+most 20 changes a minute.
 
 ## `build-plan`
 

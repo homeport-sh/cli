@@ -9,16 +9,35 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// mcpSession is an editor connected to `homeport mcp`, in memory.
-func mcpSession(t *testing.T, h *harness) *mcp.ClientSession {
+// person answers the server's questions, as an editor shows them: approve
+// or not, and every message asked.
+type person struct {
+	approve bool
+	asked   []string
+}
+
+func (p *person) answer(_ context.Context, req *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+	p.asked = append(p.asked, req.Params.Message)
+	if !p.approve {
+		return &mcp.ElicitResult{Action: "decline"}, nil
+	}
+	return &mcp.ElicitResult{Action: "accept", Content: map[string]any{"approve": true}}, nil
+}
+
+// mcpSession is an editor connected to `homeport mcp`, in memory; p (nil:
+// an editor that can't ask) answers what the server asks.
+func mcpSession(t *testing.T, h *harness, p *person) *mcp.ClientSession {
 	t.Helper()
 	ctx := context.Background()
-	server := h.a.mcpServer()
 	st, ct := mcp.NewInMemoryTransports()
-	if _, err := server.Connect(ctx, st, nil); err != nil {
+	if _, err := h.a.mcpServer().Connect(ctx, st, nil); err != nil {
 		t.Fatal(err)
 	}
-	cs, err := mcp.NewClient(&mcp.Implementation{Name: "editor", Version: "1"}, nil).Connect(ctx, ct, nil)
+	var opts *mcp.ClientOptions
+	if p != nil {
+		opts = &mcp.ClientOptions{ElicitationHandler: p.answer}
+	}
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "editor", Version: "1"}, opts).Connect(ctx, ct, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,10 +61,15 @@ func callTool(t *testing.T, cs *mcp.ClientSession, name string, args map[string]
 	return b.String(), res.IsError
 }
 
+var (
+	readTools  = []string{"list_apps", "deploy_status", "runtime_logs", "list_variables", "get_database", "usage"}
+	writeTools = []string{"deploy", "set_variables", "unset_variables", "create_database", "attach_database", "detach_database"}
+)
+
 func TestTheMCPToolsSayWhatTheyChange(t *testing.T) {
 	f := newFakeAPI(t)
 	h := newHarness(t, f)
-	cs := mcpSession(t, h)
+	cs := mcpSession(t, h, nil)
 	res, err := cs.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -61,92 +85,131 @@ func TestTheMCPToolsSayWhatTheyChange(t *testing.T) {
 				t.Errorf("%s is exposed", tool.Name)
 			}
 		}
+		// the agent can't point a tool at a folder, or say the person agreed
+		schema, _ := json.Marshal(tool.InputSchema)
+		for _, field := range []string{`"directory"`, `"confirm"`} {
+			if strings.Contains(string(schema), field) {
+				t.Errorf("%s takes %s", tool.Name, field)
+			}
+		}
 	}
-	reads := []string{"list_apps", "deploy_status", "runtime_logs", "list_variables", "get_database", "usage"}
-	writes := []string{"deploy", "set_variables", "create_database", "attach_database", "detach_database"}
-	for _, name := range reads {
+	for _, name := range readTools {
 		if tool := got[name]; tool == nil || !tool.Annotations.ReadOnlyHint {
 			t.Errorf("%s: not a read-only tool (%v)", name, tool)
 		}
 	}
-	for _, name := range writes {
+	for _, name := range writeTools {
 		tool := got[name]
 		if tool == nil || tool.Annotations.ReadOnlyHint || tool.Annotations.DestructiveHint == nil || !*tool.Annotations.DestructiveHint {
 			t.Errorf("%s: not marked as changing things (%v)", name, tool)
 			continue
 		}
-		if !strings.Contains(tool.Description, "production") {
-			t.Errorf("%s doesn't say it can change production: %s", name, tool.Description)
+		if !strings.Contains(tool.Description, "production") || !strings.Contains(tool.Description, "asks you") {
+			t.Errorf("%s doesn't say it can change production, or that it asks: %s", name, tool.Description)
 		}
 	}
-	if len(got) != len(reads)+len(writes) {
+	if len(got) != len(readTools)+len(writeTools) {
 		t.Errorf("tools %v", got)
 	}
 }
 
-func TestVariablesGoInAndOnlyTheirNamesComeOut(t *testing.T) {
+var blog = map[string]any{"team": "alice", "app": "blog", "environment": "production"}
+
+func with(extra map[string]any) map[string]any {
+	m := map[string]any{}
+	for k, v := range blog {
+		m[k] = v
+	}
+	for k, v := range extra {
+		m[k] = v
+	}
+	return m
+}
+
+// A change is the person's to approve, asked by their editor - not
+// something the agent can say for them.
+func TestAChangeIsAskedOfThePerson(t *testing.T) {
 	f := newFakeAPI(t)
 	h := newHarness(t, f)
 	h.login(t)
-	cs := mcpSession(t, h)
-	at := map[string]any{"team": "alice", "app": "blog", "environment": "production"}
-	with := func(extra map[string]any) map[string]any {
-		m := map[string]any{}
-		for k, v := range at {
-			m[k] = v
-		}
-		for k, v := range extra {
-			m[k] = v
-		}
-		return m
-	}
-	// not confirmed: nothing changes
-	if text, isErr := callTool(t, cs, "set_variables", with(map[string]any{"set": map[string]string{"API_KEY": "s3cret"}})); !isErr || !strings.Contains(text, "confirm") {
-		t.Fatalf("unconfirmed: %v %s", isErr, text)
+	no := &person{}
+	cs := mcpSession(t, h, no)
+	if text, isErr := callTool(t, cs, "set_variables", with(map[string]any{"set": map[string]string{"API_KEY": "s3cret"}})); !isErr || !strings.Contains(text, "declined") {
+		t.Fatalf("declined: %v %s", isErr, text)
 	}
 	if len(f.env) != 0 {
-		t.Fatal("changed without confirming")
+		t.Fatal("changed though declined")
 	}
-	text, isErr := callTool(t, cs, "set_variables", with(map[string]any{"set": map[string]string{"API_KEY": "s3cret"}, "confirm": true}))
-	if isErr || strings.Contains(text, "s3cret") || !strings.Contains(text, "API_KEY") {
-		t.Fatalf("set: %v %s", isErr, text)
+	if len(no.asked) != 1 || !strings.Contains(no.asked[0], "API_KEY") || !strings.Contains(no.asked[0], "production") || strings.Contains(no.asked[0], "s3cret") {
+		t.Fatalf("asked %q", no.asked)
 	}
-	if f.env["API_KEY"] != "s3cret" {
-		t.Fatalf("env %v", f.env)
+
+	yes := &person{approve: true}
+	cs = mcpSession(t, h, yes)
+	text, isErr := callTool(t, cs, "set_variables", with(map[string]any{"set": map[string]string{"API_KEY": "s3cret"}}))
+	if isErr || strings.Contains(text, "s3cret") || !strings.Contains(text, "API_KEY") || f.env["API_KEY"] != "s3cret" {
+		t.Fatalf("set: %v %s %v", isErr, text, f.env)
 	}
-	if text, isErr := callTool(t, cs, "list_variables", at); isErr || strings.Contains(text, "s3cret") || !strings.Contains(text, "API_KEY") {
+	if text, isErr := callTool(t, cs, "list_variables", blog); isErr || strings.Contains(text, "s3cret") || !strings.Contains(text, "API_KEY") {
 		t.Fatalf("list: %v %s", isErr, text)
 	}
-	if text, _ := callTool(t, cs, "runtime_logs", at); !strings.Contains(text, "panic: boom") {
+	// removing is its own tool, asked on its own, naming what goes
+	if _, isErr := callTool(t, cs, "unset_variables", with(map[string]any{"names": []string{"API_KEY"}})); isErr || len(f.env) != 0 {
+		t.Fatalf("unset %v %v", isErr, f.env)
+	}
+	if last := yes.asked[len(yes.asked)-1]; !strings.Contains(last, "Remove") || !strings.Contains(last, "API_KEY") {
+		t.Fatalf("asked %q", last)
+	}
+	if text, _ := callTool(t, cs, "runtime_logs", blog); !strings.Contains(text, "panic: boom") {
 		t.Fatalf("logs %s", text)
 	}
 	if text, _ := callTool(t, cs, "usage", map[string]any{"team": "alice"}); !strings.Contains(text, "900") {
 		t.Fatalf("usage %s", text)
 	}
-	if _, isErr := callTool(t, cs, "create_database", with(map[string]any{"confirm": true})); isErr || len(f.dbCalls) != 1 || f.dbCalls[0] != "POST /database" {
+	if _, isErr := callTool(t, cs, "create_database", blog); isErr || len(f.dbCalls) != 1 || f.dbCalls[0] != "POST /database" {
 		t.Fatalf("create %v %v", isErr, f.dbCalls)
-	}
-	if _, isErr := callTool(t, cs, "detach_database", with(nil)); !isErr || len(f.dbCalls) != 1 {
-		t.Fatalf("detach unconfirmed %v %v", isErr, f.dbCalls)
 	}
 }
 
-func TestTheMCPDeploysAndSaysWhereItsLive(t *testing.T) {
+// An editor that can't ask the person gets no changes - unless the person
+// started the server saying so (homeport mcp --allow-changes).
+func TestWithoutAskingThereAreNoChanges(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	cs := mcpSession(t, h, nil)
+	if text, isErr := callTool(t, cs, "detach_database", blog); !isErr || !strings.Contains(text, "--allow-changes") || len(f.dbCalls) != 0 {
+		t.Fatalf("unasked: %v %s %v", isErr, text, f.dbCalls)
+	}
+	h.a.mcpAllowChanges = true
+	cs = mcpSession(t, h, nil)
+	if _, isErr := callTool(t, cs, "detach_database", blog); isErr || len(f.dbCalls) != 1 {
+		t.Fatalf("allowed: %v %v", isErr, f.dbCalls)
+	}
+}
+
+// deploy deploys the folder the server runs in, as linked - nothing the
+// agent names.
+func TestTheMCPDeploysItsOwnFolder(t *testing.T) {
 	f := newFakeAPI(t)
 	h := newHarness(t, f)
 	h.login(t)
 	project(t, h)
-	cs := mcpSession(t, h)
-	text, isErr := callTool(t, cs, "deploy", map[string]any{"directory": h.a.wd, "run": "./server --debug", "confirm": true})
+	p := &person{approve: true}
+	cs := mcpSession(t, h, p)
+	text, isErr := callTool(t, cs, "deploy", map[string]any{"run": "./server --debug"})
 	if isErr {
 		t.Fatalf("deploy: %s", text)
 	}
 	var out struct{ URL, Status, Build string }
-	if err := json.Unmarshal([]byte(text[:strings.LastIndex(text, "}")+1]), &out); err != nil || out.URL != "https://blog.homeport.app" || out.Status != "live" || out.Build != "b1" {
+	if err := json.Unmarshal([]byte(text), &out); err != nil || out.URL != "https://blog.homeport.app" || out.Status != "live" || out.Build != "b1" {
 		t.Fatalf("%s (%v)", text, err)
 	}
 	if f.deploys[0].Settings.Run != "./server --debug" {
 		t.Fatalf("%+v", f.deploys[0])
+	}
+	if !strings.Contains(p.asked[0], h.a.wd) || !strings.Contains(p.asked[0], "alice/blog (production)") {
+		t.Fatalf("asked %q", p.asked)
 	}
 	if text, _ := callTool(t, cs, "deploy_status", map[string]any{"team": "alice", "build": "b1"}); !strings.Contains(text, "succeeded") {
 		t.Fatalf("status %s", text)
@@ -156,7 +219,7 @@ func TestTheMCPDeploysAndSaysWhereItsLive(t *testing.T) {
 func TestTheMCPSaysToSignIn(t *testing.T) {
 	f := newFakeAPI(t)
 	h := newHarness(t, f)
-	cs := mcpSession(t, h)
+	cs := mcpSession(t, h, nil)
 	if text, isErr := callTool(t, cs, "list_apps", nil); !isErr || !strings.Contains(text, "homeport login") {
 		t.Fatalf("%v %s", isErr, text)
 	}
@@ -166,15 +229,52 @@ func TestTheMCPLimitsHowFastItChangesThings(t *testing.T) {
 	f := newFakeAPI(t)
 	h := newHarness(t, f)
 	h.login(t)
-	cs := mcpSession(t, h)
-	args := map[string]any{"team": "alice", "app": "blog", "unset": []string{"X"}, "confirm": true}
+	cs := mcpSession(t, h, &person{approve: true})
 	limited := false
 	for range mcpWritesPerMinute + 1 {
-		if text, isErr := callTool(t, cs, "set_variables", args); isErr && strings.Contains(text, "too many") {
+		if text, isErr := callTool(t, cs, "unset_variables", with(map[string]any{"names": []string{"X"}})); isErr && strings.Contains(text, "too many") {
 			limited = true
 		}
 	}
 	if !limited {
 		t.Fatal("never limited")
+	}
+}
+
+// An approval is for the change it was asked about, once: an answer can't be
+// carried over to another, or used twice.
+func TestAnApprovalIsForThatChangeOnce(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	ctx := context.Background()
+	st, ct := mcp.NewInMemoryTransports()
+	if _, err := h.a.mcpServer().Connect(ctx, st, nil); err != nil {
+		t.Fatal(err)
+	}
+	// an editor that answers by hand: it sees the question, and retries itself
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "editor", Version: "1"}, &mcp.ClientOptions{
+		ElicitationHandler: (&person{approve: true}).answer, MultiRoundTrip: &mcp.MultiRoundTripOptions{Disabled: true}}).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	asked, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "unset_variables", Arguments: with(map[string]any{"names": []string{"HARMLESS"}})})
+	if err != nil || asked.RequestState == "" || asked.InputRequests["approve"] == nil {
+		t.Fatalf("not asked: %+v %v", asked, err)
+	}
+	yes := mcp.InputResponseMap{"approve": &mcp.ElicitResult{Action: "accept", Content: map[string]any{"approve": true}}}
+	f.env = map[string]string{"DATABASE_URL": "x", "HARMLESS": "y"}
+	// the answer, carried over to another change
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "unset_variables", Arguments: with(map[string]any{"names": []string{"DATABASE_URL"}}),
+		InputResponses: yes, RequestState: asked.RequestState})
+	if err != nil || !res.IsError || f.env["DATABASE_URL"] != "x" {
+		t.Fatalf("carried over: %+v %v %v", res, err, f.env)
+	}
+	// spent by the attempt: not good for its own change either
+	res, _ = cs.CallTool(ctx, &mcp.CallToolParams{Name: "unset_variables", Arguments: with(map[string]any{"names": []string{"HARMLESS"}}),
+		InputResponses: yes, RequestState: asked.RequestState})
+	if !res.IsError || f.env["HARMLESS"] != "y" {
+		t.Fatalf("used twice: %+v %v", res, f.env)
 	}
 }
