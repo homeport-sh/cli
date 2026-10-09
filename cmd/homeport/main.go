@@ -36,6 +36,10 @@ func (a *app) usage() {
                       [--save] [--unset run|release|processes|octane]…
                       [--team <slug> --app <name> [--env <name>]]
                       [--detach] [--timeout 30m]
+  homeport env pull   an environment's database and storage credentials into
+                      .env.local (0600), to develop against; never
+                      production's, never your app's own variables
+                      [--env <name>]
   homeport token create --name <where>
                       a token for CI (HOMEPORT_TOKEN), printed once
   homeport mcp        an MCP server on stdio, for your editor or agent:
@@ -55,6 +59,6 @@ In CI, set HOMEPORT_TOKEN to a token from homeport token create. Exit codes:
 0 live, 1 error, 2 usage, 3 not signed in, 4 build failed, 5 release
 failed, 6 timed out.
 
-Logs, env and cron from the terminal come next.
+Logs and cron from the terminal come next.
 `)
 }

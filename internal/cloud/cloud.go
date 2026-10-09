@@ -412,3 +412,16 @@ func (c *Client) DetachDatabase(ctx context.Context, team, app string) (json.Raw
 func (c *Client) Usage(ctx context.Context, team string) (json.RawMessage, error) {
 	return c.raw(ctx, "GET", "/v1/cli/teams/"+url.PathEscape(team)+"/usage", nil)
 }
+
+// PullEnv is an environment's add-on credentials (its database's and
+// storage's variables), by name: never production's, never its own
+// variables.
+// Withheld names what production uses too, so isn't pulled.
+func (c *Client) PullEnv(ctx context.Context, team, app string) (map[string]string, []string, error) {
+	var out struct {
+		Values   map[string]string
+		Withheld []string
+	}
+	err := c.call(ctx, "GET", appPath(team, app)+"/env/addons", nil, &out)
+	return out.Values, out.Withheld, err
+}

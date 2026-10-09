@@ -88,6 +88,8 @@ func (a *app) run(args []string) int {
 		err = a.deploy(ctx, rest)
 	case "token":
 		err = a.token(ctx, rest)
+	case "env":
+		err = a.env(ctx, rest)
 	case "build-plan":
 		err = cmdBuildPlan(rest)
 	case "mcp":
