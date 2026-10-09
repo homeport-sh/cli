@@ -155,11 +155,15 @@ func besideLine(cmd string) string {
 }
 
 // When the project's own SSR build compiles the SSR bundle (bun build
-// --compile), that binary is what runs beside the web, and no runtime ships:
-// compiled again for the sandbox's Linux (glibc), as the same command with
-// its --target, when the command names none.
+// --compile), that binary is what runs beside the web, and no runtime ships.
+// The build image's Bun is musl's, and a compile there makes a musl binary
+// whatever --target says; the sandbox has glibc. So the project's command is
+// run again for the build's own arch, on the pinned glibc Bun (fetched,
+// checked): --target=bun-linux-<arch> --compile-executable-path=<it>, any
+// --target of its own replaced. A musl target is refused.
 func TestACompiledSSRBinaryRunsAsItIs(t *testing.T) {
 	compile := "bun build --compile bootstrap/ssr/app.js --outfile bootstrap/ssr/server"
+	glibc := " --target=bun-linux-$t --compile-executable-path=/tmp/homeport/bun-glibc"
 	for name, scripts := range map[string]string{
 		"in build:ssr":            `"build:ssr":"vite build && vite build --ssr && ` + compile + `"`,
 		"a script build:ssr runs": `"build:ssr":"vite build && vite build --ssr && bun run ssr:compile","ssr:compile":"` + compile + `"`,
@@ -169,22 +173,22 @@ func TestACompiledSSRBinaryRunsAsItIs(t *testing.T) {
 			t.Errorf("%s: %+v", name, p)
 			continue
 		}
-		for _, want := range []string{compile + " --target=bun-linux-$a", "cp bootstrap/ssr/server .homeport-bundle/bootstrap/ssr/server",
-			besideLine("bootstrap/ssr/server"), ".homeport/wrap"} {
+		for _, want := range []string{compile + glibc, "bun-linux-$a-" + buildplan.BunVersion + ".tgz", "sha256sum -c",
+			"cp bootstrap/ssr/server .homeport-bundle/bootstrap/ssr/server", besideLine("bootstrap/ssr/server"), ".homeport/wrap"} {
 			if !strings.Contains(p.Command, want) {
 				t.Errorf("%s: no %q in %s", name, want, p.Command)
 			}
 		}
-		for _, not := range []string{"nodejs.org", "bun-linux-$a-" + buildplan.BunVersion + ".tgz", "--target=node"} {
+		for _, not := range []string{"nodejs.org", "--target=node", "> .homeport-bundle/.homeport/bun"} {
 			if strings.Contains(p.Command, not) {
 				t.Errorf("%s: %q in %s", name, not, p.Command)
 			}
 		}
 	}
-	// a target of its own is kept; musl's can't run in the sandbox
-	glibc := `"build:ssr":"vite build --ssr && bun build --compile --target=bun-linux-x64 bootstrap/ssr/app.js --outfile=ssr-bin"`
-	p := detect(t, laravel([]string{inertia}, "package.json", `{"scripts":{`+glibc+`}}`, "package-lock.json", "{}"), buildplan.Settings{})
-	if strings.Contains(p.Command, "--target=bun-linux-$a") || !strings.Contains(p.Command, besideLine("ssr-bin")) {
+	// a target of its own is the build's arch on glibc, as any
+	own := `"build:ssr":"vite build --ssr && bun build --compile --target=bun-linux-x64 bootstrap/ssr/app.js --outfile=ssr-bin"`
+	p := detect(t, laravel([]string{inertia}, "package.json", `{"scripts":{`+own+`}}`, "package-lock.json", "{}"), buildplan.Settings{})
+	if !strings.Contains(p.Command, "bun build --compile bootstrap/ssr/app.js --outfile=ssr-bin"+glibc) || !strings.Contains(p.Command, besideLine("ssr-bin")) {
 		t.Errorf("its own target: %s", p.Command)
 	}
 	musl := `"build:ssr":"vite build --ssr && bun build --compile --target=bun-linux-x64-musl bootstrap/ssr/app.js --outfile=ssr-bin"`
