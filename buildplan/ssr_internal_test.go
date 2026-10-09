@@ -141,6 +141,10 @@ func TestTheSupervisorSizesTheRenderersHeap(t *testing.T) {
 		if !strings.Contains(out.String(), "heap --max-old-space-size="+want+"\n") {
 			t.Errorf("%q MB: %s", mem, out)
 		}
+		// and says what it started, sized
+		if !strings.Contains(out.String(), "homeport: started "+node+" args.mjs --max-old-space-size="+want) {
+			t.Errorf("%q MB: not said: %s", mem, out)
+		}
 		_ = cmd.Process.Signal(syscall.SIGTERM)
 		_ = waitExit(cmd)
 	}
