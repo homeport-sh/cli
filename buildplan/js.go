@@ -1096,14 +1096,17 @@ func boot(env map[string]string) string {
 	if env == nil {
 		e = []byte("{}")
 	}
-	return `import * as m from "node:module";import net from "node:net";` +
+	return `import * as m from "node:module";import net from "node:net";import http from "node:http";import https from "node:https";` +
 		`const e=` + string(e) + `;for(const k in e)process.env[k]??=e[k];` +
 		`try{if(m.enableCompileCache){m.enableCompileCache(new URL("../` + CacheDir + `",import.meta.url).pathname);` +
 		`for(const t of [5e3,6e4])setTimeout(()=>{try{m.flushCompileCache()}catch{}},t).unref()}}catch{}` +
-		`const p=Number(process.env.PORT),l=["localhost","127.0.0.1"],o=net.Server.prototype.listen;` +
-		`net.Server.prototype.listen=function(...a){const x=a[0];` +
+		`const p=Number(process.env.PORT),l=["localhost","127.0.0.1"];` +
+		// each server class that defines its own listen: node:net's, and on
+		// Bun, its http.Server and https.Server, which aren't net's
+		`for(const S of [net.Server,http.Server,https.Server]){if(!Object.hasOwn(S.prototype,"listen"))continue;const o=S.prototype.listen;` +
+		`S.prototype.listen=function(...a){const x=a[0];` +
 		`if(x&&typeof x==="object"&&Number(x.port)===p&&l.includes(x.host))a[0]={...x,host:"0.0.0.0"};` +
-		`else if(Number(x)===p&&l.includes(a[1]))a[1]="0.0.0.0";return o.apply(this,a)};`
+		`else if(Number(x)===p&&l.includes(a[1]))a[1]="0.0.0.0";return o.apply(this,a)}}`
 }
 
 // lockfileAbove: a lockfile in a folder above the app's, up to the

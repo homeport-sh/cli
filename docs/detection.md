@@ -188,7 +188,8 @@ no source maps unless the app starts with `--enable-source-maps`. Its
   is sent SIGTERM, which wouldn't flush it.
 - If a server listens on `$PORT` on `localhost` only (Fastify's default),
   it's made to listen on every address instead, because nothing else in
-  the sandbox can reach it.
+  the sandbox can reach it. This covers `node:net` servers and, on Bun,
+  its own `http` and `https` servers.
 
 ### Binding
 

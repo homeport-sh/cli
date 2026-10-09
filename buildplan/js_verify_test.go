@@ -2,6 +2,7 @@ package buildplan_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -142,5 +143,38 @@ func TestTheCopyChecksEveryLinkAndFailsWhenItFails(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "secret"), []byte("x"), 0o000)
 	if out, err := shell(t, dir, copyStep); err == nil {
 		t.Errorf("an unreadable file was copied past: %s", out)
+	}
+}
+
+// The boot makes a server on $PORT that listens on localhost listen on every
+// address, on both runtimes: Bun's http.Server isn't node:net's, so it's
+// patched too. Run with whichever runtime this machine has.
+func TestTheBootOpensALocalhostServerOnBothRuntimes(t *testing.T) {
+	p := detect(t, js(`{"scripts":{"start":"node server.js"},"dependencies":{"express":"^5"}}`), buildplan.Settings{})
+	i := strings.Index(p.Command, "printf '%s' '")
+	boot := p.Command[i+len("printf '%s' '"):]
+	boot = boot[:strings.Index(boot, "'")]
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "boot.mjs"), []byte(boot), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "server.mjs"), []byte(`import http from "node:http"
+const s = http.createServer()
+s.listen(Number(process.env.PORT), "localhost", () => { console.log(s.address().address); s.close() })
+`), 0o644)
+	ran := 0
+	for rt, flag := range map[string]string{"node": "--import", "bun": "--preload"} {
+		bin, err := exec.LookPath(rt)
+		if err != nil {
+			continue
+		}
+		ran++
+		cmd := exec.Command(bin, flag, "./boot.mjs", "server.mjs")
+		cmd.Dir, cmd.Env = dir, append(os.Environ(), "PORT=39871")
+		out, err := cmd.CombinedOutput()
+		if err != nil || strings.TrimSpace(string(out)) != "0.0.0.0" {
+			t.Errorf("%s: %v %s", rt, err, out)
+		}
+	}
+	if ran == 0 {
+		t.Skip("no node or bun here")
 	}
 }
