@@ -52,7 +52,9 @@ func TestTheSupervisorRunsTheWebBesideItsRenderer(t *testing.T) {
 			t.Skip("no bun here")
 		}
 		write(t, dir, "src/ssr.mjs", ssr, 0o644)
-		if out, err := exec.Command(bun, "build", "--compile", filepath.Join(dir, "src/ssr.mjs"), "--outfile", filepath.Join(dir, "bootstrap/ssr/server")).CombinedOutput(); err != nil {
+		compile := exec.Command(bun, "build", "--compile", "src/ssr.mjs", "--outfile", "bootstrap/ssr/server")
+		compile.Dir = dir // its temporary files too
+		if out, err := compile.CombinedOutput(); err != nil {
 			t.Fatalf("compile: %v\n%s", err, out)
 		}
 		return "bootstrap/ssr/server"
