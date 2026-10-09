@@ -253,9 +253,10 @@ for `laravel-vite-plugin` or `@inertiajs/vite`). Then:
 - **What runs** is one of three things, as for a JavaScript app:
   - **The binary your SSR build compiles.** If `build:ssr`, or a script it
     runs, has `bun build --compile`, that binary runs as it is, and no
-    runtime ships. With no `--target`, the command is run once more with
-    `--target=bun-linux-x64` (or `-arm64`), so the binary is for the Linux
-    the app runs on (glibc). A `-musl` target is refused.
+    runtime ships. Since the build's own Bun is the Alpine (musl) one, the
+    command is run once more on the pinned Bun for the Linux the app runs
+    on (glibc), checked by its sha256, with the build's architecture as its
+    `--target`. A `-musl` target is refused.
   - **Otherwise the SSR bundle** that Vite made (`bootstrap/ssr/ssr.js`,
     `app.js`, `ssr.mjs` or `app.mjs`, in the order Inertia looks), bundled
     again into one file with every package it imports, at

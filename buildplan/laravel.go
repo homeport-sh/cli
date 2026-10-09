@@ -193,6 +193,12 @@ func (r reader) composerStartSSR() (string, string) {
 	return "", ""
 }
 
+// glibcBun is where a compiled renderer's build puts the pinned glibc Bun it
+// compiles on; targetRe a bun build's --target.
+const glibcBun = "/tmp/homeport/bun-glibc"
+
+var targetRe = regexp.MustCompile(`--target[= ]\S+`)
+
 // ssr is how an app's SSR renderer runs: compiled (the binary at out, made
 // by compile, which is run again with target when it's set), or the bundle
 // on rt at version.
@@ -252,16 +258,17 @@ func (r reader) ssrFor(cfg fileConfig, s Settings) (ssr, error) {
 		if err := r.bunVersion(r.pkg()); err != nil {
 			return ssr{}, err
 		}
-		x := ssr{rt: "bun", version: BunVersion, out: out, compile: cmd,
-			why: "its SSR build compiles the renderer (" + cmd + "): that binary runs, and no runtime ships"}
-		switch t := regexp.MustCompile(`--target[= ](\S+)`).FindStringSubmatch(cmd); {
-		case t == nil:
-			x.target = " --target=bun-linux-$a" // the sandbox's glibc, not the image's musl
-		case strings.Contains(t[1], "musl"):
-			return ssr{}, fmt.Errorf("its SSR build compiles for %s, which the sandbox can't run: compile for bun-linux-x64 or bun-linux-arm64 (glibc), or drop --target", t[1])
-		default:
-			x.compile = "" // as it is: already for glibc
+		// the build image's Bun is musl's, and a compile there makes a
+		// musl binary whatever --target says: run it again for this build's
+		// arch on the pinned glibc Bun, which the sandbox can run
+		t := targetRe.FindString(cmd)
+		if strings.Contains(t, "musl") {
+			return ssr{}, fmt.Errorf("its SSR build compiles for %s, which the sandbox can't run: compile for bun-linux-x64 or bun-linux-arm64 (glibc), or drop --target", strings.TrimLeft(t[len("--target"):], "= "))
 		}
+		again := strings.Join(strings.Fields(targetRe.ReplaceAllString(cmd, "")), " ")
+		x := ssr{rt: "bun", version: BunVersion, out: out, compile: again,
+			why:    "its SSR build compiles the renderer (" + cmd + "): that binary runs, and no runtime ships",
+			target: " --target=bun-linux-$t --compile-executable-path=" + glibcBun}
 		return x, nil
 	}
 	rt, v, why, err := r.ssrRuntime(cfg, s)
@@ -276,11 +283,12 @@ func ssrAssemble(b string, x ssr) string {
 	var steps []string
 	beside := x.out
 	if x.out != "" {
-		if x.compile != "" {
-			steps = append(steps,
-				"case $(uname -m) in x86_64) a=x64 ;; aarch64) a=arm64 ;; *) echo \"homeport: no Bun for $(uname -m)\" >&2; exit 1 ;; esac",
-				x.compile+x.target)
-		}
+		steps = append(steps,
+			"case $(uname -m) in x86_64) a=x64 t=x64 ;; aarch64) a=aarch64 t=arm64 ;; *) echo \"homeport: no Bun for $(uname -m)\" >&2; exit 1 ;; esac",
+			"mkdir -p "+path.Dir(glibcBun),
+			"curl -fsSL https://registry.npmjs.org/@oven/bun-linux-$a/-/bun-linux-$a-"+BunVersion+".tgz | tar -xzO package/bin/bun > "+glibcBun,
+			"chmod 755 "+glibcBun, checkSum(glibcBun, bunSum, "Bun"),
+			x.compile+x.target)
 		steps = append(steps,
 			`{ [ -f `+x.out+` ] || { echo 'homeport: the SSR build made no `+x.out+`' >&2; exit 1; }; }`,
 			"mkdir -p "+path.Dir(b+"/"+x.out)+" "+b+"/.homeport",
