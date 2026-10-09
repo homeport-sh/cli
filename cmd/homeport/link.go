@@ -26,7 +26,7 @@ func (a *app) link(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	target, err := a.resolve(ctx, c, *team, *appName, *env)
+	target, err := a.resolve(ctx, c, *team, *appName, *env, true)
 	if err != nil {
 		return err
 	}
@@ -46,8 +46,10 @@ type target struct {
 }
 
 // resolve finds the environment the flags name - asking for what they
-// don't, when there's a terminal to ask in.
-func (a *app) resolve(ctx context.Context, c *cloud.Client, teamSlug, appName, envName string) (*target, error) {
+// don't, when there's a terminal to ask in. hostedOnly: only those
+// homeport builds (to link or deploy); reading, variables and add-ons are
+// any environment's.
+func (a *app) resolve(ctx context.Context, c *cloud.Client, teamSlug, appName, envName string, hostedOnly bool) (*target, error) {
 	who, err := c.WhoAmI(ctx)
 	if err != nil {
 		return nil, err
@@ -84,7 +86,7 @@ func (a *app) resolve(ctx context.Context, c *cloud.Client, teamSlug, appName, e
 	byApp := map[string][]cloud.App{}
 	var names []string
 	for _, e := range apps {
-		if e.Builds != "hosted" {
+		if hostedOnly && e.Builds != "hosted" {
 			continue
 		}
 		if _, ok := byApp[e.ProjectName]; !ok {
@@ -141,6 +143,40 @@ func (a *app) resolve(ctx context.Context, c *cloud.Client, teamSlug, appName, e
 			return nil, err
 		}
 		env = envs[i]
+	}
+	return &target{link: config.Link{Team: team.ID, TeamSlug: team.Slug, App: env.ID, Project: env.ProjectName, Environment: env.Environment},
+		domain: env.Domain, dashboard: orDefault(who.Dashboard)}, nil
+}
+
+// linked is the environment a link's ids name, as the API names it. A
+// link's names are labels for people: one whose labels disagree with what
+// its ids are now (edited, or renamed since) is refused, never shown as
+// one environment while acting on another. hostedOnly as for resolve.
+func (a *app) linked(ctx context.Context, c *cloud.Client, l config.Link, hostedOnly bool) (*target, error) {
+	who, err := c.WhoAmI(ctx)
+	if err != nil {
+		return nil, err
+	}
+	i := slices.IndexFunc(who.Teams, func(t cloud.Team) bool { return t.ID == l.Team })
+	if i < 0 {
+		return nil, usageErr("this folder's link names a team you aren't in: run `homeport link` again")
+	}
+	team := who.Teams[i]
+	apps, err := c.Apps(ctx, team.ID)
+	if err != nil {
+		return nil, err
+	}
+	j := slices.IndexFunc(apps, func(e cloud.App) bool { return e.ID == l.App })
+	if j < 0 {
+		return nil, usageErr("this folder's link names an environment %s doesn't have (deleted?): run `homeport link` again", team.Slug)
+	}
+	env := apps[j]
+	if team.Slug != l.TeamSlug || env.ProjectName != l.Project || env.Environment != l.Environment {
+		return nil, usageErr("this folder's link says %s/%s (%s), but it is %s/%s (%s): run `homeport link` again",
+			l.TeamSlug, l.Project, l.Environment, team.Slug, env.ProjectName, env.Environment)
+	}
+	if hostedOnly && env.Builds != "hosted" {
+		return nil, usageErr("%s/%s (%s) is deployed by %s, not built by homeport", team.Slug, env.ProjectName, env.Environment, sourceName(env.Builds))
 	}
 	return &target{link: config.Link{Team: team.ID, TeamSlug: team.Slug, App: env.ID, Project: env.ProjectName, Environment: env.Environment},
 		domain: env.Domain, dashboard: orDefault(who.Dashboard)}, nil

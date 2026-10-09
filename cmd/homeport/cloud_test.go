@@ -611,3 +611,22 @@ func TestMakingATokenForCI(t *testing.T) {
 		t.Fatalf("no name: %d", code)
 	}
 }
+
+// A link's names are only labels: what it deploys is the environment its
+// ids name, said by the API's names - and a link whose labels disagree with
+// them (edited, or stale) is refused rather than shown as something else.
+func TestALinkIsCheckedAgainstTheAPI(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	project(t, h)
+	// the ids say production; the labels say staging
+	config.SaveLink(h.a.wd, config.Link{Team: team1, TeamSlug: "alice", App: blogID, Project: "blog", Environment: "staging"})
+	if code := h.run("deploy"); code != exitUsage || !strings.Contains(h.err.String(), "production") || len(f.deploys) != 0 || len(f.uploads) != 0 {
+		t.Fatalf("a mislabelled link: %d %s", code, h.said())
+	}
+	config.SaveLink(h.a.wd, config.Link{Team: team1, TeamSlug: "alice", App: blogID, Project: "blog", Environment: "production"})
+	if code := h.run("deploy"); code != 0 || !strings.Contains(h.out.String(), "alice/blog (production)") {
+		t.Fatalf("%d %s", code, h.said())
+	}
+}

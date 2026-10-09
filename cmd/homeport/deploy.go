@@ -70,7 +70,7 @@ func (a *app) deploy(ctx context.Context, args []string) error {
 	var t *target
 	dir := a.wd
 	if *appName != "" || *team != "" {
-		if t, err = a.resolve(ctx, c, *team, *appName, *env); err != nil {
+		if t, err = a.resolve(ctx, c, *team, *appName, *env, true); err != nil {
 			return err
 		}
 	} else {
@@ -82,11 +82,9 @@ func (a *app) deploy(ctx context.Context, args []string) error {
 			return err
 		}
 		dir = at
-		who, err := c.WhoAmI(ctx)
-		if err != nil {
+		if t, err = a.linked(ctx, c, *l, true); err != nil {
 			return err
 		}
-		t = &target{link: *l, dashboard: orDefault(who.Dashboard)}
 	}
 
 	tree, err := source.Collect(dir)
