@@ -82,7 +82,26 @@ address once it's live. Exit codes, for CI:
 | 5 | built, but the release didn't go live |
 | 6 | still going when `--timeout` (30m) ran out; it carries on |
 
-`logs`, `env` and `cron` from the terminal come next.
+## Developing against an environment's add-ons
+
+```sh
+homeport env pull --env staging
+```
+
+This writes an environment's **add-on credentials** to `.env.local`: its
+database's `DATABASE_URL` and parts, and its storage's `AWS_*` and bucket.
+Those are the values the dashboard's reveal shows, so you can run the app
+on your laptop against staging's database and bucket.
+
+- Production's are never pulled, and there is no flag to change that.
+- The app's own variables are never pulled: they stay write-only.
+- `.env.local` is written at mode 0600. Only the keys it pulls are
+  replaced; every other line is left as it was.
+- `.env.local` is added to `.gitignore` if nothing there covers it.
+- No value is printed.
+- Each pull is recorded, and a person can pull 30 times an hour.
+
+`logs` and `cron` from the terminal come next.
 
 ## MCP: homeport in your editor
 

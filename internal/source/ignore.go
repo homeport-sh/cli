@@ -122,3 +122,11 @@ func globRegexp(glob string) string {
 	}
 	return b.String()
 }
+
+// Covers reports whether a .gitignore's patterns ignore rel (a file in the
+// .gitignore's folder or below it).
+func Covers(patterns, rel string) bool {
+	m := &ignorer{}
+	m.add("", patterns)
+	return m.ignored(rel, false)
+}
