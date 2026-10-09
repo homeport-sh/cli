@@ -95,9 +95,14 @@ on your laptop against staging's database and bucket.
 
 - Production's are never pulled, and there is no flag to change that.
 - The app's own variables are never pulled: they stay write-only.
-- `.env.local` is written at mode 0600. Only the keys it pulls are
-  replaced; every other line is left as it was.
-- `.env.local` is added to `.gitignore` if nothing there covers it.
+- If production uses an add-on too (a database attached to both), that
+  add-on's variables are withheld, and the command says which.
+- `.env.local` is written at mode 0600. Its first line records the keys
+  `env pull` owns: those are replaced, or removed once the environment no
+  longer has them. Every other line is left as it was.
+- `.env.local` is made ignored first (git decides, in a checkout; a
+  `.gitignore` above counts). If it can't be, nothing is written.
+- A token for CI can't pull.
 - No value is printed.
 - Each pull is recorded, and a person can pull 30 times an hour.
 

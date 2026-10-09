@@ -58,6 +58,8 @@ type fakeAPI struct {
 	env        map[string]string // an environment's variables, as set
 	dbCalls    []string
 	pulled     []string // the apps whose add-on credentials were pulled
+	pullValues map[string]string
+	withheld   []string
 }
 
 func newFakeAPI(t *testing.T) *fakeAPI {
@@ -154,11 +156,15 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "GET" && strings.HasSuffix(p, "/env/addons"):
 		app := strings.TrimSuffix(strings.TrimPrefix(p, "/v1/cli/teams/"+team1+"/apps/"), "/env/addons")
 		f.pulled = append(f.pulled, app)
-		if app == blogID {
+		if app == blogID || app == apiID { // production's
 			f.write(w, 400, map[string]string{"error": "production's credentials aren't pulled to a laptop", "field": "environment"})
 			return
 		}
-		f.write(w, 200, map[string]any{"Values": map[string]string{"DATABASE_URL": "postgres://u:pw@db/x", "AWS_ACCESS_KEY_ID": "AKIA1"}})
+		values := f.pullValues
+		if values == nil {
+			values = map[string]string{"DATABASE_URL": "postgres://u:pw@db/x", "AWS_ACCESS_KEY_ID": "AKIA1"}
+		}
+		f.write(w, 200, map[string]any{"Values": values, "Withheld": f.withheld})
 	case r.Method == "POST" && p == "/v1/cli/tokens":
 		var in struct{ Name string }
 		json.NewDecoder(r.Body).Decode(&in)
