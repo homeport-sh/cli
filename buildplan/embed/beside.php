@@ -43,6 +43,8 @@ $start = function (array &$b) use ($io, $say): void {
     $b['at'] = microtime(true);
     if ($b['proc'] === null) {
         $say(implode(' ', $b['cmd']).' did not start');
+    } else {
+        $say('started '.implode(' ', $b['cmd']));
     }
 };
 $down = function (array &$b, array $s) use ($say): void {
