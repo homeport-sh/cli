@@ -143,6 +143,9 @@ type Plan struct {
 	// Warnings: what detection chose that a person may want to know
 	Warnings []string `json:"warnings,omitempty"`
 
+	SSR    string `json:"ssr,omitempty"`
+	Reverb bool   `json:"reverb,omitempty"`
+
 	// a bundle's build, and what makes the bundle from what it left
 	// (Command is both): a build command someone sets replaces the first;
 	// setup is what the image needs before any install (Bun in a Node
