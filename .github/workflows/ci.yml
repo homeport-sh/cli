@@ -48,8 +48,8 @@ jobs:
   examples:
     runs-on: ubuntu-latest
     env:
-      # the examples branch with these apps; main once examples#6 is merged
-      EXAMPLES_REF: tanstack-start-and-sveltekit-bun
+      # the examples repo's main: these apps are there
+      EXAMPLES_REF: main
     steps:
       - uses: actions/checkout@v7
 
