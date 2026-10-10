@@ -290,16 +290,16 @@ func TestAPHPAppShipsAsABundle(t *testing.T) {
 }
 
 // A Laravel app (it requires laravel/framework, as the dashboard tells) is
-// built with the caches that don't depend on its environment - its events,
-// its compiled views, its routes - so a wake doesn't make them: each is
+// built with the caches that don't depend on its environment - its events
+// and its routes - so a wake doesn't make them: each is
 // files read in a sandbox, where that's slow. Its config isn't cached: that
 // holds the environment, which the app gets when it runs, and which changes
 // without a build. An app that can't boot without its environment is built
 // without them, as before. Other PHP apps and a build command a person set
 // are left as they are.
 func TestALaravelAppIsBuiltWithItsCaches(t *testing.T) {
-	const caches = "php artisan event:cache && php artisan view:cache && php artisan route:cache" +
-		" || echo \"homeport: built without Laravel's event, view and route caches (artisan couldn't make them here); the app runs without them\" >&2"
+	const caches = "php artisan event:cache && php artisan route:cache" +
+		" || echo \"homeport: built without Laravel's event and route caches (artisan couldn't make them here); the app runs without them\" >&2"
 	laravel := map[string]string{"composer.json": `{"require":{"laravel/framework":"^13.0"}}`, "composer.lock": "{}"}
 	p := detect(t, laravel, buildplan.Settings{})
 	if p.Command != caches+" && frankenphp-bundle . .homeport-bundle && mv -T .homeport-bundle/frankenphp .homeport-bundle/bin" {
@@ -307,6 +307,11 @@ func TestALaravelAppIsBuiltWithItsCaches(t *testing.T) {
 	}
 	if strings.Contains(p.Command, "config:cache") || strings.Contains(p.Install, "artisan") {
 		t.Fatalf("config is the environment's: %+v", p)
+	}
+	// compiled views are named by their template's absolute path, which the
+	// build's isn't the release's: views cached here are never read
+	if strings.Contains(p.Command, "view:cache") {
+		t.Fatalf("views cached where they're never read: %q", p.Command)
 	}
 	// with Octane, and wherever the bundle lands
 	octane := map[string]string{"composer.json": `{"require":{"laravel/framework":"^13.0","laravel/octane":"^2.13"}}`, "composer.lock": "{}"}
