@@ -41,9 +41,15 @@ func TestSvelteKitsBunAdapterIsABunBundle(t *testing.T) {
 		if !strings.HasPrefix(p.Command, "bun run --bun build && ") || !strings.Contains(p.Command, "--production") && !strings.Contains(p.Command, "npm prune --omit=dev") {
 			t.Errorf("%s: build %s", name, p.Command)
 		}
-		// it knows its origin from the edge's forwarded headers
-		if !strings.Contains(p.Command, `"PROTOCOL_HEADER":"x-forwarded-proto"`) || !strings.Contains(p.Command, `"HOST_HEADER":"x-forwarded-host"`) {
+		// it knows its scheme from the edge's X-Forwarded-Proto, its host
+		// from the Host; a visitor's X-Forwarded-Host isn't read
+		if !strings.Contains(p.Command, `"PROTOCOL_HEADER":"x-forwarded-proto"`) || strings.Contains(p.Command, "HOST_HEADER") {
 			t.Errorf("%s: env %s", name, p.Command)
+		}
+		// and the build checks the adapter wrote what it starts
+		entry := strings.TrimPrefix(c.run, "--preload ./.homeport/boot.mjs ")
+		if !strings.Contains(p.Command, "[ -f "+entry+" ]") {
+			t.Errorf("%s: no entry check: %s", name, p.Command)
 		}
 	}
 }
@@ -53,12 +59,12 @@ func TestSvelteKitsBunAdapterIsABunBundle(t *testing.T) {
 // homeport's.
 func TestSvelteKitsBunAdapterEnvPrefix(t *testing.T) {
 	p := detect(t, js(skBun, "bun.lock", "{}", "vite.config.ts", skBunConfig("adapter({ envPrefix: 'MY_APP_' })")), buildplan.Settings{})
-	for _, want := range []string{`"MY_APP_PORT":"$PORT"`, `"MY_APP_HOST":"$HOST"`, `"MY_APP_PROTOCOL_HEADER":"x-forwarded-proto"`, `"MY_APP_HOST_HEADER":"x-forwarded-host"`} {
+	for _, want := range []string{`"MY_APP_PORT":"$PORT"`, `"MY_APP_HOST":"$HOST"`, `"MY_APP_PROTOCOL_HEADER":"x-forwarded-proto"`} {
 		if !strings.Contains(p.Command, want) {
 			t.Errorf("no %s: %s", want, p.Command)
 		}
 	}
-	if strings.Contains(p.Command, `{"HOST_HEADER"`) || strings.Contains(p.Command, `,"PROTOCOL_HEADER"`) {
+	if strings.Contains(p.Command, "HOST_HEADER") || strings.Contains(p.Command, `{"PROTOCOL_HEADER"`) || strings.Contains(p.Command, `,"PROTOCOL_HEADER"`) {
 		t.Errorf("unprefixed: %s", p.Command)
 	}
 }
@@ -67,18 +73,31 @@ func TestSvelteKitsBunAdapterEnvPrefix(t *testing.T) {
 // that binary is what runs.
 func TestSvelteKitsBunAdapterCompiledIsABinary(t *testing.T) {
 	for name, c := range map[string]struct {
-		call, artifact string
+		config, artifact string
+		machine          string // the machine a target needs, checked before the build
 	}{
-		"compile: true":                  {"adapter({ buildOptions: { compile: true } })", "build/server"},
-		"a target":                       {"adapter({ buildOptions: { compile: 'bun-linux-x64', minify: true } })", "build/server"},
-		"an outfile, in its out":         {"adapter({ out: 'dist', buildOptions: { compile: { outfile: 'application' }, bytecode: true } })", "dist/application"},
-		"an outfile with a linux target": {"adapter({ buildOptions: { compile: { outfile: 'app', target: 'bun-linux-arm64' } } })", "build/app"},
+		"compile: true":                  {skBunConfig("adapter({ buildOptions: { compile: true } })"), "build/server", ""},
+		"a target":                       {skBunConfig("adapter({ buildOptions: { compile: 'bun-linux-x64', minify: true } })"), "build/server", "x86_64"},
+		"an outfile, in its out":         {skBunConfig("adapter({ out: 'dist', buildOptions: { compile: { outfile: 'application' }, bytecode: true } })"), "dist/application", ""},
+		"an outfile with a linux target": {skBunConfig("adapter({ buildOptions: { compile: { outfile: 'app', target: 'bun-linux-arm64' } } })"), "build/app", "aarch64"},
+		// imported by another name
+		"imported as bun": {"import bun from '@sveltejs/adapter-bun';\nexport default defineConfig({ plugins: [sveltekit({ adapter: bun({ buildOptions: { compile: true } }) })] });\n", "build/server", ""},
+		"imported as bunAdapter, in svelte.config.js": {"import bunAdapter from \"@sveltejs/adapter-bun\";\nimport adapter from 'other';\nexport default { kit: { adapter: bunAdapter({ out: 'out', buildOptions: { compile: { outfile: 'srv' } } }) } };\n", "out/srv", ""},
 	} {
-		p := detect(t, js(skBun, "bun.lock", "{}", "vite.config.ts", skBunConfig(c.call)), buildplan.Settings{})
-		if p.Kind != buildplan.Binary || p.Framework != "SvelteKit" || p.Artifact != c.artifact || p.Runtime != "bun" || p.Command != "bun run --bun build" ||
-			!strings.Contains(p.RuntimeReason, "adapter-bun") {
+		f := "vite.config.ts"
+		if strings.Contains(c.config, "kit: {") {
+			f = "svelte.config.js"
+		}
+		p := detect(t, js(skBun, "bun.lock", "{}", f, c.config), buildplan.Settings{})
+		if p.Kind != buildplan.Binary || p.Framework != "SvelteKit" || p.Artifact != c.artifact || p.Runtime != "bun" || !strings.HasSuffix(p.Command, "bun run --bun build") ||
+			!strings.Contains(p.RuntimeReason, "adapter-bun") || (c.machine == "") != (p.Command == "bun run --bun build") ||
+			c.machine != "" && !strings.Contains(p.Command, `[ "$(uname -m)" = `+c.machine+` ]`) {
 			t.Errorf("%s: %+v", name, p)
 		}
+	}
+	// envPrefix under another name is read too: refused when compiled
+	if _, err := buildplan.Detect(repo(js(skBun, "bun.lock", "{}", "vite.config.ts", "import bun from '@sveltejs/adapter-bun';\nexport default defineConfig({ plugins: [sveltekit({ adapter: bun({ envPrefix: 'APP_', buildOptions: { compile: true } }) })] });\n")), buildplan.Settings{}); err == nil || !strings.Contains(err.Error(), "APP_PORT") {
+		t.Errorf("envPrefix as bun: %v", err)
 	}
 	// compile: false is the bundle
 	p := detect(t, js(skBun, "bun.lock", "{}", "vite.config.ts", skBunConfig("adapter({ buildOptions: { compile: false } })")), buildplan.Settings{})
@@ -137,9 +156,12 @@ func TestACompiledNitroServerNeedsItsAssetsInlined(t *testing.T) {
 		files map[string]string
 		ok    bool
 	}{
-		"Nuxt":                    {js(nuxt, "bun.lock", "{}"), false},
-		"Nuxt, inlined":           {js(nuxt, "bun.lock", "{}", "nuxt.config.ts", "export default defineNuxtConfig({ nitro: { preset: 'bun', serveStatic: 'inline' } })\n"), true},
-		"Nuxt, in a comment":      {js(nuxt, "bun.lock", "{}", "nuxt.config.ts", "// nitro: { serveStatic: 'inline' }\nexport default defineNuxtConfig({})\n"), false},
+		"Nuxt":               {js(nuxt, "bun.lock", "{}"), false},
+		"Nuxt, inlined":      {js(nuxt, "bun.lock", "{}", "nuxt.config.ts", "export default defineNuxtConfig({ nitro: { preset: 'bun', serveStatic: 'inline' } })\n"), true},
+		"Nuxt, in a comment": {js(nuxt, "bun.lock", "{}", "nuxt.config.ts", "// nitro: { serveStatic: 'inline' }\nexport default defineNuxtConfig({})\n"), false},
+		"Nuxt, a backtick":   {js(nuxt, "bun.lock", "{}", "nuxt.config.ts", "export default defineNuxtConfig({ $production: { nitro: { serveStatic: `inline` } } })\n"), true},
+		"TanStack Start, in nitro.config": {js(start, "bun.lock", "{}", "vite.config.ts", "export default defineConfig({ plugins: [tanstackStart(), nitro()] })\n",
+			"nitro.config.ts", "export default defineConfig({ preset: 'bun', serveStatic: 'inline' })\n"), true},
 		"TanStack Start":          {js(start, "bun.lock", "{}", "vite.config.ts", "export default defineConfig({ plugins: [tanstackStart(), nitro({ preset: 'bun' })] })\n"), false},
 		"TanStack Start, inlined": {js(start, "bun.lock", "{}", "vite.config.ts", "export default defineConfig({ plugins: [tanstackStart(), nitro({ preset: 'bun', serveStatic: 'inline' })] })\n"), true},
 	} {
@@ -153,7 +175,39 @@ func TestACompiledNitroServerNeedsItsAssetsInlined(t *testing.T) {
 	}
 	// the files it's read from are fetched
 	have := strings.Join(buildplan.Files(), " ")
-	if !strings.Contains(have, "nuxt.config.ts") {
-		t.Errorf("no nuxt.config.ts: %s", have)
+	for _, f := range []string{"nuxt.config.ts", "nitro.config.ts", "nitro.config.mjs"} {
+		if !strings.Contains(have, f) {
+			t.Errorf("no %s: %s", f, have)
+		}
+	}
+}
+
+// The adapter a SvelteKit config imports is the one it builds with: one
+// installed but not imported is ignored - adapter-static's site, whatever
+// server adapter is installed beside it.
+func TestTheImportedSvelteKitAdapterDecides(t *testing.T) {
+	static := "import adapter from '@sveltejs/adapter-static';\nexport default { kit: { adapter: adapter() } };\n"
+	for name, deps := range map[string]string{
+		"adapter-bun installed":  `"@sveltejs/adapter-bun":"1.0.0"`,
+		"adapter-node installed": `"@sveltejs/adapter-node":"^5"`,
+	} {
+		p := detect(t, js(`{"scripts":{"build":"vite build"},"devDependencies":{"@sveltejs/kit":"^3",`+deps+`,"@sveltejs/adapter-static":"^3"}}`, "bun.lock", "{}", "svelte.config.js", static), buildplan.Settings{})
+		if p.Kind != buildplan.Static || p.Framework != "SvelteKit" || p.Artifact != "build" {
+			t.Errorf("%s: %+v", name, p)
+		}
+	}
+	// both server adapters, and no config to say: adapter-node, as before
+	p := detect(t, js(`{"scripts":{"build":"vite build"},"devDependencies":{"@sveltejs/kit":"^3","@sveltejs/adapter-bun":"1.0.0","@sveltejs/adapter-node":"^5"}}`), buildplan.Settings{})
+	if p.Runtime != "node" || p.Run != "--import ./.homeport/boot.mjs build/index.js" {
+		t.Errorf("no config: %+v", p)
+	}
+}
+
+// svelte-smol isn't supported: SvelteKit's own adapter-bun compiles an app.
+func TestSvelteSmolIsRefused(t *testing.T) {
+	_, err := buildplan.Detect(repo(js(`{"scripts":{"build":"vite build"},"devDependencies":{"@sveltejs/kit":"^2","@orochibraru/svelte-smol":"^1"}}`, "bun.lock", "{}",
+		"svelte.config.js", "import adapter from '@orochibraru/svelte-smol'\nexport default { kit: { adapter: adapter() } }\n")), buildplan.Settings{})
+	if err == nil || !strings.Contains(err.Error(), "@sveltejs/adapter-bun") || !strings.Contains(err.Error(), "buildOptions.compile") {
+		t.Fatalf("%v", err)
 	}
 }

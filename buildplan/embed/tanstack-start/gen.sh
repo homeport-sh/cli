@@ -3,6 +3,8 @@
 # node.mjs (srvx's node adapter) and bun.mjs (its Bun one). Needs Bun.
 set -eu
 cd "$(dirname "$0")"
+BUN=1.4.2
+[ "$(bun --version)" = "$BUN" ] || { echo "gen.sh: needs Bun $BUN (CI's), not $(bun --version)" >&2; exit 1; }
 SRVX=1.0.5
 SUM=sha512-KvSKRpgPG/oaq3cyT614OQ2bAa7DynuGamivCZeoZzIUULOdbQz6wUtnnVuC4+DCx2Zglzo8v5gBYmWIWYhDxA==
 t=$(mktemp -d)
@@ -13,5 +15,5 @@ mkdir -p "$t/node_modules/srvx" && tar -xzf "$t/srvx.tgz" -C "$t/node_modules/sr
 cp server.mjs "$t/server.mjs"
 for rt in node bun; do
   bun build "$t/server.mjs" --target="$rt" --format=esm --minify-syntax --minify-whitespace --outfile "$t/$rt.mjs" >/dev/null
-  { printf '// homeport: server.mjs with srvx %s (%s), bundled by gen.sh - do not edit\n' "$SRVX" "$rt"; cat "$t/$rt.mjs"; } > "$rt.mjs"
+  { printf '// homeport: server.mjs with srvx %s (%s), bundled by gen.sh with Bun %s - do not edit\n' "$SRVX" "$rt" "$BUN"; cat "$t/$rt.mjs"; } > "$rt.mjs"
 done

@@ -106,8 +106,13 @@ func TestTanStackStartWithNothingToServeItGetsHomeportsServer(t *testing.T) {
 			at += i
 		}
 	}
+	// a Vite base is the server's: its files are under it
+	p := detect(t, js(react, "vite.config.ts", "export default defineConfig({ base: '/app/', plugins: [tanstackStart({ router: { basepath: '/app' } })] })\n"), buildplan.Settings{})
+	if p.Run != "--import ./.homeport/boot.mjs .homeport/tanstack-start.mjs /app/" {
+		t.Errorf("base: %+v", p)
+	}
 	// a start command of the person's own still wins
-	p := detect(t, js(react), buildplan.Settings{Run: "--import ./.homeport/boot.mjs server.mjs"})
+	p = detect(t, js(react), buildplan.Settings{Run: "--import ./.homeport/boot.mjs server.mjs"})
 	if p.Run != "--import ./.homeport/boot.mjs server.mjs" || strings.Contains(p.Command, "tanstack-start.mjs") {
 		t.Errorf("set run: %+v", p)
 	}
@@ -143,9 +148,11 @@ func tanStackServer(t *testing.T, rt string) string {
 }
 
 // homeport's server serves dist/client's files - hashed assets cached for
-// good, each with its type - and hands every other request to the
-// handler, with the URL the browser used (the edge's X-Forwarded-Proto and
-// X-Forwarded-Host), on PORT and HOST, on Node and Bun.
+// good, each with its type, under the Vite base it's given - and hands
+// every other request to the handler, with the URL the browser used: the
+// Host, and the scheme from X-Forwarded-Proto. A visitor's X-Forwarded-Host
+// and X-Forwarded-For change nothing. It caps request bodies, shows no
+// error pages, and listens on PORT and HOST, on Node and Bun.
 func TestHomeportsTanStackStartServer(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, body string) {
@@ -166,10 +173,11 @@ func TestHomeportsTanStackStartServer(t *testing.T) {
 	write("dist/server/server.js", `export default { async fetch(req) {
   const u = new URL(req.url)
   if (u.pathname === "/nope") return new Response("not found", { status: 404, headers: { "content-type": "text/html" } })
+  if (u.pathname === "/crash") throw new Error("kaboom")
   const h = new Headers({ "content-type": "application/json" })
   h.append("set-cookie", "a=1; Path=/")
   h.append("set-cookie", "b=2; Path=/")
-  return new Response(JSON.stringify({ url: req.url, method: req.method, body: await req.text() }), { headers: h })
+  return new Response(JSON.stringify({ url: req.url, method: req.method, ip: req.ip ?? null, body: await req.text() }), { headers: h })
 } }
 `)
 	ran := 0
@@ -180,21 +188,33 @@ func TestHomeportsTanStackStartServer(t *testing.T) {
 		}
 		ran++
 		write(".homeport/tanstack-start.mjs", tanStackServer(t, rt))
-		cmd := exec.Command(bin, ".homeport/tanstack-start.mjs")
-		cmd.Dir, cmd.Env = dir, append(os.Environ(), "PORT="+port, "HOST=127.0.0.1", "NODE_ENV=production")
 		var out strings.Builder
-		cmd.Stdout, cmd.Stderr = &out, &out
-		if err := cmd.Start(); err != nil {
-			t.Fatal(err)
-		}
-		base := "http://127.0.0.1:" + port
-		for i := 0; i < 100; i++ {
-			if r, err := http.Get(base + "/robots.txt"); err == nil {
-				r.Body.Close()
-				break
+		// start runs the server (with args), its env without NODE_ENV, so
+		// nothing depends on the app's
+		start := func(port string, args ...string) *exec.Cmd {
+			cmd := exec.Command(bin, append([]string{".homeport/tanstack-start.mjs"}, args...)...)
+			var env []string
+			for _, e := range os.Environ() {
+				if !strings.HasPrefix(e, "NODE_ENV=") {
+					env = append(env, e)
+				}
 			}
-			time.Sleep(50 * time.Millisecond)
+			cmd.Dir, cmd.Env = dir, append(env, "PORT="+port, "HOST=127.0.0.1", "BODY_SIZE_LIMIT=4096")
+			cmd.Stdout, cmd.Stderr = &out, &out
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 100; i++ {
+				if r, err := http.Get("http://127.0.0.1:" + port + "/x"); err == nil {
+					r.Body.Close()
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			return cmd
 		}
+		cmd := start(port)
+		base := "http://127.0.0.1:" + port
 		get := func(method, path, body string, h map[string]string) (*http.Response, string) {
 			req, _ := http.NewRequest(method, base+path, strings.NewReader(body))
 			for k, v := range h {
@@ -232,10 +252,25 @@ func TestHomeportsTanStackStartServer(t *testing.T) {
 				t.Errorf("%s: %s: %q", rt, path, b)
 			}
 		}
-		// the URL is the browser's, through the edge
-		r, b = get("POST", "/_serverFn/abc?x=1", "payload", map[string]string{"Host": "app.example.com", "X-Forwarded-Proto": "https", "X-Forwarded-Host": "app.example.com"})
+		// the URL is the browser's, through the edge: its Host, https
+		r, b = get("POST", "/_serverFn/abc?x=1", "payload", map[string]string{"Host": "app.example.com", "X-Forwarded-Proto": "https"})
 		if r.StatusCode != 200 || !strings.Contains(b, `"url":"https://app.example.com/_serverFn/abc?x=1"`) || !strings.Contains(b, `"method":"POST"`) || !strings.Contains(b, `"body":"payload"`) {
 			t.Errorf("%s: handler %d %q", rt, r.StatusCode, b)
+		}
+		// a visitor's own X-Forwarded-Host and X-Forwarded-For, kept by
+		// proxies that trust their peer, are ignored
+		_, b = get("GET", "/reset", "", map[string]string{"Host": "app.example.com", "X-Forwarded-Proto": "https",
+			"X-Forwarded-Host": "evil.example, app.example.com", "X-Forwarded-For": "6.6.6.6, 1.2.3.4, 10.0.0.2"})
+		if !strings.Contains(b, `"url":"https://app.example.com/reset"`) || strings.Contains(b, "evil") || strings.Contains(b, "6.6.6.6") {
+			t.Errorf("%s: spoofed: %q", rt, b)
+		}
+		// an error is a bare 500, with no development page, whatever NODE_ENV
+		if r, b := get("GET", "/crash", "", nil); r.StatusCode != 500 || strings.Contains(b, "kaboom") || strings.Contains(b, "server.js") {
+			t.Errorf("%s: crash %d %q", rt, r.StatusCode, b)
+		}
+		// BODY_SIZE_LIMIT caps a body
+		if r, b := get("POST", "/upload", strings.Repeat("x", 10000), nil); r.StatusCode == 200 {
+			t.Errorf("%s: a body past the limit: %d %q", rt, r.StatusCode, b[:min(len(b), 80)])
 		}
 		if c := r.Header.Values("Set-Cookie"); len(c) != 2 {
 			t.Errorf("%s: cookies %v", rt, c)
@@ -253,6 +288,22 @@ func TestHomeportsTanStackStartServer(t *testing.T) {
 		}
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
+
+		// under a Vite base, the files are under it
+		based := map[string]string{"node": "39883", "bun": "39884"}[rt]
+		cmd = start(based, "/app/")
+		base = "http://127.0.0.1:" + based
+		if r, b := get("GET", "/app/assets/main-B2jnoNjx.js", "", nil); r.StatusCode != 200 || b != "console.log(1)" || r.Header.Get("Cache-Control") != "max-age=31536000, immutable" {
+			t.Errorf("%s: base asset %d %v %q", rt, r.StatusCode, r.Header, b)
+		}
+		if r, b := get("GET", "/app/robots.txt", "", nil); r.StatusCode != 200 || b != "User-agent: *" {
+			t.Errorf("%s: base robots %d %q", rt, r.StatusCode, b)
+		}
+		if _, b := get("GET", "/assets/main-B2jnoNjx.js", "", nil); !strings.Contains(b, `"method":"GET"`) {
+			t.Errorf("%s: outside the base: %q", rt, b)
+		}
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 	}
 	if ran == 0 {
 		t.Skip("no node or bun here")
@@ -265,6 +316,21 @@ func TestTanStackStartOnAnotherPlatformsNitroPresetIsRefused(t *testing.T) {
 		"vite.config.ts", "export default defineConfig({ plugins: [tanstackStart(), nitro({ preset: 'vercel' })] })\n")), buildplan.Settings{})
 	if err == nil || !strings.Contains(err.Error(), "vercel") || !strings.Contains(err.Error(), "node-server") {
 		t.Fatalf("%v", err)
+	}
+	// in nitro.config, Nitro's own config file, too
+	_, err = buildplan.Detect(repo(js(`{"scripts":{"build":"vite build"},"dependencies":{"@tanstack/react-start":"^1","nitro":"^3"}}`,
+		"vite.config.ts", "export default defineConfig({ plugins: [tanstackStart(), nitro()] })\n", "nitro.config.ts", "export default defineConfig({ preset: `netlify` })\n")), buildplan.Settings{})
+	if err == nil || !strings.Contains(err.Error(), "netlify") || !strings.Contains(err.Error(), "nitro.config.ts") {
+		t.Fatalf("nitro.config: %v", err)
+	}
+	// node-cluster writes .output/server/index.mjs, as node-server does; bun
+	// in nitro.config is Bun
+	for preset, rt := range map[string]string{"node-cluster": "node", "node_cluster": "node", "bun": "bun"} {
+		p := detect(t, js(`{"scripts":{"build":"vite build"},"dependencies":{"@tanstack/react-start":"^1","nitro":"^3"}}`,
+			"vite.config.ts", "export default defineConfig({ plugins: [tanstackStart(), nitro()] })\n", "nitro.config.mjs", "export default { preset: '"+preset+"' }\n"), buildplan.Settings{})
+		if p.Runtime != rt || p.Run != map[string]string{"node": "--import", "bun": "--preload"}[rt]+" ./.homeport/boot.mjs server/index.mjs" {
+			t.Errorf("%s: %+v", preset, p)
+		}
 	}
 	// a preset elsewhere in the config (a comment, another plugin) isn't Nitro's
 	p := detect(t, js(`{"scripts":{"build":"vite build"},"dependencies":{"@tanstack/react-start":"^1","nitro":"^3"}}`,

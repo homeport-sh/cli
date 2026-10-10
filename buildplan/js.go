@@ -99,9 +99,11 @@ type preset struct {
 	env map[string]string
 }
 
-// forwarded: the origin from homeport's proxy (it terminates TLS and sets
-// X-Forwarded-Proto and X-Forwarded-Host), for SvelteKit's adapters
-var forwarded = map[string]string{"PROTOCOL_HEADER": "x-forwarded-proto", "HOST_HEADER": "x-forwarded-host"}
+// forwarded: the scheme from homeport's edge, which terminates TLS, for
+// SvelteKit's adapters. The host is the request's Host, the one the edge
+// routed on: X-Forwarded-Host is a visitor's to set (proxies that trust
+// their peer keep it), so HOST_HEADER isn't.
+var forwarded = map[string]string{"PROTOCOL_HEADER": "x-forwarded-proto"}
 
 // presets, most specific first: a Nuxt app depends on h3, a NestJS one on
 // express.
@@ -140,6 +142,7 @@ var (
 	entryFileRe   = regexp.MustCompile(`^\S+\.(m|c)?(j|t)sx?$`)
 	viteConfigs   = []string{"vite.config.js", "vite.config.ts", "vite.config.mjs", "vite.config.mts"}
 	nuxtConfigs   = []string{"nuxt.config.ts", "nuxt.config.js", "nuxt.config.mjs", "nuxt.config.mts"}
+	nitroConfigs  = []string{"nitro.config.ts", "nitro.config.js", "nitro.config.mjs", "nitro.config.mts"}
 	svelteConfigs = append([]string{"svelte.config.js"}, viteConfigs...)
 	nextConfigs   = []string{"next.config.js", "next.config.mjs", "next.config.ts", "next.config.cjs", "next.config.mts"}
 )
@@ -418,11 +421,22 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		return nil
 	}
 
+	// a SvelteKit app builds with the adapter its config imports: one
+	// installed but not imported isn't its
+	svelteAdapters := r.svelteAdapters()
+	if slices.Contains(svelteAdapters, "@orochibraru/svelte-smol") {
+		return errors.New("svelte-smol isn't supported: SvelteKit's own Bun adapter compiles an app - use @sveltejs/adapter-bun with buildOptions.compile")
+	}
 	var pr *preset
 	for _, c := range presets {
-		// with both SvelteKit adapters installed, the one the config imports
-		if c.deps[0] == "@sveltejs/adapter-bun" && deps["@sveltejs/adapter-node"] && r.svelteImports("@sveltejs/adapter-node") && !r.svelteImports(c.deps[0]) {
-			continue
+		if c.p.name == "SvelteKit" {
+			if len(svelteAdapters) > 0 && !slices.Contains(svelteAdapters, c.deps[0]) {
+				continue
+			}
+			// both server adapters and no config to say: adapter-node
+			if len(svelteAdapters) == 0 && c.deps[0] == "@sveltejs/adapter-bun" && deps["@sveltejs/adapter-node"] {
+				continue
+			}
 		}
 		if slices.ContainsFunc(c.deps, func(d string) bool { return deps[d] }) {
 			pr = &c.p
@@ -537,13 +551,8 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 	case pr != nil && pr.name == "SvelteKit":
 		// the adapter's out: in svelte.config.js, or (SvelteKit 3) in the
 		// sveltekit() plugin's options in the Vite config
-		for _, f := range svelteConfigs {
-			if b, err := r.read(f); err == nil {
-				if m := adapterOutRe.FindSubmatch(adapterCall(b)); m != nil && relPath(string(m[1])) {
-					entry = clean(string(m[1])) + "/index.js"
-					break
-				}
-			}
+		if m := adapterOutRe.FindSubmatch(r.svelteAdapterCall(pr)); m != nil && relPath(string(m[1])) {
+			entry = clean(string(m[1])) + "/index.js"
 		}
 	case pr != nil && pr.name == "Astro":
 		for _, f := range []string{"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"} {
@@ -579,6 +588,12 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		// nothing says it's a server: a guess, as before - a binary its
 		// build makes, else a site folder
 		return r.guess(p, pkg, pmName)
+	}
+	if tanStackServer {
+		// a Vite base: the server serves the client's files under it
+		if b := r.viteBase(); b != "" {
+			args = []string{b}
+		}
 	}
 	if entry != "" && (!relPath(entry) || strings.HasPrefix(entry, "/")) {
 		return fmt.Errorf("the start script runs %q, which isn't a file in the app's folder", entry)
@@ -645,6 +660,11 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		}
 	}
 	p.build, p.assemble = build, assemble(layout, m, rt, bin, sums, binName, keepMaps, env)
+	if pr != nil && pr.name == "SvelteKit" && entry != "" && binName == "" && settingsRun == "" && cfg.Run == "" {
+		// what it starts is the adapter's: missing, the build fails here,
+		// not the deploy
+		p.assemble = join(`{ [ -f `+entry+` ] || { echo 'homeport: the build made no `+entry+` - is the adapter in the config the one installed, and its out this?' >&2; exit 1; }; }`, p.assemble)
+	}
 	if tanStackServer {
 		p.assemble = join(`{ [ -f dist/server/server.js ] || { echo 'homeport: the build made no dist/server/server.js' >&2; exit 1; }; }`,
 			p.assemble, "printf '%s' '"+tanStackServerFor(rt)+"' | base64 -d | gzip -dc > "+BundleDir+"/"+tanStackServerFile)
@@ -782,14 +802,14 @@ func (r reader) siteToolchain(p *Plan, pkg pkgJSON, pmName string) error {
 func (r reader) nitroInline(framework string) error {
 	where, files := "nuxt.config's nitro options", nuxtConfigs
 	if framework != "Nuxt" {
-		where, files = "the nitro() plugin's options in vite.config", viteConfigs
+		where, files = "the nitro() plugin's options in vite.config, or nitro.config", slices.Concat(viteConfigs, nitroConfigs)
 	}
 	for _, f := range files {
 		b, err := r.read(f)
 		if err != nil {
 			continue
 		}
-		if framework != "Nuxt" {
+		if slices.Contains(viteConfigs, f) {
 			b = callText(b, nitroCallRe)
 		}
 		if inlineRe.Match(stripComments(b)) {
@@ -800,26 +820,58 @@ func (r reader) nitroInline(framework string) error {
 		"set serveStatic: 'inline' in %s, so they're in the binary", where)
 }
 
-// svelteImports: a SvelteKit config imports the package.
-func (r reader) svelteImports(pkg string) bool {
+var svelteAdapterImportRe = regexp.MustCompile("\\bfrom\\s*['\"`](@sveltejs/adapter-[a-z0-9-]+|@orochibraru/svelte-smol)['\"`]")
+
+// svelteAdapters: the SvelteKit adapters a config imports.
+func (r reader) svelteAdapters() []string {
+	var out []string
 	for _, f := range svelteConfigs {
-		if b, err := r.read(f); err == nil && strings.Contains(string(stripComments(b)), pkg) {
-			return true
+		if b, err := r.read(f); err == nil {
+			for _, m := range svelteAdapterImportRe.FindAllSubmatch(stripComments(b), -1) {
+				if !slices.Contains(out, string(m[1])) {
+					out = append(out, string(m[1]))
+				}
+			}
 		}
 	}
-	return false
+	return out
 }
 
-// svelteBunCall: the adapter( call's text in the config that imports
-// adapter-bun; nil without one.
-func (r reader) svelteBunCall() []byte {
+// svelteAdapterCallOf: the text of the call of package pkg's default
+// import - adapter( ... ), bun( ... ), whatever it's named - in the config
+// that imports it; else the first adapter( call; nil without one.
+func (r reader) svelteAdapterCallOf(pkg string) []byte {
+	importRe := regexp.MustCompile("\\bimport\\s+([A-Za-z_$][\\w$]*)\\s*(?:,\\s*\\{[^}]*\\}\\s*)?from\\s*['\"`]" + regexp.QuoteMeta(pkg) + "['\"`]")
 	for _, f := range svelteConfigs {
-		if b, err := r.read(f); err == nil && strings.Contains(string(stripComments(b)), "@sveltejs/adapter-bun") {
-			return adapterCall(b)
+		b, err := r.read(f)
+		if err != nil {
+			continue
+		}
+		b = stripComments(b)
+		if m := importRe.FindSubmatch(b); m != nil {
+			return callText(b, regexp.MustCompile("(?:^|[^\\w$.])"+regexp.QuoteMeta(string(m[1]))+"\\s*\\("))
+		}
+	}
+	for _, f := range svelteConfigs {
+		if b, err := r.read(f); err == nil {
+			if c := adapterCall(b); c != nil {
+				return c
+			}
 		}
 	}
 	return nil
 }
+
+// svelteAdapterCall: the call of the preset's adapter.
+func (r reader) svelteAdapterCall(pr *preset) []byte {
+	if pr.only {
+		return r.svelteAdapterCallOf("@sveltejs/adapter-bun")
+	}
+	return r.svelteAdapterCallOf("@sveltejs/adapter-node")
+}
+
+// svelteBunCall: adapter-bun's call.
+func (r reader) svelteBunCall() []byte { return r.svelteAdapterCallOf("@sveltejs/adapter-bun") }
 
 // svelteBun: adapter-bun's env defaults under its envPrefix, when it has one:
 // it reads <prefix>PORT and <prefix>HOST, and refuses unknown prefixed
@@ -860,7 +912,12 @@ func (r reader) svelteBunCompiled() (compiledServer, bool) {
 	}
 	switch {
 	case target != "" && (!strings.HasPrefix(target, "bun-linux-") || strings.Contains(target, "musl")):
-		c.err = fmt.Errorf("adapter-bun compiles for %s, which homeport's Linux (glibc) can't run: drop the target, so it compiles for the build's own machine, or name a bun-linux-x64 or bun-linux-arm64 one", target)
+		c.err = fmt.Errorf("adapter-bun compiles for %s, which homeport's Linux (glibc) can't run: drop the target, so it compiles for the machine it builds on", target)
+	case target != "":
+		// a Linux target is this machine's or it won't run here: checked
+		// before the build
+		machine := map[bool]string{true: "aarch64", false: "x86_64"}[strings.HasPrefix(target, "bun-linux-arm64") || strings.HasPrefix(target, "bun-linux-aarch64")]
+		c.build = join(`{ [ "$(uname -m)" = `+machine+` ] || { echo "homeport: adapter-bun compiles for `+target+`, and this machine is $(uname -m): drop the target, so it compiles for the machine it builds on" >&2; exit 1; }; }`, c.build)
 	case envPrefixRe.Match(call) && len(envPrefixRe.FindSubmatch(call)[1]) > 0:
 		prefix := string(envPrefixRe.FindSubmatch(call)[1])
 		c.err = fmt.Errorf("adapter-bun's envPrefix makes the compiled server listen on %sPORT and %sHOST, and homeport sets PORT and HOST: drop envPrefix, or don't compile (the bundle sets the prefixed names for you)", prefix, prefix)
@@ -896,6 +953,20 @@ func tanStackServerFor(rt string) string {
 	return base64.StdEncoding.EncodeToString(b.Bytes())
 }
 
+var viteBaseRe = regexp.MustCompile("\\bbase\\s*:\\s*['\"`](/[A-Za-z0-9._~/-]*)['\"`]")
+
+// viteBase: the Vite config's base, when it's a path other than /.
+func (r reader) viteBase() string {
+	for _, f := range viteConfigs {
+		if b, err := r.read(f); err == nil {
+			if m := viteBaseRe.FindSubmatch(stripComments(b)); m != nil && string(m[1]) != "/" && !strings.Contains(string(m[1]), "..") {
+				return string(m[1])
+			}
+		}
+	}
+	return ""
+}
+
 // tanStackStart: a TanStack Start app built with Nitro's Vite plugin (its
 // nitro package) ships Nitro's .output, as Nuxt does, on Bun when the
 // plugin's preset is bun. Without Nitro, vite build makes
@@ -907,19 +978,25 @@ func (r reader) tanStackStart(p preset, deps map[string]bool) (*preset, error) {
 		return &p, nil
 	}
 	p.layout, p.entry = "output", "server/index.mjs"
-	for _, f := range viteConfigs {
+	// the nitro() plugin's options, then Nitro's own nitro.config
+	for _, f := range slices.Concat(viteConfigs, nitroConfigs) {
 		b, err := r.read(f)
 		if err != nil {
 			continue
 		}
-		if m := presetRe.FindSubmatch(callText(b, nitroCallRe)); m != nil {
-			switch preset := strings.ReplaceAll(string(m[1]), "_", "-"); preset {
-			case "bun":
-				p.needs = "bun"
-			case "node-server", "node":
-			default:
-				return nil, fmt.Errorf("%s builds with Nitro's %s preset, which makes no server homeport runs: drop the preset (node-server is Nitro's default), or set 'node-server' or 'bun'", f, preset)
-			}
+		if slices.Contains(viteConfigs, f) {
+			b = callText(b, nitroCallRe)
+		}
+		m := presetRe.FindSubmatch(stripComments(b))
+		if m == nil {
+			continue
+		}
+		switch preset := strings.ReplaceAll(string(m[1]), "_", "-"); preset {
+		case "bun":
+			p.needs = "bun"
+		case "node-server", "node", "node-cluster":
+		default:
+			return nil, fmt.Errorf("%s builds with Nitro's %s preset, which makes no server homeport runs: drop the preset (node-server is Nitro's default), or set 'node-server' or 'bun'", f, preset)
 		}
 		break
 	}
@@ -1040,12 +1117,12 @@ var (
 	lineCommentRe = regexp.MustCompile(`(?m)(^|[\s;,{}()\[\]])//.*$`)
 	adapterCallRe = regexp.MustCompile(`\badapter\s*\(`)
 	nitroCallRe   = regexp.MustCompile(`\bnitro\s*\(`)
-	inlineRe      = regexp.MustCompile(`\bserveStatic\s*:\s*['"]inline['"]`)
+	inlineRe      = regexp.MustCompile("\\bserveStatic\\s*:\\s*['\"`]inline['\"`]")
 	envPrefixRe   = regexp.MustCompile(`\benvPrefix\s*:\s*['"]([^'"]*)['"]`)
 	// buildOptions.compile: true, false, a target, or options
 	compileRe       = regexp.MustCompile(`\bcompile\s*:\s*(?:(true|false)|['"]([^'"]*)['"]|\{)`)
 	compileTargetRe = regexp.MustCompile(`\btarget\s*:\s*['"]([^'"]+)['"]`)
-	presetRe        = regexp.MustCompile(`\bpreset\s*:\s*['"]([^'"]+)['"]`)
+	presetRe        = regexp.MustCompile("\\bpreset\\s*:\\s*['\"`]([^'\"`]+)['\"`]")
 )
 
 // stripComments is config code without its comments.
@@ -1296,7 +1373,9 @@ func nodeSum(v string) map[string]string {
 	return nil
 }
 
-// boot is .homeport/boot.mjs, run before the app (--import, --preload):
+// boot is .homeport/boot.mjs, run before the app (--import, --preload)
+// (an env default's value "$X" is X's value: presets only, never the
+// app's own env, so no literal value starts with $):
 // the framework's env defaults (the app's own env wins); Node's compile
 // cache in the release's writable folder, flushed once the app has loaded
 // (a stopped app is sent SIGTERM, which wouldn't flush it); and a server

@@ -30,9 +30,11 @@ server. That happens in three ways:
     `buildOptions.compile` set (`true`, a target, or options) writes one
     executable with the client assets in it: `<out>/server`, or the
     `outfile` you give it. It builds with `bun run --bun build`, as the
-    adapter needs. A target must be a Linux glibc one (`bun-linux-x64`,
-    `bun-linux-arm64`), and `envPrefix` is refused with `compile` (see
-    *SvelteKit on Bun* below).
+    adapter needs. A target must be a Linux glibc one for the machine it
+    builds on (`bun-linux-x64` on x86_64, `bun-linux-arm64` on aarch64,
+    checked before the build), and `envPrefix` is refused with `compile`
+    (see *SvelteKit on Bun* below). svelte-smol isn't supported: a project
+    importing it is refused, pointing at adapter-bun.
   - next-bun-compile is a Next.js build adapter (set by `adapterPath` in
     next.config, or `NEXT_ADAPTER_PATH=next-bun-compile`) and writes
     `./server`.
@@ -47,7 +49,7 @@ server. That happens in three ways:
   kept:
 
   ```
-  "build": "nuxt build --preset bun && bun build --compile --production .output/server/index.mjs --outfile server"
+  "build": "nuxt build --preset bun && bun build --compile --production .output/server/index.mjs --outfile dist/app"
   ```
 - **`bun build --compile` in an app with no framework**, when it has no
   start script or its start script runs the compiled file. If the start
@@ -83,6 +85,12 @@ health path (`/`). Each one can be overridden in the build settings.
 | Hono, Fastify, Express, Koa | the package | the app with production dependencies | the start script, else `main` |
 | Bun, Node | nothing above | the app with production dependencies | the start script, else `main` |
 
+**Which SvelteKit adapter.** The adapter the config imports is the one the
+app builds with. One that's installed but not imported is ignored, so a
+config importing `adapter-static` is a site even with `adapter-node` or
+`adapter-bun` installed. With both server adapters installed and no
+config to say, it's adapter-node.
+
 Static sites are still detected first: SvelteKit with `adapter-static`,
 Astro without a server adapter, Vite, and Next.js with `output: "export"`
 (served from `out/`). A Vite app with TanStack Router but not TanStack
@@ -93,8 +101,14 @@ plugin (`nitro` installed, `nitro()` from `nitro/vite` in `vite.config`'s
 plugins), as TanStack's Node and Bun hosting guides use. homeport then
 ships Nitro's `.output/` and starts `server/index.mjs`, on Node, or on Bun
 with `nitro({ preset: 'bun' })` (or a start script that runs it with
-`bun`). A Nitro preset for another platform (`vercel`, `netlify`, …) is
-refused.
+`bun`). The preset is read from the `nitro()` plugin's options, then
+`nitro.config`. `node-server`, `node-cluster` and `bun` run here; a preset
+for another platform (`vercel`, `netlify`, …) is refused. Server functions
+check that a caller is same-origin by the browser's `Sec-Fetch-Site`
+header, or else its `Origin` against the request's URL. Nitro builds that
+URL from the connection, plain HTTP behind the edge, so current browsers,
+which all send `Sec-Fetch-Site`, pass, but an `Origin`-only caller gets a
+403.
 
 Without Nitro, which is how TanStack's starter (`@tanstack/cli create`)
 comes, the build's `dist/server/server.js` is a request handler, not a
@@ -110,11 +124,15 @@ needs no new dependency:
   (`max-age=31536000, immutable`); the rest are revalidated.
 - Every other request goes to the handler's `fetch()`, which renders
   pages, answers server functions and says 404.
-- The request's URL is the one the browser used: the scheme and host
-  from the edge's `X-Forwarded-Proto` and `X-Forwarded-Host`. TanStack
-  checks that a server function's caller is same-origin by the browser's
-  `Sec-Fetch-Site` header, or else its `Origin` against that URL, so both
-  pass behind the edge, which terminates TLS.
+- The request's URL is the one the browser used: its `Host`, which is the
+  host the edge routed on, and the scheme from the edge's
+  `X-Forwarded-Proto` (the edge terminates TLS). `X-Forwarded-Host` and
+  `X-Forwarded-For` aren't read, because a visitor can set them and
+  proxies that trust their peer pass them on. So both of TanStack's
+  same-origin checks, `Sec-Fetch-Site` and `Origin`, pass behind the edge.
+- With a Vite `base` (`base: '/app/'`), the files are served under it.
+- It caps a request's body at 128 MiB, or `BODY_SIZE_LIMIT` bytes, and an
+  error is a bare 500 with no development page, whatever `NODE_ENV` says.
 - It listens on `PORT` and `HOST`.
 - It runs on the project's runtime, by the rules below. When none of them
   says, which is the usual case since there's no start script, it runs on
@@ -125,27 +143,29 @@ It's a bundle, not a binary, since the handler imports the app's
 production dependencies at runtime. With Nitro installed, Nitro's output
 is what runs, as above. A start script of your own (or a start
 command) replaces it. srvx and TanStack's Bun `server.ts` build the request
-URL from the connection, which is plain HTTP behind the edge: server
-functions still work from current browsers, which send `Sec-Fetch-Site`,
-but an `Origin`-only caller gets a 403. srvx's `trustProxy` option, in a
-server entry of yours, makes it read the forwarded headers; or drop the
-start script and homeport's server serves the build.
+URL from the connection, which is plain HTTP behind the edge, so an
+`Origin`-only caller gets a 403 there too, as with Nitro. Don't turn on
+srvx's `trustProxy` for it: that reads `X-Forwarded-Host` too, which a
+visitor sets. Drop the start script and homeport's server serves the
+build instead.
 
 **SvelteKit on Bun.** `@sveltejs/adapter-bun` writes a `Bun.serve` server,
 so it always runs on Bun: an `.nvmrc` doesn't change that, and setting the
 runtime to `node` is refused. It builds with `bun run --bun build`, since
 the adapter calls Bun's build API and Vite's own command would run on
-Node. The adapter is read from the config that imports it (`vite.config`
-or `svelte.config.js`); with both adapter-node and adapter-bun installed,
-the one the config imports wins. homeport's edge terminates TLS and sets
-`X-Forwarded-Proto` and `X-Forwarded-Host`, so the bundle gets
-`PROTOCOL_HEADER` and `HOST_HEADER` (below). A compiled one, which has no
-boot, relies on the adapter's own default, the `Host` header with `https`,
+Node. Its options are read from its call in the config that imports it
+(`vite.config` or `svelte.config.js`), whatever the import is named
+(`import bun from '@sveltejs/adapter-bun'`), and the build fails if the
+adapter didn't write the file the plan starts. homeport's edge terminates
+TLS and sets `X-Forwarded-Proto`, so the bundle gets `PROTOCOL_HEADER`
+(below). The host is the request's `Host`, the one the edge routed on.
+`HOST_HEADER` isn't set, for adapter-bun or adapter-node, because a
+visitor can set `X-Forwarded-Host`. A compiled server, which has no boot,
+relies on the adapter's own default, the `Host` header with `https`,
 which is what the edge sends. With `envPrefix`, the adapter reads
 `<prefix>PORT` and `<prefix>HOST` and fails on unknown names with that
 prefix, so the bundle sets `<prefix>PORT` and `<prefix>HOST` from
-homeport's `PORT` and `HOST`, and the forwarded-header names with the
-prefix too. A compiled server can't be given them, so `envPrefix` with
+homeport's `PORT` and `HOST`, and `<prefix>PROTOCOL_HEADER`. A compiled server can't be given them, so `envPrefix` with
 `compile` is refused. Set `BODY_SIZE_LIMIT` (default `512K`), with the
 prefix if you use one, as an environment variable of the app.
 
@@ -187,8 +207,9 @@ applies wins:
    which is refused.
 7. **Otherwise Node.**
 
-The lockfile decides only how dependencies install, never what runs, except for homeport's TanStack Start server (rule 5), which has nothing else to go by. A
-Next.js app with `bun.lock` and `next start` installs with Bun and runs on
+The lockfile decides only how dependencies install, never what runs,
+except for homeport's TanStack Start server (rule 5), which has nothing
+else to go by. A Next.js app with `bun.lock` and `next start` installs with Bun and runs on
 Node. `packageManager` names an installer, so it isn't read as a runtime
 either.
 
@@ -265,10 +286,9 @@ no source maps unless the app starts with `--enable-source-maps`. Its
 `boot.mjs` does three things before the app starts:
 
 - It sets the framework's env defaults. Your own env wins. SvelteKit gets
-  `PROTOCOL_HEADER` and `HOST_HEADER`, so it knows its origin from
-  homeport's proxy. With adapter-bun's `envPrefix`, those names carry the
-  prefix, and `<prefix>PORT` and `<prefix>HOST` are set from `PORT` and
-  `HOST`.
+  `PROTOCOL_HEADER`, so it knows its scheme from homeport's proxy. With
+  adapter-bun's `envPrefix`, that name carries the prefix, and
+  `<prefix>PORT` and `<prefix>HOST` are set from `PORT` and `HOST`.
 - It turns on Node's compile cache in `homeport-cache/`. That's a writable
   folder of the release, so it survives the app sleeping and waking. The
   cache is flushed 5s and 60s after the app starts, because a stopped app
