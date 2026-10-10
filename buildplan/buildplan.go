@@ -214,7 +214,7 @@ var SiteFolders = []string{"build", "dist", "out"}
 func Files() []string {
 	return slices.Concat([]string{ConfigFile, "go.mod", "composer.json", "composer.lock", "package.json", "bun.lock", "bun.lockb",
 		"package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", ".nvmrc", ".node-version", ".bun-version", "index.html",
-		"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"}, svelteConfigs, nextConfigs)
+		"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"}, svelteConfigs, nextConfigs, nuxtConfigs)
 }
 
 var (
@@ -552,8 +552,8 @@ func (r reader) rscKit(p *Plan, cfg fileConfig) {
 }
 
 // servers are packages that mean the app runs a server, not a site.
-var servers = []string{"@rsc-kit/core", "next", "nuxt", "@remix-run/node", "@react-router/node", "@tanstack/react-start",
-	"hono", "express", "elysia", "fastify", "koa", "@nestjs/core", "@sveltejs/adapter-node", "@astrojs/node"}
+var servers = []string{"@rsc-kit/core", "next", "nuxt", "@remix-run/node", "@react-router/node", "@tanstack/react-start", "@tanstack/solid-start",
+	"hono", "express", "elysia", "fastify", "koa", "@nestjs/core", "@sveltejs/adapter-node", "@sveltejs/adapter-bun", "@astrojs/node"}
 
 // site recognises a JavaScript project whose build is a static site, from its
 // packages and config: where the site lands, unless something said otherwise.

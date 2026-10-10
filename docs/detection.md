@@ -25,15 +25,34 @@ uses as `bin`. homeport runs the app the way its start script does.
 It ships a **binary** only when the project's own build compiles its
 server. That happens in three ways:
 
-- **A tool that compiles it.** next-bun-compile is a Next.js build adapter
-  (set by `adapterPath` in next.config, or `NEXT_ADAPTER_PATH=next-bun-compile`)
-  and writes `./server`. svelte-smol is a SvelteKit adapter that writes
-  `<out>/server`, or the `outfile`/`name` you give it. On SvelteKit 2 it
-  serves `client/` and `prerendered/` from beside the binary, so homeport
-  ships that folder as a bundle, with the binary as its `bin`.
-- **`bun build --compile` of the framework's own server output**, such as
-  Nitro's `.output/server/index.mjs` from `nuxt build --preset bun`.
-  homeport runs the file that `--outfile` names.
+- **A tool that compiles it.**
+  - SvelteKit's own Bun adapter, `@sveltejs/adapter-bun`, with
+    `buildOptions.compile` set (`true`, a target, or options) writes one
+    executable with the client assets in it: `<out>/server`, or the
+    `outfile` you give it. It builds with `bun run --bun build`, as the
+    adapter needs. A target must be a Linux glibc one (`bun-linux-x64`,
+    `bun-linux-arm64`), and `envPrefix` is refused with `compile` (see
+    *SvelteKit on Bun* below).
+  - next-bun-compile is a Next.js build adapter (set by `adapterPath` in
+    next.config, or `NEXT_ADAPTER_PATH=next-bun-compile`) and writes
+    `./server`.
+  - svelte-smol is a SvelteKit adapter that writes `<out>/server`, or the
+    `outfile`/`name` you give it. On SvelteKit 2 it serves `client/` and
+    `prerendered/` from beside the binary, so homeport ships that folder as
+    a bundle, with the binary as its `bin`.
+- **`bun build --compile` of the framework's own server output**: Nitro's
+  `.output/server/index.mjs`, from Nuxt (`nuxt build --preset bun`) or
+  TanStack Start (`nitro({ preset: 'bun' })`). homeport runs the file that
+  `--outfile` names. Nitro serves its public assets from a folder beside
+  its server, and a binary has nothing beside it, so this is refused unless
+  Nitro inlines them: set `serveStatic: 'inline'` in Nuxt's `nitro`
+  options, or in the `nitro()` plugin's options in `vite.config`. For Nuxt,
+  compile with `--production`, so Bun resolves the production files Nitro
+  kept:
+
+  ```
+  "build": "nuxt build --preset bun && bun build --compile --production .output/server/index.mjs --outfile server"
+  ```
 - **`bun build --compile` in an app with no framework**, when it has no
   start script or its start script runs the compiled file. If the start
   script runs something else (`node dist/server.js`), the compile made a
@@ -56,6 +75,9 @@ health path (`/`). Each one can be overridden in the build settings.
 |---|---|---|---|
 | Next.js | `next` | `.next/standalone` with `.next/static` and `public/` | `server.js` |
 | Nuxt | `nuxt` | Nitro's `.output/` | `server/index.mjs` |
+| TanStack Start, with Nitro | `@tanstack/react-start` or `@tanstack/solid-start`, and `nitro` | Nitro's `.output/` | `server/index.mjs` |
+| TanStack Start, without Nitro | `@tanstack/react-start` or `@tanstack/solid-start` | the app with production dependencies | the start script |
+| SvelteKit on Bun | `@sveltejs/adapter-bun` | the app with production dependencies, on Bun | `build/index.js` (or the adapter's `out`) |
 | SvelteKit | `@sveltejs/adapter-node` | the app with production dependencies | `build/index.js` (or the adapter's `out`, from `svelte.config.js` or, in SvelteKit 3, the Vite config) |
 | Astro | `@astrojs/node`, standalone mode | the app with production dependencies | `dist/server/entry.mjs` |
 | React Router | `@react-router/*` | the app with production dependencies | the start script (`react-router-serve …`) |
@@ -67,7 +89,39 @@ health path (`/`). Each one can be overridden in the build settings.
 
 Static sites are still detected first: SvelteKit with `adapter-static`,
 Astro without a server adapter, Vite, and Next.js with `output: "export"`
-(served from `out/`).
+(served from `out/`). A Vite app with TanStack Router but not TanStack
+Start is a single-page app, so it's a static site too.
+
+**TanStack Start.** Its `vite build` makes a server only with Nitro's Vite
+plugin (`nitro` installed, `nitro()` from `nitro/vite` in `vite.config`'s
+plugins), as TanStack's Node and Bun hosting guides use. homeport then
+ships Nitro's `.output/` and starts `server/index.mjs`, on Node, or on Bun
+with `nitro({ preset: 'bun' })` (or a start script that runs it with
+`bun`). A Nitro preset for another platform (`vercel`, `netlify`, …) is
+refused. Without Nitro, the build's `dist/server/server.js` is a request
+handler, not a server, so the start script must serve it (`srvx --prod -s
+../client dist/server/server.js`, or TanStack's `bun run server.ts`). With
+neither, it's refused, saying to add Nitro. Server functions check that a
+call is same-origin with the browser's `Sec-Fetch-Site` header, which
+passes through homeport's edge as it is.
+
+**SvelteKit on Bun.** `@sveltejs/adapter-bun` writes a `Bun.serve` server,
+so it always runs on Bun: an `.nvmrc` doesn't change that, and setting the
+runtime to `node` is refused. It builds with `bun run --bun build`, since
+the adapter calls Bun's build API and Vite's own command would run on
+Node. The adapter is read from the config that imports it (`vite.config`
+or `svelte.config.js`); with both adapter-node and adapter-bun installed,
+the one the config imports wins. homeport's edge terminates TLS and sets
+`X-Forwarded-Proto` and `X-Forwarded-Host`, so the bundle gets
+`PROTOCOL_HEADER` and `HOST_HEADER` (below). A compiled one, which has no
+boot, relies on the adapter's own default, the `Host` header with `https`,
+which is what the edge sends. With `envPrefix`, the adapter reads
+`<prefix>PORT` and `<prefix>HOST` and fails on unknown names with that
+prefix, so the bundle sets `<prefix>PORT` and `<prefix>HOST` from
+homeport's `PORT` and `HOST`, and the forwarded-header names with the
+prefix too. A compiled server can't be given them, so `envPrefix` with
+`compile` is refused. Set `BODY_SIZE_LIMIT` (default `512K`), with the
+prefix if you use one, as an environment variable of the app.
 
 **Next.js.** If `next.config` doesn't set `output: "standalone"`, the build
 sets Next's default to standalone with `NEXT_PRIVATE_STANDALONE=1`. This
@@ -99,7 +153,10 @@ applies wins:
      script they name.
 5. **A framework that only runs on one runtime**: Elysia runs on Bun when
    nothing above said otherwise. A version file or start script that says
-   Node wins, as with any app.
+   Node wins, as with any app. SvelteKit's adapter-bun is the exception: it
+   builds a `Bun.serve` server, so it runs on Bun whatever rules 2 to 4
+   say, and only the build settings or `homeport.yaml` can say otherwise,
+   which is refused.
 6. **Otherwise Node.**
 
 The lockfile decides only how dependencies install, never what runs. A
@@ -111,10 +168,10 @@ The plan says which runtime it chose and why: `runtime`, `runtime_version`,
 `runtime_reason` (for example "its start script runs bun src/index.ts").
 
 **Bun compatibility.** homeport runs a framework on Bun only when your
-project does. Next.js, Nuxt, NestJS and the other Node frameworks target
-Node and run on Node by default. Running them with `bun --bun`, or with the
+project does. Next.js, Nuxt, TanStack Start, NestJS and the other Node
+frameworks target Node and run on Node by default. Running them with `bun --bun`, or with the
 runtime set to `bun`, uses Bun's Node compatibility, which is incomplete.
-Test that before you rely on it. Elysia and Bun's own `Bun.serve` need Bun.
+Test that before you rely on it. Elysia, SvelteKit's adapter-bun and Bun's own `Bun.serve` need Bun.
 
 ### Versions, pinned
 
@@ -181,7 +238,9 @@ no source maps unless the app starts with `--enable-source-maps`. Its
 
 - It sets the framework's env defaults. Your own env wins. SvelteKit gets
   `PROTOCOL_HEADER` and `HOST_HEADER`, so it knows its origin from
-  homeport's proxy.
+  homeport's proxy. With adapter-bun's `envPrefix`, those names carry the
+  prefix, and `<prefix>PORT` and `<prefix>HOST` are set from `PORT` and
+  `HOST`.
 - It turns on Node's compile cache in `homeport-cache/`. That's a writable
   folder of the release, so it survives the app sleeping and waking. The
   cache is flushed 5s and 60s after the app starts, because a stopped app
@@ -194,7 +253,8 @@ no source maps unless the app starts with `--enable-source-maps`. Its
 ### Binding
 
 homeport sets `PORT`, and sets `HOST` and `HOSTNAME` to `0.0.0.0`. Next.js,
-Nuxt (Nitro), SvelteKit, Astro and React Router read these. Your own server
+Nuxt and TanStack Start (Nitro), SvelteKit (adapter-node and adapter-bun),
+Astro and React Router read these. Your own server
 must listen on `$PORT`.
 
 ### The start command, without a shell

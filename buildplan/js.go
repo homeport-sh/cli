@@ -84,8 +84,20 @@ type preset struct {
 	layout string
 	entry  string // the file it starts, unless its start script says
 	needs  string // a runtime it can only run on
-	env    map[string]string
+	// only: it runs on needs whatever else says (why: the reason); else
+	// needs is only when nothing else says
+	only bool
+	why  string
+	// build: its build command, when it isn't the build script run as the
+	// package manager runs it
+	build string
+	// the boot's env defaults: a value "$X" is X's value
+	env map[string]string
 }
+
+// forwarded: the origin from homeport's proxy (it terminates TLS and sets
+// X-Forwarded-Proto and X-Forwarded-Host), for SvelteKit's adapters
+var forwarded = map[string]string{"PROTOCOL_HEADER": "x-forwarded-proto", "HOST_HEADER": "x-forwarded-host"}
 
 // presets, most specific first: a Nuxt app depends on h3, a NestJS one on
 // express.
@@ -95,12 +107,17 @@ var presets = []struct {
 }{
 	{[]string{"next"}, preset{name: "Next.js", layout: "standalone", entry: "server.js"}},
 	{[]string{"nuxt"}, preset{name: "Nuxt", layout: "output", entry: "server/index.mjs"}},
+	// Nitro's output when it builds with Nitro's Vite plugin, else the app
+	// (tanStackStart)
+	{[]string{"@tanstack/react-start", "@tanstack/solid-start"}, preset{name: "TanStack Start", layout: "app"}},
 	{[]string{"@react-router/dev", "@react-router/serve", "@react-router/node"}, preset{name: "React Router", layout: "app"}},
 	{[]string{"@remix-run/dev", "@remix-run/serve", "@remix-run/node"}, preset{name: "Remix", layout: "app"}},
+	// SvelteKit's Bun adapter: a Bun.serve server, built in Bun (svelteBun)
+	{[]string{"@sveltejs/adapter-bun"}, preset{name: "SvelteKit", layout: "app", entry: "build/index.js", needs: "bun", only: true,
+		why: "its adapter, adapter-bun, builds a Bun server", build: "bun run --bun build", env: forwarded}},
 	// adapter-node reads the origin from the forwarded headers homeport's
 	// proxy sets, when ORIGIN isn't
-	{[]string{"@sveltejs/adapter-node"}, preset{name: "SvelteKit", layout: "app", entry: "build/index.js",
-		env: map[string]string{"PROTOCOL_HEADER": "x-forwarded-proto", "HOST_HEADER": "x-forwarded-host"}}},
+	{[]string{"@sveltejs/adapter-node"}, preset{name: "SvelteKit", layout: "app", entry: "build/index.js", env: forwarded}},
 	{[]string{"@astrojs/node"}, preset{name: "Astro", layout: "app", entry: "dist/server/entry.mjs"}},
 	{[]string{"@nestjs/core"}, preset{name: "NestJS", layout: "app", entry: "dist/main.js"}},
 	{[]string{"elysia"}, preset{name: "Elysia", layout: "app", needs: "bun"}},
@@ -117,7 +134,9 @@ var (
 	adapterOutRe  = regexp.MustCompile(`\bout\s*:\s*['"]([^'"]+)['"]`)
 	outfileRe     = regexp.MustCompile(`--outfile(?:=|\s+)(\S+)`)
 	entryFileRe   = regexp.MustCompile(`^\S+\.(m|c)?(j|t)sx?$`)
-	svelteConfigs = []string{"svelte.config.js", "vite.config.js", "vite.config.ts", "vite.config.mjs", "vite.config.mts"}
+	viteConfigs   = []string{"vite.config.js", "vite.config.ts", "vite.config.mjs", "vite.config.mts"}
+	nuxtConfigs   = []string{"nuxt.config.ts", "nuxt.config.js", "nuxt.config.mjs", "nuxt.config.mts"}
+	svelteConfigs = append([]string{"svelte.config.js"}, viteConfigs...)
 	nextConfigs   = []string{"next.config.js", "next.config.mjs", "next.config.ts", "next.config.cjs", "next.config.mts"}
 )
 
@@ -397,15 +416,33 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 
 	var pr *preset
 	for _, c := range presets {
+		// with both SvelteKit adapters installed, the one the config imports
+		if c.deps[0] == "@sveltejs/adapter-bun" && deps["@sveltejs/adapter-node"] && r.svelteImports("@sveltejs/adapter-node") && !r.svelteImports(c.deps[0]) {
+			continue
+		}
 		if slices.ContainsFunc(c.deps, func(d string) bool { return deps[d] }) {
 			pr = &c.p
 			break
 		}
 	}
+	switch {
+	case pr != nil && pr.name == "TanStack Start":
+		if pr, err = r.tanStackStart(*pr, deps); err != nil {
+			return err
+		}
+	case pr != nil && pr.only && pr.name == "SvelteKit":
+		pr = r.svelteBun(*pr)
+	}
+	if pr != nil && pr.only && runtime != "" && runtime != pr.needs {
+		return fmt.Errorf("the runtime is %s (%s), but %s: it runs on %s only - set the runtime to %s, or leave it to detection", runtime, runtimeFrom, pr.why, title(pr.needs), pr.needs)
+	}
 
 	// the project's own build compiles its server: that binary is what runs
 	build := pkg.Scripts["build"]
 	if c := r.compiled(pkg, deps, pr, build); c.kind != "" && cfg.Build.Artifact == "" && cfg.Static == "" {
+		if c.err != nil {
+			return c.err
+		}
 		if runtime == "node" {
 			return fmt.Errorf("the runtime is node (%s), but %s: a compiled app runs on the Bun it was compiled with - set the runtime to bun, or leave it to detection", runtimeFrom, c.reason)
 		}
@@ -429,7 +466,7 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		}
 		p.Runtime, p.RuntimeVersion, p.RuntimeReason = "bun", BunVersion, c.reason
 		if p.Command == "" {
-			p.Command = m.run + " build"
+			p.Command = cmpOr(c.build, m.run+" build")
 		}
 		p.Artifact = c.artifact
 		if c.kind == Bundle {
@@ -523,6 +560,10 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		case errors.Is(stErr, errShell):
 			return fmt.Errorf("the start script (%s) needs a shell, which the sandbox doesn't have: set a start command - args to %s, like `%s` - "+
 				"and run anything before it (migrations) as the release command", st.says, rt, runArgs(rt, "server.js", nil, nil))
+		case pr != nil && pr.name == "TanStack Start":
+			return errors.New("TanStack Start's build makes dist/server/server.js, a request handler, not a server: build with Nitro " +
+				"(install nitro, and add nitro() from 'nitro/vite' to vite.config's plugins) and homeport runs its .output/server/index.mjs, " +
+				"or add a start script that serves it")
 		case pr != nil:
 			return fmt.Errorf("can't tell how this %s app starts: add a start script (like `%s server.js`), or set a start command", pr.name, rt)
 		}
@@ -575,6 +616,9 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 	build = cfg.Build.Command
 	if build == "" && pkg.Scripts["build"] != "" {
 		build = m.run + " build"
+		if pr != nil && pr.build != "" {
+			build = pr.build
+		}
 		if name == "Next.js" && !r.nextStandalone() {
 			// Next's own default, when the config doesn't say
 			build = "NEXT_PRIVATE_STANDALONE=1 " + build
@@ -629,6 +673,9 @@ func runArgs(rt, entry string, flags, args []string) string {
 func (r reader) runtimeFor(pkg pkgJSON, pr *preset, st start, stErr error, stFrom, set, setFrom string) (string, string) {
 	if set != "" {
 		return set, "set in " + setFrom
+	}
+	if pr != nil && pr.only {
+		return pr.needs, pr.why
 	}
 	rt, why := "", ""
 	// a start script that sets variables still says what it runs
@@ -715,6 +762,129 @@ func (r reader) siteToolchain(p *Plan, pkg pkgJSON, pmName string) error {
 	return nil
 }
 
+// nitroInline: a compiled Nitro server has no public folder beside it
+// (it looks in the binary's own filesystem), so its assets must be in it:
+// Nitro's serveStatic: 'inline' - in nuxt.config's nitro, or the options of
+// the nitro() Vite plugin.
+func (r reader) nitroInline(framework string) error {
+	where, files := "nuxt.config's nitro options", nuxtConfigs
+	if framework != "Nuxt" {
+		where, files = "the nitro() plugin's options in vite.config", viteConfigs
+	}
+	for _, f := range files {
+		b, err := r.read(f)
+		if err != nil {
+			continue
+		}
+		if framework != "Nuxt" {
+			b = callText(b, nitroCallRe)
+		}
+		if inlineRe.Match(stripComments(b)) {
+			return nil
+		}
+	}
+	return fmt.Errorf("the build compiles Nitro's server (.output/server/index.mjs), which serves its public assets from beside it, and a binary has nothing beside it: "+
+		"set serveStatic: 'inline' in %s, so they're in the binary", where)
+}
+
+// svelteImports: a SvelteKit config imports the package.
+func (r reader) svelteImports(pkg string) bool {
+	for _, f := range svelteConfigs {
+		if b, err := r.read(f); err == nil && strings.Contains(string(stripComments(b)), pkg) {
+			return true
+		}
+	}
+	return false
+}
+
+// svelteBunCall: the adapter( call's text in the config that imports
+// adapter-bun; nil without one.
+func (r reader) svelteBunCall() []byte {
+	for _, f := range svelteConfigs {
+		if b, err := r.read(f); err == nil && strings.Contains(string(stripComments(b)), "@sveltejs/adapter-bun") {
+			return adapterCall(b)
+		}
+	}
+	return nil
+}
+
+// svelteBun: adapter-bun's env defaults under its envPrefix, when it has one:
+// it reads <prefix>PORT and <prefix>HOST, and refuses unknown prefixed
+// names, so the boot sets those from homeport's PORT and HOST.
+func (r reader) svelteBun(p preset) *preset {
+	m := envPrefixRe.FindSubmatch(r.svelteBunCall())
+	if m == nil || len(m[1]) == 0 {
+		return &p
+	}
+	prefix := string(m[1])
+	p.env = map[string]string{prefix + "PORT": "$PORT", prefix + "HOST": "$HOST"}
+	for k, v := range forwarded {
+		p.env[prefix+k] = v
+	}
+	return &p
+}
+
+// svelteBunCompiled: adapter-bun with buildOptions.compile makes one
+// executable, client assets in it: <out>/server, or its outfile.
+func (r reader) svelteBunCompiled() (compiledServer, bool) {
+	call := r.svelteBunCall()
+	m := compileRe.FindSubmatch(call)
+	if m == nil || string(m[1]) == "false" {
+		return compiledServer{}, false
+	}
+	out, name := "build", "server"
+	if o := adapterOutRe.FindSubmatch(call); o != nil && relPath(string(o[1])) {
+		out = clean(string(o[1]))
+	}
+	if o := smolOutfileRe.FindSubmatch(call); o != nil && relPath(string(o[1])) {
+		name = string(o[1])
+	}
+	c := compiledServer{kind: Binary, artifact: out + "/" + name, framework: "SvelteKit",
+		reason: "its adapter, adapter-bun, compiles it with Bun (buildOptions.compile)", build: "bun run --bun build"}
+	target := string(m[2])
+	if t := compileTargetRe.FindSubmatch(call); target == "" && t != nil {
+		target = string(t[1])
+	}
+	switch {
+	case target != "" && (!strings.HasPrefix(target, "bun-linux-") || strings.Contains(target, "musl")):
+		c.err = fmt.Errorf("adapter-bun compiles for %s, which homeport's Linux (glibc) can't run: drop the target, so it compiles for the build's own machine, or name a bun-linux-x64 or bun-linux-arm64 one", target)
+	case envPrefixRe.Match(call) && len(envPrefixRe.FindSubmatch(call)[1]) > 0:
+		prefix := string(envPrefixRe.FindSubmatch(call)[1])
+		c.err = fmt.Errorf("adapter-bun's envPrefix makes the compiled server listen on %sPORT and %sHOST, and homeport sets PORT and HOST: drop envPrefix, or don't compile (the bundle sets the prefixed names for you)", prefix, prefix)
+	}
+	return c, true
+}
+
+// tanStackStart: a TanStack Start app built with Nitro's Vite plugin (its
+// nitro package) ships Nitro's .output, as Nuxt does, on Bun when the
+// plugin's preset is bun. Without Nitro, vite build makes
+// dist/server/server.js, a fetch handler that a start script serves (srvx,
+// TanStack's Bun server): the app, as any other. A preset for another
+// platform makes no server to run.
+func (r reader) tanStackStart(p preset, deps map[string]bool) (*preset, error) {
+	if !deps["nitro"] && !deps["nitro-nightly"] {
+		return &p, nil
+	}
+	p.layout, p.entry = "output", "server/index.mjs"
+	for _, f := range viteConfigs {
+		b, err := r.read(f)
+		if err != nil {
+			continue
+		}
+		if m := presetRe.FindSubmatch(callText(b, nitroCallRe)); m != nil {
+			switch preset := strings.ReplaceAll(string(m[1]), "_", "-"); preset {
+			case "bun":
+				p.needs = "bun"
+			case "node-server", "node":
+			default:
+				return nil, fmt.Errorf("%s builds with Nitro's %s preset, which makes no server homeport runs: drop the preset (node-server is Nitro's default), or set 'node-server' or 'bun'", f, preset)
+			}
+		}
+		break
+	}
+	return &p, nil
+}
+
 // nextStandalone: the config sets output: "standalone".
 func (r reader) nextStandalone() bool {
 	for _, f := range nextConfigs {
@@ -751,6 +921,8 @@ func (r reader) nextExport(p *Plan, cfg fileConfig, deps map[string]bool) bool {
 // compiledServer is a build that compiles the app's server.
 type compiledServer struct {
 	kind, artifact, framework, reason string
+	build                             string // its build command, when it isn't the build script's
+	err                               error  // it compiles, but what it makes can't run here
 }
 
 var (
@@ -773,7 +945,12 @@ func (r reader) compiled(pkg pkgJSON, deps map[string]bool, pr *preset, build st
 			}
 		}
 		if said {
-			return compiledServer{Binary, "server", "Next.js", "its build compiles it with next-bun-compile (Bun)"}
+			return compiledServer{kind: Binary, artifact: "server", framework: "Next.js", reason: "its build compiles it with next-bun-compile (Bun)"}
+		}
+	}
+	if deps["@sveltejs/adapter-bun"] && pr != nil && pr.only && pr.name == "SvelteKit" {
+		if c, ok := r.svelteBunCompiled(); ok {
+			return c
 		}
 	}
 	if deps["@orochibraru/svelte-smol"] {
@@ -793,13 +970,13 @@ func (r reader) compiled(pkg pkgJSON, deps map[string]bool, pr *preset, build st
 				if m := smolNameRe.FindSubmatch(call); m != nil && relPath(string(m[1])) {
 					name = string(m[1])
 				}
-				return compiledServer{Bundle, out + "/" + name, "SvelteKit", "its adapter, svelte-smol, compiles it with Bun"}
+				return compiledServer{kind: Bundle, artifact: out + "/" + name, framework: "SvelteKit", reason: "its adapter, svelte-smol, compiles it with Bun"}
 			}
 			name := "server"
 			if m := smolOutfileRe.FindSubmatch(call); m != nil && relPath(string(m[1])) {
 				name = string(m[1])
 			}
-			return compiledServer{Binary, out + "/" + name, "SvelteKit", "its adapter, svelte-smol, compiles it with Bun"}
+			return compiledServer{kind: Binary, artifact: out + "/" + name, framework: "SvelteKit", reason: "its adapter, svelte-smol, compiles it with Bun"}
 		}
 	}
 	at := strings.Index(build, "bun build")
@@ -824,15 +1001,22 @@ func (r reader) compiled(pkg pkgJSON, deps map[string]bool, pr *preset, build st
 	}
 	if pr != nil {
 		framework = pr.name
-		server := map[string]string{"Next.js": ".next/standalone/server.js", "Nuxt": ".output/server/index.mjs"}[pr.name]
-		if server == "" {
-			server = pr.entry
+		server := pr.entry
+		switch pr.layout {
+		case "standalone":
+			server = ".next/standalone/" + pr.entry
+		case "output":
+			server = ".output/" + pr.entry
 		}
 		if !starts && (entry == "" || entry != server) {
 			return compiledServer{} // a part of the server, not the server
 		}
 	}
-	return compiledServer{Binary, name, framework, "its build script compiles it with bun build --compile"}
+	c := compiledServer{kind: Binary, artifact: name, framework: framework, reason: "its build script compiles it with bun build --compile"}
+	if pr != nil && pr.layout == "output" {
+		c.err = r.nitroInline(pr.name)
+	}
+	return c
 }
 
 var (
@@ -841,6 +1025,13 @@ var (
 	// a URL's // (https://) isn't one
 	lineCommentRe = regexp.MustCompile(`(?m)(^|[\s;,{}()\[\]])//.*$`)
 	adapterCallRe = regexp.MustCompile(`\badapter\s*\(`)
+	nitroCallRe   = regexp.MustCompile(`\bnitro\s*\(`)
+	inlineRe      = regexp.MustCompile(`\bserveStatic\s*:\s*['"]inline['"]`)
+	envPrefixRe   = regexp.MustCompile(`\benvPrefix\s*:\s*['"]([^'"]*)['"]`)
+	// buildOptions.compile: true, false, a target, or options
+	compileRe       = regexp.MustCompile(`\bcompile\s*:\s*(?:(true|false)|['"]([^'"]*)['"]|\{)`)
+	compileTargetRe = regexp.MustCompile(`\btarget\s*:\s*['"]([^'"]+)['"]`)
+	presetRe        = regexp.MustCompile(`\bpreset\s*:\s*['"]([^'"]+)['"]`)
 )
 
 // stripComments is config code without its comments.
@@ -851,9 +1042,13 @@ func stripComments(b []byte) []byte {
 // adapterCall is the text inside a config's adapter( ... ) call, comments
 // stripped: where an adapter's options are, not any key of the same name
 // elsewhere in the file. Empty without one.
-func adapterCall(b []byte) []byte {
+func adapterCall(b []byte) []byte { return callText(b, adapterCallRe) }
+
+// callText is the text inside the first call that re matches (its name and
+// open paren), comments stripped. Empty without one.
+func callText(b []byte, re *regexp.Regexp) []byte {
 	b = stripComments(b)
-	loc := adapterCallRe.FindIndex(b)
+	loc := re.FindIndex(b)
 	if loc == nil {
 		return nil
 	}
@@ -1100,7 +1295,7 @@ func boot(env map[string]string) string {
 		e = []byte("{}")
 	}
 	return `import * as m from "node:module";import net from "node:net";import http from "node:http";import https from "node:https";` +
-		`const e=` + string(e) + `;for(const k in e)process.env[k]??=e[k];` +
+		`const e=` + string(e) + `;for(const k in e){const v=e[k][0]==="$"?process.env[e[k].slice(1)]:e[k];if(v!==undefined)process.env[k]??=v}` +
 		`try{if(m.enableCompileCache){m.enableCompileCache(new URL("../` + CacheDir + `",import.meta.url).pathname);` +
 		`for(const t of [5e3,6e4])setTimeout(()=>{try{m.flushCompileCache()}catch{}},t).unref()}}catch{}` +
 		`const p=Number(process.env.PORT),l=["localhost","127.0.0.1"];` +
