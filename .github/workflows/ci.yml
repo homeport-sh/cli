@@ -40,3 +40,31 @@ jobs:
         with:
           version: "~> v2"
           args: release --snapshot --clean --skip=publish
+
+  # the JavaScript examples, built as a hosted build builds them - the plan's
+  # own install and command in its image, GNU find and tar - and run from
+  # what the build made, alone, in a bare Debian: TanStack Start's Nitro
+  # output on Node and on Bun, adapter-bun's binary and bundle
+  examples:
+    runs-on: ubuntu-latest
+    env:
+      # the examples branch with these apps; main once examples#6 is merged
+      EXAMPLES_REF: tanstack-start-and-sveltekit-bun
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/checkout@v7
+        with:
+          repository: homeport-sh/examples
+          ref: ${{ env.EXAMPLES_REF }}
+          path: examples
+
+      - name: build homeport
+        run: go build -o "$RUNNER_TEMP/homeport" ./cmd/homeport
+
+      - name: build and run the examples
+        run: e2e/js-examples.sh "$RUNNER_TEMP/homeport" examples

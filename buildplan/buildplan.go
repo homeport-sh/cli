@@ -555,6 +555,8 @@ func (r reader) rscKit(p *Plan, cfg fileConfig) {
 var servers = []string{"@rsc-kit/core", "next", "nuxt", "@remix-run/node", "@react-router/node", "@tanstack/react-start", "@tanstack/solid-start",
 	"hono", "express", "elysia", "fastify", "koa", "@nestjs/core", "@sveltejs/adapter-node", "@sveltejs/adapter-bun", "@astrojs/node"}
 
+var staticPagesRe = regexp.MustCompile("\\bpages\\s*:\\s*['\"`]([^'\"`]+)['\"`]")
+
 // site recognises a JavaScript project whose build is a static site, from its
 // packages and config: where the site lands, unless something said otherwise.
 func (r reader) site(p *Plan, cfg fileConfig) bool {
@@ -569,7 +571,11 @@ func (r reader) site(p *Plan, cfg fileConfig) bool {
 	framework, folder := "", ""
 	switch {
 	case deps["@sveltejs/adapter-static"]:
+		// its pages: where it writes the site (build)
 		framework, folder = "SvelteKit", "build"
+		if m := staticPagesRe.FindSubmatch(r.svelteAdapterCallOf("@sveltejs/adapter-static")); m != nil && relPath(string(m[1])) {
+			folder = clean(string(m[1]))
+		}
 	case deps["astro"]:
 		for _, f := range []string{"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"} {
 			if b, err := r.read(f); err == nil && astroServer.Match(b) {

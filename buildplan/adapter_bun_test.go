@@ -211,3 +211,49 @@ func TestSvelteSmolIsRefused(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// SvelteKit 3 configures the adapter in the Vite config (sveltekit({
+// adapter: ... })), SvelteKit 2 in svelte.config.js: each adapter, and
+// each of its options homeport reads, the same from either.
+func TestSvelteKitsAdapterIsReadFromEitherConfig(t *testing.T) {
+	forms := map[string]func(imp, call string) (string, string){
+		"SvelteKit 3, vite.config.ts": func(imp, call string) (string, string) {
+			return "vite.config.ts", "import { sveltekit } from '@sveltejs/kit/vite';\n" + imp + "\nexport default defineConfig({\n\tplugins: [\n\t\tsveltekit({\n\t\t\tcompilerOptions: { runes: true },\n\t\t\tadapter: " + call + "\n\t\t})\n\t]\n});\n"
+		},
+		"SvelteKit 2, svelte.config.js": func(imp, call string) (string, string) {
+			return "svelte.config.js", imp + "\nexport default { kit: { adapter: " + call + " } };\n"
+		},
+	}
+	kit := `{"scripts":{"build":"vite build"},"devDependencies":{"@sveltejs/kit":"^3",%s}}`
+	for form, config := range forms {
+		for name, c := range map[string]struct {
+			deps, imp, call string
+			kind, artifact  string
+			runtime, run    string
+			in              string // in the build command
+		}{
+			"adapter-node, its out": {`"@sveltejs/adapter-node":"^5"`, "import adapter from '@sveltejs/adapter-node';", "adapter({ out: 'out', precompress: true })",
+				buildplan.Bundle, buildplan.BundleDir, "node", "--import ./.homeport/boot.mjs out/index.js", "[ -f out/index.js ]"},
+			"adapter-static, its pages": {`"@sveltejs/adapter-static":"^3"`, "import adapter from '@sveltejs/adapter-static';", "adapter({ pages: 'public', fallback: '200.html' })",
+				buildplan.Static, "public", "", "", ""},
+			"adapter-static, adapter-bun installed": {`"@sveltejs/adapter-static":"^3","@sveltejs/adapter-bun":"1.0.0"`, "import adapter from '@sveltejs/adapter-static';", "adapter()",
+				buildplan.Static, "build", "", "", ""},
+			"adapter-bun, its out": {`"@sveltejs/adapter-bun":"1.0.0"`, "import adapter from '@sveltejs/adapter-bun';", "adapter({ out: 'dist' })",
+				buildplan.Bundle, buildplan.BundleDir, "bun", "--preload ./.homeport/boot.mjs dist/index.js", "[ -f dist/index.js ]"},
+			"adapter-bun, envPrefix": {`"@sveltejs/adapter-bun":"1.0.0"`, "import adapter from '@sveltejs/adapter-bun';", "adapter({ envPrefix: 'APP_' })",
+				buildplan.Bundle, buildplan.BundleDir, "bun", "--preload ./.homeport/boot.mjs build/index.js", `"APP_PORT":"$PORT"`},
+			"adapter-bun, compiled": {`"@sveltejs/adapter-bun":"1.0.0"`, "import adapter from '@sveltejs/adapter-bun';", "adapter({ buildOptions: { compile: true } })",
+				buildplan.Binary, "build/server", "bun", "", "bun run --bun build"},
+			"adapter-bun, compiled to an outfile in its out": {`"@sveltejs/adapter-bun":"1.0.0"`, "import adapter from '@sveltejs/adapter-bun';", "adapter({ out: 'dist', buildOptions: { compile: { outfile: 'app' } } })",
+				buildplan.Binary, "dist/app", "bun", "", "bun run --bun build"},
+			"adapter-node imported, adapter-bun installed too": {`"@sveltejs/adapter-node":"^5","@sveltejs/adapter-bun":"1.0.0"`, "import adapter from '@sveltejs/adapter-node';", "adapter()",
+				buildplan.Bundle, buildplan.BundleDir, "node", "--import ./.homeport/boot.mjs build/index.js", "[ -f build/index.js ]"},
+		} {
+			f, body := config(c.imp, c.call)
+			p, err := buildplan.Detect(repo(js(strings.Replace(kit, "%s", c.deps, 1), "bun.lock", "{}", f, body)), buildplan.Settings{})
+			if err != nil || p.Kind != c.kind || p.Framework != "SvelteKit" || p.Artifact != c.artifact || p.Runtime != c.runtime || p.Run != c.run || !strings.Contains(p.Command, c.in) {
+				t.Errorf("%s, %s: %+v %v", form, name, p, err)
+			}
+		}
+	}
+}

@@ -73,26 +73,17 @@ stop() { docker logs "e2e-$1" > "$work/$1.serve.log" 2>&1 || true; docker rm -f 
 
 # a TanStack Start app: SSR, an asset, a 404, its server function
 tanstack() {
-  local name=$1 url=$2 body asset id origin_only=${3:-}
+  local name=$1 url=$2 runtime=$3 body asset id
   body=$(curl -s "$url/")
-  case "$body" in *"Rendered on the server"*) check "$name" "SSR /" ok ;; *) check "$name" "SSR /" "no server-rendered page" ;; esac
-  asset=$(grep -o '/assets/[^"]*\.js' <<<"$body" | head -1)
+  case "$body" in *"Rendered on the server ("*"$runtime "*) check "$name" "SSR / on $runtime" ok ;; *) check "$name" "SSR / on $runtime" "no server-rendered page, or the wrong runtime" ;; esac
+  asset=$(grep -o '/assets/[^"]*\.js' <<<"$body" | head -1 || true)
   [ -n "$asset" ] && [ "$(status "$url$asset")" = 200 ] && check "$name" "asset $asset" ok || check "$name" "asset $asset" "not 200"
   [ "$(status "$url/nope")" = 404 ] && check "$name" "404" ok || check "$name" "404" "not 404"
-  id=$(grep -rhoE 'id: "[0-9a-f]{64}"' --exclude-dir=node_modules "$work/$name/$(jq -r .artifact "$work/$name.plan.json")" | head -1 | cut -d'"' -f2)
+  id=$(grep -rhoE 'id: "[0-9a-f]{64}"' --exclude-dir=node_modules "$work/$name/$(jq -r .artifact "$work/$name.plan.json")" | head -1 | cut -d'"' -f2 || true)
   [ -n "$id" ] && [ "$(status -H 'Sec-Fetch-Site: same-origin' -H 'x-tsr-serverFn: true' "$url/_serverFn/$id")" = 200 ] &&
     check "$name" "server function" ok || check "$name" "server function" "not 200 (id ${id:-none})"
   [ "$(status -H 'Origin: https://evil.example' -H 'x-tsr-serverFn: true' "$url/_serverFn/$id")" = 403 ] &&
     check "$name" "a cross-site server function call is refused" ok || check "$name" "cross-site" "not 403"
-  if [ -n "$origin_only" ]; then
-    # homeport's server: the edge's Host and X-Forwarded-Proto make the URL the
-    # browser's, so an Origin-only call passes; a visitor's X-Forwarded-Host doesn't count
-    local host=app.example.com
-    [ "$(status -H "Host: $host" -H 'X-Forwarded-Proto: https' -H "Origin: https://$host" -H 'x-tsr-serverFn: true' "$url/_serverFn/$id")" = 200 ] &&
-      check "$name" "an Origin-only call through the edge" ok || check "$name" "Origin-only" "not 200"
-    [ "$(status -H "Host: $host" -H 'X-Forwarded-Proto: https' -H 'X-Forwarded-Host: evil.example' -H "Origin: https://evil.example" -H 'x-tsr-serverFn: true' "$url/_serverFn/$id")" = 403 ] &&
-      check "$name" "a spoofed X-Forwarded-Host doesn't make evil.example same-origin" ok || check "$name" "spoofed X-Forwarded-Host" "not 403"
-  fi
 }
 
 # the SvelteKit example: SSR, an asset, a 404, its form action
@@ -100,7 +91,7 @@ sveltekit() {
   local name=$1 url=$2 body asset host=app.example.com
   body=$(curl -s -H "Host: $host" "$url/")
   case "$body" in *"Rendered on the server"*"https://$host"*) check "$name" "SSR /, its origin https://$host" ok ;; *) check "$name" "SSR /" "no page, or the wrong origin" ;; esac
-  asset=$(grep -o '_app/immutable/[^"]*\.js' <<<"$body" | head -1)
+  asset=$(grep -o '_app/immutable/[^"]*\.js' <<<"$body" | head -1 || true)
   [ -n "$asset" ] && [ "$(status "$url/$asset")" = 200 ] && check "$name" "asset /$asset" ok || check "$name" "asset /$asset" "not 200"
   [ "$(status "$url/nope")" = 404 ] && check "$name" "404" ok || check "$name" "404" "not 404"
   case "$(curl -s -X POST -H 'Accept: text/html' -H "Host: $host" -H 'X-Forwarded-Proto: https' -H "Origin: https://$host" -d name=Ramon "$url/?/greet")" in
@@ -120,10 +111,8 @@ run() { # name, folder, settings, checker, checker args...
   fi
 }
 
-run tanstack-nitro tanstack-start-app "" tanstack
-run tanstack-homeport-bun tanstack-start-bun-app "" tanstack origin-only
-# the same app, no Nitro, on Node: homeport's server's other runtime
-run tanstack-homeport-node tanstack-start-bun-app '{"runtime":"node"}' tanstack origin-only
+run tanstack-nitro tanstack-start-app "" tanstack Node
+run tanstack-nitro-bun tanstack-start-bun-app "" tanstack Bun
 run sveltekit-bun sveltekit-bun-app "" sveltekit
 # the same app, not compiled: adapter-bun's bundle
 mkdir -p "$work/variants"

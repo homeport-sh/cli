@@ -1,10 +1,6 @@
 package buildplan
 
 import (
-	"bytes"
-	"compress/gzip"
-	_ "embed"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -514,25 +510,7 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		}
 	}
 
-	// TanStack Start with neither Nitro nor a start script (its starter):
-	// its build is a fetch handler, which homeport's own server serves
-	tanStackServer := pr != nil && pr.name == "TanStack Start" && pr.layout == "app" && settingsRun == "" && cfg.Run == "" &&
-		stErr != nil && !errors.Is(stErr, errShell) && !errors.Is(stErr, errEnv)
-	if tanStackServer {
-		c := *pr
-		c.entry = tanStackServerFile
-		pr = &c
-	}
-
 	rt, reason := r.runtimeFor(pkg, pr, st, stErr, stFrom, runtime, runtimeFrom)
-	if tanStackServer {
-		// nothing to read a runtime from but how it installs: Bun when Bun
-		// does, else Node
-		if reason == defaultRuntimeWhy && pmName == "bun" {
-			rt, reason = "bun", "it installs with Bun"
-		}
-		reason = "homeport's server runs TanStack Start's dist/server/server.js (" + reason + ")"
-	}
 
 	// what it starts
 	name, layout := "Node", "app"
@@ -582,18 +560,17 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		case errors.Is(stErr, errShell):
 			return fmt.Errorf("the start script (%s) needs a shell, which the sandbox doesn't have: set a start command - args to %s, like `%s` - "+
 				"and run anything before it (migrations) as the release command", st.says, rt, runArgs(rt, "server.js", nil, nil))
+		case pr != nil && pr.name == "TanStack Start":
+			// TanStack's hosting guide: Node, Bun and the rest follow Nitro's
+			return fmt.Errorf("TanStack Start's build without Nitro is dist/server/server.js, a request handler with no server: " +
+				"run npm install nitro (or your package manager's add), then add nitro() from 'nitro/vite' to vite.config's plugins - " +
+				"nitro({ preset: 'bun' }) to run on Bun - and homeport runs Nitro's .output/server/index.mjs. Or add a start script that serves it")
 		case pr != nil:
 			return fmt.Errorf("can't tell how this %s app starts: add a start script (like `%s server.js`), or set a start command", pr.name, rt)
 		}
 		// nothing says it's a server: a guess, as before - a binary its
 		// build makes, else a site folder
 		return r.guess(p, pkg, pmName)
-	}
-	if tanStackServer {
-		// a Vite base: the server serves the client's files under it
-		if b := r.viteBase(); b != "" {
-			args = []string{b}
-		}
 	}
 	if entry != "" && (!relPath(entry) || strings.HasPrefix(entry, "/")) {
 		return fmt.Errorf("the start script runs %q, which isn't a file in the app's folder", entry)
@@ -665,10 +642,6 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		// not the deploy
 		p.assemble = join(`{ [ -f `+entry+` ] || { echo 'homeport: the build made no `+entry+` - is the adapter in the config the one installed, and its out this?' >&2; exit 1; }; }`, p.assemble)
 	}
-	if tanStackServer {
-		p.assemble = join(`{ [ -f dist/server/server.js ] || { echo 'homeport: the build made no dist/server/server.js' >&2; exit 1; }; }`,
-			p.assemble, "printf '%s' '"+tanStackServerFor(rt)+"' | base64 -d | gzip -dc > "+BundleDir+"/"+tanStackServerFile)
-	}
 	p.Command = join(build, p.assemble)
 	if binName != "" {
 		entry = ".homeport/start.mjs"
@@ -735,7 +708,7 @@ func (r reader) runtimeFor(pkg pkgJSON, pr *preset, st start, stErr error, stFro
 	}
 	// a framework that runs on one only: only when nothing else said
 	if rt == "" && pr != nil && pr.needs != "" {
-		return pr.needs, pr.name + " runs on " + title(pr.needs)
+		return pr.needs, cmpOr(pr.why, pr.name+" runs on "+title(pr.needs))
 	}
 	if rt == "" {
 		return "node", defaultRuntimeWhy
@@ -925,48 +898,6 @@ func (r reader) svelteBunCompiled() (compiledServer, bool) {
 	return c, true
 }
 
-// homeport's server for TanStack Start's own build, without Nitro:
-// dist/server/server.js exports a fetch handler and no server. srvx serves
-// it (embed/tanstack-start/server.mjs, bundled with srvx per runtime by
-// gen.sh): dist/client's files, then the handler, with the URL the browser
-// used, on PORT and HOST.
-const tanStackServerFile = ".homeport/tanstack-start.mjs"
-
-var (
-	//go:embed embed/tanstack-start/node.mjs
-	tanStackServerNode []byte
-	//go:embed embed/tanstack-start/bun.mjs
-	tanStackServerBun []byte
-)
-
-// tanStackServerFor: the runtime's server, gzipped and in base64, for the
-// build to write.
-func tanStackServerFor(rt string) string {
-	src := tanStackServerNode
-	if rt == "bun" {
-		src = tanStackServerBun
-	}
-	var b bytes.Buffer
-	w, _ := gzip.NewWriterLevel(&b, gzip.BestCompression)
-	_, _ = w.Write(src)
-	_ = w.Close()
-	return base64.StdEncoding.EncodeToString(b.Bytes())
-}
-
-var viteBaseRe = regexp.MustCompile("\\bbase\\s*:\\s*['\"`](/[A-Za-z0-9._~/-]*)['\"`]")
-
-// viteBase: the Vite config's base, when it's a path other than /.
-func (r reader) viteBase() string {
-	for _, f := range viteConfigs {
-		if b, err := r.read(f); err == nil {
-			if m := viteBaseRe.FindSubmatch(stripComments(b)); m != nil && string(m[1]) != "/" && !strings.Contains(string(m[1]), "..") {
-				return string(m[1])
-			}
-		}
-	}
-	return ""
-}
-
 // tanStackStart: a TanStack Start app built with Nitro's Vite plugin (its
 // nitro package) ships Nitro's .output, as Nuxt does, on Bun when the
 // plugin's preset is bun. Without Nitro, vite build makes
@@ -993,7 +924,7 @@ func (r reader) tanStackStart(p preset, deps map[string]bool) (*preset, error) {
 		}
 		switch preset := strings.ReplaceAll(string(m[1]), "_", "-"); preset {
 		case "bun":
-			p.needs = "bun"
+			p.needs, p.why = "bun", "Nitro's bun preset ("+f+") builds a Bun server"
 		case "node-server", "node", "node-cluster":
 		default:
 			return nil, fmt.Errorf("%s builds with Nitro's %s preset, which makes no server homeport runs: drop the preset (node-server is Nitro's default), or set 'node-server' or 'bun'", f, preset)

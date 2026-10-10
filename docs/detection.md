@@ -74,7 +74,7 @@ health path (`/`). Each one can be overridden in the build settings.
 | Next.js | `next` | `.next/standalone` with `.next/static` and `public/` | `server.js` |
 | Nuxt | `nuxt` | Nitro's `.output/` | `server/index.mjs` |
 | TanStack Start, with Nitro | `@tanstack/react-start` or `@tanstack/solid-start`, and `nitro` | Nitro's `.output/` | `server/index.mjs` |
-| TanStack Start, without Nitro | `@tanstack/react-start` or `@tanstack/solid-start` | the app with production dependencies | the start script, else homeport's server (`.homeport/tanstack-start.mjs`) |
+| TanStack Start, without Nitro | `@tanstack/react-start` or `@tanstack/solid-start` | the app with production dependencies | its start script; with none, it's refused (add Nitro) |
 | SvelteKit on Bun | `@sveltejs/adapter-bun` | the app with production dependencies, on Bun | `build/index.js` (or the adapter's `out`) |
 | SvelteKit | `@sveltejs/adapter-node` | the app with production dependencies | `build/index.js` (or the adapter's `out`, from `svelte.config.js` or, in SvelteKit 3, the Vite config) |
 | Astro | `@astrojs/node`, standalone mode | the app with production dependencies | `dist/server/entry.mjs` |
@@ -89,7 +89,11 @@ health path (`/`). Each one can be overridden in the build settings.
 app builds with. One that's installed but not imported is ignored, so a
 config importing `adapter-static` is a site even with `adapter-node` or
 `adapter-bun` installed. With both server adapters installed and no
-config to say, it's adapter-node.
+config to say, it's adapter-node. The adapter and its options (`out`,
+adapter-static's `pages`, adapter-bun's `envPrefix` and
+`buildOptions.compile`) are read the same from SvelteKit 3's Vite config
+(`sveltekit({ adapter: adapter(...) })` in `vite.config.*`) and from
+SvelteKit 2's `svelte.config.js`.
 
 Static sites are still detected first: SvelteKit with `adapter-static`,
 Astro without a server adapter, Vite, and Next.js with `output: "export"`
@@ -111,43 +115,18 @@ which all send `Sec-Fetch-Site`, pass, but an `Origin`-only caller gets a
 403.
 
 Without Nitro, which is how TanStack's starter (`@tanstack/cli create`)
-comes, the build's `dist/server/server.js` is a request handler, not a
-server. If the app has a start script, that serves it (`srvx --prod -s
-../client dist/server/server.js`, or TanStack's `bun run server.ts`).
-Otherwise homeport ships a small server of its own in the bundle,
-`.homeport/tanstack-start.mjs`, written by the build. It's built on srvx,
-TanStack's own server, bundled into the file (srvx 1.0.5), so the app
-needs no new dependency:
-
-- It serves `dist/client`'s files to `GET` and `HEAD`, each with its type.
-  The hashed ones under `assets/` are cached for good
-  (`max-age=31536000, immutable`); the rest are revalidated.
-- Every other request goes to the handler's `fetch()`, which renders
-  pages, answers server functions and says 404.
-- The request's URL is the one the browser used: its `Host`, which is the
-  host the edge routed on, and the scheme from the edge's
-  `X-Forwarded-Proto` (the edge terminates TLS). `X-Forwarded-Host` and
-  `X-Forwarded-For` aren't read, because a visitor can set them and
-  proxies that trust their peer pass them on. So both of TanStack's
-  same-origin checks, `Sec-Fetch-Site` and `Origin`, pass behind the edge.
-- With a Vite `base` (`base: '/app/'`), the files are served under it.
-- It caps a request's body at 128 MiB, or `BODY_SIZE_LIMIT` bytes, and an
-  error is a bare 500 with no development page, whatever `NODE_ENV` says.
-- It listens on `PORT` and `HOST`.
-- It runs on the project's runtime, by the rules below. When none of them
-  says, which is the usual case since there's no start script, it runs on
-  Bun if the app installs with Bun (`bun.lock`, `bun.lockb`, or
-  `packageManager: bun`), else on Node.
-
-It's a bundle, not a binary, since the handler imports the app's
-production dependencies at runtime. With Nitro installed, Nitro's output
-is what runs, as above. A start script of your own (or a start
-command) replaces it. srvx and TanStack's Bun `server.ts` build the request
-URL from the connection, which is plain HTTP behind the edge, so an
-`Origin`-only caller gets a 403 there too, as with Nitro. Don't turn on
-srvx's `trustProxy` for it: that reads `X-Forwarded-Host` too, which a
-visitor sets. Drop the start script and homeport's server serves the
-build instead.
+comes, the build's `dist/server/server.js` is a request handler with no
+server. TanStack's hosting guide has Node, Bun and the hosts follow its
+Nitro instructions, so homeport does too: such an app is refused, saying
+to `npm install nitro` (or your package manager's add) and add `nitro()`
+from `nitro/vite` to `vite.config`'s plugins, with
+`nitro({ preset: 'bun' })` to run on Bun. If the app has a start script
+that serves the handler (`srvx --prod -s ../client dist/server/server.js`,
+or TanStack's `bun run server.ts`), that runs, as the app with its
+production dependencies. Those build the request URL from the connection,
+plain HTTP behind the edge, so an `Origin`-only caller gets a 403 there
+too, as with Nitro. Don't turn on srvx's `trustProxy` for it: that reads
+`X-Forwarded-Host`, which a visitor can set.
 
 **SvelteKit on Bun.** `@sveltejs/adapter-bun` writes a `Bun.serve` server,
 so it always runs on Bun: an `.nvmrc` doesn't change that, and setting the
@@ -197,19 +176,16 @@ applies wins:
      `bun --bun`.
    - `npm run x`, `bun run x`, `pnpm x` and `yarn x` are followed to the
      script they name.
-5. **For homeport's TanStack Start server only**: Bun when the app
-   installs with Bun, else Node (see *TanStack Start*).
-6. **A framework that only runs on one runtime**: Elysia runs on Bun when
+5. **A framework that only runs on one runtime**: Elysia runs on Bun when
    nothing above said otherwise. A version file or start script that says
    Node wins, as with any app. SvelteKit's adapter-bun is the exception: it
    builds a `Bun.serve` server, so it runs on Bun whatever rules 2 to 4
    say, and only the build settings or `homeport.yaml` can say otherwise,
    which is refused.
-7. **Otherwise Node.**
+6. **Otherwise Node.**
 
-The lockfile decides only how dependencies install, never what runs,
-except for homeport's TanStack Start server (rule 5), which has nothing
-else to go by. A Next.js app with `bun.lock` and `next start` installs with Bun and runs on
+The lockfile decides only how dependencies install, never what runs. A
+Next.js app with `bun.lock` and `next start` installs with Bun and runs on
 Node. `packageManager` names an installer, so it isn't read as a runtime
 either.
 
