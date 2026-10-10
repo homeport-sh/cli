@@ -348,7 +348,7 @@ func TestALaravelAppsViewsAreCachedAsItsReleaseRuns(t *testing.T) {
 			t.Errorf("%q: %q", bad, p.Release)
 		}
 	}
-		// not Laravel, or a build a person wrote (the runner isn't in its
+	// not Laravel, or a build a person wrote (the runner isn't in its
 	// bundle): the release command is theirs, as it was
 	for name, c := range map[string]struct {
 		files map[string]string
