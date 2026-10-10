@@ -156,6 +156,9 @@ type Plan struct {
 	// setup is what the image needs before any install (Bun in a Node
 	// image, corepack's pnpm), which an install someone sets keeps
 	build, assemble, setup string
+	// laravelViews: the bundle has the release runner that compiles
+	// Laravel's views (laravel.go)
+	laravelViews bool
 }
 
 // Process is one of the app's processes beside the web.
@@ -196,7 +199,8 @@ const (
 // that when it runs, and it changes without a build. Not its compiled
 // views: Blade names each by its template's absolute path (unless the app
 // sets view.relative_hash), and the build's path isn't the release's, so
-// views compiled here would never be read. An app whose artisan needs its
+// views compiled here would never be read: the release command compiles
+// them, where the app serves from (laravel.go). An app whose artisan needs its
 // environment to boot is built without the caches, as before, and says so.
 const LaravelCaches = "php artisan event:cache && php artisan route:cache" +
 	" || echo \"homeport: built without Laravel's event and route caches (artisan couldn't make them here); the app runs without them\" >&2"
@@ -398,6 +402,9 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 		// the person's build makes the bundle: nothing of SSR's is in it
 		p.SSR, p.Runtime, p.RuntimeVersion, p.RuntimeReason = "", "", "", ""
 	}
+	if php && p.laravelViews && s.Command == "" {
+		cacheViewsOnRelease(&p)
+	}
 	if php && r.requires("laravel/reverb") {
 		p.Reverb = true
 		if err := reverbProcess(&p); err != nil {
@@ -495,7 +502,8 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 				p.Command = join(p.Command, ssrAssemble(p.Artifact, x))
 			}
 			if r.requires("laravel/framework") {
-				p.Command = LaravelCaches + " && " + p.Command
+				p.Command = LaravelCaches + " && " + join(p.Command, releaseViewCache(p.Artifact))
+				p.laravelViews = true
 			}
 		}
 	case r.exists("go.mod"):
