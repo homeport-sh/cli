@@ -257,8 +257,8 @@ func TestReverbIsSizedForItself(t *testing.T) {
 
 // The renderer is held to the app's memory: Node's heap at a quarter of it
 // (the supervisor fills in %heap% from HOMEPORT_MEMORY_MB), with Node's
-// compile cache kept in the release's writable folder; Bun in --smol. The
-// plan says the renderer shares the app's memory.
+// compile cache kept in the release's writable folder; Bun in --smol (tuned,
+// not capped). The plan says the renderer shares the app's memory.
 func TestTheRendererIsHeldToTheAppsMemory(t *testing.T) {
 	pkg := `{"scripts":{"build":"vite build","build:ssr":"vite build && vite build --ssr"}}`
 	p := detect(t, laravel([]string{inertia}, "package.json", pkg, "package-lock.json", "{}"), buildplan.Settings{})
@@ -267,8 +267,12 @@ func TestTheRendererIsHeldToTheAppsMemory(t *testing.T) {
 			t.Errorf("node: no %q", want)
 		}
 	}
-	if !slices.ContainsFunc(p.Warnings, func(w string) bool { return strings.Contains(w, "512 MB") }) {
-		t.Errorf("no memory note: %v", p.Warnings)
+	// general advice: the plan doesn't know the app's size, so it says no
+	// size is too small
+	if !slices.ContainsFunc(p.Warnings, func(w string) bool {
+		return strings.Contains(w, "the app's memory") && !strings.Contains(w, "512") && !strings.Contains(w, "at least")
+	}) {
+		t.Errorf("no general memory note: %v", p.Warnings)
 	}
 	p = detect(t, laravel([]string{inertia}, "package.json", pkg, "bun.lock", "{}"), buildplan.Settings{})
 	if !strings.Contains(p.Command, "--smol") || strings.Contains(p.Command, "max-old-space-size") {
