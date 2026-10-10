@@ -259,9 +259,19 @@ command first (your migrations), then `php artisan view:cache` into
 php-cli .homeport/release.php ./bin php-cli artisan migrate --force
 ```
 
+Set only your own command as the release command, for example
+`php-cli artisan migrate --force`. Never set the wrapped line above: homeport
+adds the wrapper itself. A release command the sandbox can't run, such as one
+starting with `./bin`, is refused at build, saying what to write.
+
 If your release command fails, the deploy stops, as before. If
 `view:cache` fails, the deploy goes on, and views compile as they're
 first shown. None of this happens when you set your own build command.
+
+Views aren't precompiled when the release command doesn't run: a bundle
+uploaded from CI, or the live release shipped again (a change of settings,
+a move to another host). There, each view compiles the first time it's
+shown, and is kept for the rest of that release.
 
 ### Inertia server-side rendering
 

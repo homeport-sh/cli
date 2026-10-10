@@ -340,7 +340,15 @@ func TestALaravelAppsViewsAreCachedAsItsReleaseRuns(t *testing.T) {
 	if p := detect(t, laravel(nil), buildplan.Settings{Release: long}); p.Release != long || !slices.ContainsFunc(p.Warnings, func(w string) bool { return strings.Contains(w, "view") }) {
 		t.Errorf("too long: %q %v", p.Release, p.Warnings)
 	}
-	// not Laravel, or a build a person wrote (the runner isn't in its
+	// one the sandbox can't run is left as it is, for the check that
+	// refuses it, saying why (wrapped, ./bin would pass, and fail at deploy)
+	for _, bad := range []string{"./bin php-cli artisan migrate --force", "./bin"} {
+		p := detect(t, laravel(nil, "homeport.yaml", "release: "+bad+"\n"), buildplan.Settings{})
+		if p.Release != bad || buildplan.CheckRelease(p.Release) == nil {
+			t.Errorf("%q: %q", bad, p.Release)
+		}
+	}
+		// not Laravel, or a build a person wrote (the runner isn't in its
 	// bundle): the release command is theirs, as it was
 	for name, c := range map[string]struct {
 		files map[string]string

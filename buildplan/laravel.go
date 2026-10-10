@@ -91,8 +91,13 @@ func releaseViewCache(b string) string {
 
 // cacheViewsOnRelease has the plan's release command run through the
 // runner, the app's own after it - unless that won't fit, when it runs as
-// it is and the plan says why the views aren't cached.
+// it is and the plan says why the views aren't cached. One the sandbox
+// can't run (./bin in front, a shell's &&) is left as it is, for the check
+// that refuses it, saying why: wrapped, it would pass and fail at deploy.
 func cacheViewsOnRelease(p *Plan) {
+	if CheckRelease(p.Release) != nil {
+		return
+	}
 	release := strings.TrimSpace(releaseRunner + " " + p.Release)
 	if len(release) > maxCommandSz {
 		p.Warnings = append(p.Warnings, fmt.Sprintf("Laravel's views aren't compiled on release: the release command is too long to run beside it (at most %d characters)", maxCommandSz-len(releaseRunner)-1))
