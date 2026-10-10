@@ -469,15 +469,6 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 			p.Command = cmpOr(c.build, m.run+" build")
 		}
 		p.Artifact = c.artifact
-		if c.kind == Bundle {
-			// the binary with what it serves beside it: the folder, the
-			// binary its bin
-			const b = BundleDir
-			p.build = p.Command
-			p.assemble = join("rm -rf "+b, "cp -R "+path.Dir(c.artifact)+" "+b, "mv "+b+"/"+path.Base(c.artifact)+" "+b+"/bin")
-			p.Command, p.Artifact = join(p.build, p.assemble), b
-			p.Health = "/"
-		}
 		return nil
 	}
 
@@ -505,7 +496,23 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		}
 	}
 
+	// TanStack Start with neither Nitro nor a start script (its starter):
+	// its build is a fetch handler, which homeport's own server serves
+	tanStackServer := pr != nil && pr.name == "TanStack Start" && pr.layout == "app" && settingsRun == "" && cfg.Run == "" &&
+		stErr != nil && !errors.Is(stErr, errShell) && !errors.Is(stErr, errEnv)
+	if tanStackServer {
+		c := *pr
+		c.entry, c.needs = tanStackServerFile, "bun"
+		pr = &c
+	}
+
 	rt, reason := r.runtimeFor(pkg, pr, st, stErr, stFrom, runtime, runtimeFrom)
+	if tanStackServer {
+		if reason == pr.name+" runs on Bun" {
+			reason = "nothing pins Node: Bun"
+		}
+		reason = "homeport's server runs TanStack Start's dist/server/server.js (" + reason + ")"
+	}
 
 	// what it starts
 	name, layout := "Node", "app"
@@ -560,10 +567,6 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		case errors.Is(stErr, errShell):
 			return fmt.Errorf("the start script (%s) needs a shell, which the sandbox doesn't have: set a start command - args to %s, like `%s` - "+
 				"and run anything before it (migrations) as the release command", st.says, rt, runArgs(rt, "server.js", nil, nil))
-		case pr != nil && pr.name == "TanStack Start":
-			return errors.New("TanStack Start's build makes dist/server/server.js, a request handler, not a server: build with Nitro " +
-				"(install nitro, and add nitro() from 'nitro/vite' to vite.config's plugins) and homeport runs its .output/server/index.mjs, " +
-				"or add a start script that serves it")
 		case pr != nil:
 			return fmt.Errorf("can't tell how this %s app starts: add a start script (like `%s server.js`), or set a start command", pr.name, rt)
 		}
@@ -636,6 +639,10 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		}
 	}
 	p.build, p.assemble = build, assemble(layout, m, rt, bin, sums, binName, keepMaps, env)
+	if tanStackServer {
+		p.assemble = join(`{ [ -f dist/server/server.js ] || { echo 'homeport: the build made no dist/server/server.js' >&2; exit 1; }; }`,
+			p.assemble, "printf '%s' '"+tanStackServerJS+"' > "+BundleDir+"/"+tanStackServerFile)
+	}
 	p.Command = join(build, p.assemble)
 	if binName != "" {
 		entry = ".homeport/start.mjs"
@@ -836,7 +843,7 @@ func (r reader) svelteBunCompiled() (compiledServer, bool) {
 	if o := adapterOutRe.FindSubmatch(call); o != nil && relPath(string(o[1])) {
 		out = clean(string(o[1]))
 	}
-	if o := smolOutfileRe.FindSubmatch(call); o != nil && relPath(string(o[1])) {
+	if o := outfileOptRe.FindSubmatch(call); o != nil && relPath(string(o[1])) {
 		name = string(o[1])
 	}
 	c := compiledServer{kind: Binary, artifact: out + "/" + name, framework: "SvelteKit",
@@ -854,6 +861,86 @@ func (r reader) svelteBunCompiled() (compiledServer, bool) {
 	}
 	return c, true
 }
+
+// tanStackServerJS is homeport's server for TanStack Start's own build,
+// without Nitro: dist/server/server.js exports a fetch handler and no
+// server. It serves dist/client's files (GET and HEAD) - the hashed ones
+// under assets/ cached for good - and hands every other request to the
+// handler, with the URL the browser used: the edge terminates TLS and sets
+// X-Forwarded-Proto and X-Forwarded-Host, so a same-origin check sees
+// https. On PORT and HOST; Bun.serve on Bun, node:http on Node. No single
+// quotes: it's written in some.
+const tanStackServerFile = ".homeport/tanstack-start.mjs"
+
+const tanStackServerJS = `import { stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { Readable } from "node:stream";
+import http from "node:http";
+const handler = (await import("../dist/server/server.js")).default;
+const root = new URL("../dist/client", import.meta.url).pathname;
+const types = { js: "text/javascript; charset=utf-8", mjs: "text/javascript; charset=utf-8", css: "text/css; charset=utf-8",
+  html: "text/html; charset=utf-8", txt: "text/plain; charset=utf-8", json: "application/json", map: "application/json",
+  xml: "application/xml", webmanifest: "application/manifest+json", wasm: "application/wasm", pdf: "application/pdf",
+  svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",
+  avif: "image/avif", ico: "image/x-icon", woff: "font/woff", woff2: "font/woff2", ttf: "font/ttf", otf: "font/otf",
+  mp4: "video/mp4", webm: "video/webm", mp3: "audio/mpeg" };
+// a file of dist/client, for a GET or HEAD
+async function file(method, pathname) {
+  if (method !== "GET" && method !== "HEAD") return;
+  let p;
+  try { p = decodeURIComponent(pathname); } catch { return; }
+  if (p.includes("\0") || p.split("/").includes("..") || p.endsWith("/")) return;
+  try {
+    const s = await stat(root + p);
+    if (!s.isFile()) return;
+    const ext = p.slice(p.lastIndexOf(".") + 1).toLowerCase();
+    return { path: root + p, headers: { "content-type": types[ext] ?? "application/octet-stream", "content-length": String(s.size),
+      "cache-control": p.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "public, max-age=0, must-revalidate" } };
+  } catch { return; }
+}
+// the URL the browser used: the edge says its scheme and host
+function url(get, u) {
+  const first = (v) => v?.split(",")[0].trim();
+  const proto = first(get("x-forwarded-proto"));
+  const host = first(get("x-forwarded-host")) || get("host") || u.host;
+  return (proto === "https" || proto === "http" ? proto : u.protocol.slice(0, -1)) + "://" + host + u.pathname + u.search;
+}
+const port = Number(process.env.PORT) || 3000, hostname = process.env.HOST || "0.0.0.0";
+if (typeof Bun !== "undefined") {
+  Bun.serve({ port, hostname, async fetch(req) {
+    const u = new URL(req.url);
+    const f = await file(req.method, u.pathname);
+    if (f) return new Response(req.method === "HEAD" ? null : Bun.file(f.path), { headers: f.headers });
+    return handler.fetch(new Request(url((n) => req.headers.get(n), u), req));
+  } });
+} else {
+  http.createServer(async (req, res) => {
+    try {
+      const u = new URL(req.url, "http://" + (req.headers.host || "localhost"));
+      const f = await file(req.method, u.pathname);
+      if (f) {
+        res.writeHead(200, f.headers);
+        if (req.method === "HEAD") return res.end();
+        return createReadStream(f.path).pipe(res);
+      }
+      const headers = new Headers();
+      for (const [k, v] of Object.entries(req.headers)) for (const x of [v].flat()) headers.append(k, x);
+      const body = req.method === "GET" || req.method === "HEAD" ? undefined : Readable.toWeb(req);
+      const r = await handler.fetch(new Request(url((n) => req.headers[n], u), { method: req.method, headers, body, duplex: "half" }));
+      for (const [k, v] of r.headers) if (k !== "set-cookie") res.setHeader(k, v);
+      const cookies = r.headers.getSetCookie();
+      if (cookies.length) res.setHeader("set-cookie", cookies);
+      res.writeHead(r.status);
+      if (!r.body || req.method === "HEAD") return res.end();
+      Readable.fromWeb(r.body).on("error", (e) => res.destroy(e)).pipe(res);
+    } catch (e) {
+      console.error(e);
+      if (!res.headersSent) res.statusCode = 500;
+      res.end();
+    }
+  }).listen(port, hostname);
+}
+`
 
 // tanStackStart: a TanStack Start app built with Nitro's Vite plugin (its
 // nitro package) ships Nitro's .output, as Nuxt does, on Bun when the
@@ -926,13 +1013,12 @@ type compiledServer struct {
 }
 
 var (
-	smolOutfileRe = regexp.MustCompile(`\boutfile\s*:\s*['"]([^'"]+)['"]`)
-	smolNameRe    = regexp.MustCompile(`\bname\s*:\s*['"]([^'"]+)['"]`)
-	nbcConfigRe   = regexp.MustCompile(`adapterPath[^\n]*next-bun-compile`)
+	outfileOptRe = regexp.MustCompile(`\boutfile\s*:\s*['"]([^'"]+)['"]`)
+	nbcConfigRe  = regexp.MustCompile(`adapterPath[^\n]*next-bun-compile`)
 )
 
 // compiled: whether the project's own build compiles its server, and to
-// what. A tool that does (next-bun-compile, svelte-smol), or bun build
+// what. A tool that does (adapter-bun, next-bun-compile), or bun build
 // --compile in the build script - when no framework's server is what
 // starts, or the compiled file is that server (its output, or what the
 // start script runs), not a part of it like a worker.
@@ -951,32 +1037,6 @@ func (r reader) compiled(pkg pkgJSON, deps map[string]bool, pr *preset, build st
 	if deps["@sveltejs/adapter-bun"] && pr != nil && pr.only && pr.name == "SvelteKit" {
 		if c, ok := r.svelteBunCompiled(); ok {
 			return c
-		}
-	}
-	if deps["@orochibraru/svelte-smol"] {
-		for _, f := range svelteConfigs {
-			b, err := r.read(f)
-			if err != nil || !strings.Contains(string(stripComments(b)), "svelte-smol") {
-				continue
-			}
-			call := adapterCall(b)
-			out := "build"
-			if m := adapterOutRe.FindSubmatch(call); m != nil && relPath(string(m[1])) {
-				out = clean(string(m[1]))
-			}
-			if f == "svelte.config.js" {
-				// SvelteKit 2: client/ and prerendered/ beside the binary
-				name := "server"
-				if m := smolNameRe.FindSubmatch(call); m != nil && relPath(string(m[1])) {
-					name = string(m[1])
-				}
-				return compiledServer{kind: Bundle, artifact: out + "/" + name, framework: "SvelteKit", reason: "its adapter, svelte-smol, compiles it with Bun"}
-			}
-			name := "server"
-			if m := smolOutfileRe.FindSubmatch(call); m != nil && relPath(string(m[1])) {
-				name = string(m[1])
-			}
-			return compiledServer{kind: Binary, artifact: out + "/" + name, framework: "SvelteKit", reason: "its adapter, svelte-smol, compiles it with Bun"}
 		}
 	}
 	at := strings.Index(build, "bun build")

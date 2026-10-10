@@ -1,8 +1,14 @@
 package buildplan_test
 
 import (
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/homeport-sh/cli/buildplan"
 )
@@ -55,17 +61,180 @@ func TestTanStackStartShipsNitrosOutput(t *testing.T) {
 	}
 }
 
-// Without Nitro and without a start script, nothing serves the build: it's
-// refused saying what to add, not guessed at as a binary or a site.
-func TestTanStackStartWithNothingToServeItIsRefused(t *testing.T) {
-	for name, pkg := range map[string]string{
-		"React": `{"scripts":{"build":"vite build","dev":"vite dev --port 3000","preview":"vite preview"},"dependencies":{"@tanstack/react-start":"1.168.61","react":"^19"},"devDependencies":{"vite":"^8"}}`,
-		"Solid": `{"scripts":{"build":"vite build"},"dependencies":{"@tanstack/solid-start":"^1","solid-js":"^1.9"},"devDependencies":{"vite":"^8"}}`,
+// Without Nitro and without a start script - the official starter - the
+// build's dist/server/server.js is a fetch handler with no server: homeport
+// ships a small one of its own beside it, on Bun unless the project pins
+// Node.
+func TestTanStackStartWithNothingToServeItGetsHomeportsServer(t *testing.T) {
+	const react = `{"scripts":{"build":"vite build","dev":"vite dev --port 3000","preview":"vite preview"},"dependencies":{"@tanstack/react-start":"1.168.61","react":"^19"},"devDependencies":{"vite":"^8"}}`
+	for name, c := range map[string]struct {
+		files   map[string]string
+		runtime string
+		run     string
+		install string // in the install, when Bun runs it beside npm
+	}{
+		"the React starter": {js(react), "bun", "--preload ./.homeport/boot.mjs .homeport/tanstack-start.mjs", "bun-linux-"},
+		"Solid, bun.lock": {js(`{"scripts":{"build":"vite build"},"dependencies":{"@tanstack/solid-start":"^1","solid-js":"^1.9"},"devDependencies":{"vite":"^8"}}`, "bun.lock", "{}"),
+			"bun", "--preload ./.homeport/boot.mjs .homeport/tanstack-start.mjs", "bun install"},
+		"an .nvmrc pins Node": {js(react, ".nvmrc", "24\n"), "node", "--import ./.homeport/boot.mjs .homeport/tanstack-start.mjs", "npm ci"},
+		"engines.node pins Node": {js(`{"scripts":{"build":"vite build"},"engines":{"node":">=22"},"dependencies":{"@tanstack/react-start":"^1"}}`),
+			"node", "--import ./.homeport/boot.mjs .homeport/tanstack-start.mjs", "npm ci"},
 	} {
-		_, err := buildplan.Detect(repo(js(pkg)), buildplan.Settings{})
-		if err == nil || !strings.Contains(err.Error(), "dist/server/server.js") || !strings.Contains(err.Error(), "nitro") {
-			t.Errorf("%s: %v", name, err)
+		p := detect(t, c.files, buildplan.Settings{})
+		if p.Kind != buildplan.Bundle || p.Framework != "TanStack Start" || p.Runtime != c.runtime || p.Run != c.run ||
+			!strings.Contains(p.RuntimeReason, "homeport's server") || !strings.Contains(p.Install, c.install) || p.Health != "/" {
+			t.Errorf("%s: %+v", name, p)
+			continue
 		}
+		// the build checks it made the handler, and the server is written
+		// into the bundle, after the production dependencies
+		at := 0
+		for _, step := range []string{"run build", "dist/server/server.js", "--production", "> " + buildplan.BundleDir + "/.homeport/tanstack-start.mjs"} {
+			if _, bun := c.files["bun.lock"]; step == "--production" && !bun {
+				step = "npm prune --omit=dev"
+			}
+			i := strings.Index(p.Command[at:], step)
+			if i < 0 {
+				t.Errorf("%s: the build doesn't %q (after %d): %s", name, step, at, p.Command)
+				break
+			}
+			at += i
+		}
+	}
+	// a start command of the person's own still wins
+	p := detect(t, js(react), buildplan.Settings{Run: "--import ./.homeport/boot.mjs server.mjs"})
+	if p.Run != "--import ./.homeport/boot.mjs server.mjs" || strings.Contains(p.Command, "tanstack-start.mjs") {
+		t.Errorf("set run: %+v", p)
+	}
+}
+
+// tanStackServer is the server homeport ships for a TanStack Start app, as
+// its plan writes it.
+func tanStackServer(t *testing.T) string {
+	t.Helper()
+	p := detect(t, js(`{"scripts":{"build":"vite build"},"dependencies":{"@tanstack/react-start":"^1"}}`), buildplan.Settings{})
+	end := strings.Index(p.Command, "' > "+buildplan.BundleDir+"/.homeport/tanstack-start.mjs")
+	if end < 0 {
+		t.Fatalf("no server written: %s", p.Command)
+	}
+	begin := strings.LastIndex(p.Command[:end], "printf '%s' '")
+	return p.Command[begin+len("printf '%s' '") : end]
+}
+
+// homeport's server serves dist/client's files - hashed assets cached for
+// good, each with its type - and hands every other request to the
+// handler, with the URL the browser used (the edge's X-Forwarded-Proto and
+// X-Forwarded-Host), on PORT and HOST, on Node and Bun.
+func TestHomeportsTanStackStartServer(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		t.Helper()
+		f := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(".homeport/tanstack-start.mjs", tanStackServer(t))
+	write("dist/client/assets/main-B2jnoNjx.js", "console.log(1)")
+	write("dist/client/assets/styles-Cx6X9hdU.css", "body{}")
+	write("dist/client/robots.txt", "User-agent: *")
+	write("package.json", `{"type":"module"}`)
+	write("secret.txt", "not served")
+	write("dist/server/server.js", `export default { async fetch(req) {
+  const u = new URL(req.url)
+  if (u.pathname === "/nope") return new Response("not found", { status: 404, headers: { "content-type": "text/html" } })
+  const h = new Headers({ "content-type": "application/json" })
+  h.append("set-cookie", "a=1; Path=/")
+  h.append("set-cookie", "b=2; Path=/")
+  return new Response(JSON.stringify({ url: req.url, method: req.method, body: await req.text() }), { headers: h })
+} }
+`)
+	ran := 0
+	for rt, port := range map[string]string{"node": "39881", "bun": "39882"} {
+		bin, err := exec.LookPath(rt)
+		if err != nil {
+			continue
+		}
+		ran++
+		cmd := exec.Command(bin, ".homeport/tanstack-start.mjs")
+		cmd.Dir, cmd.Env = dir, append(os.Environ(), "PORT="+port, "HOST=127.0.0.1", "NODE_ENV=production")
+		var out strings.Builder
+		cmd.Stdout, cmd.Stderr = &out, &out
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		base := "http://127.0.0.1:" + port
+		for i := 0; i < 100; i++ {
+			if r, err := http.Get(base + "/robots.txt"); err == nil {
+				r.Body.Close()
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		get := func(method, path, body string, h map[string]string) (*http.Response, string) {
+			req, _ := http.NewRequest(method, base+path, strings.NewReader(body))
+			for k, v := range h {
+				if k == "Host" {
+					req.Host = v
+				}
+				req.Header.Set(k, v)
+			}
+			r, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("%s %s %s: %v (%s)", rt, method, path, err, out.String())
+			}
+			b, _ := io.ReadAll(r.Body)
+			r.Body.Close()
+			return r, string(b)
+		}
+		r, b := get("GET", "/assets/main-B2jnoNjx.js", "", nil)
+		if r.StatusCode != 200 || b != "console.log(1)" || !strings.HasPrefix(r.Header.Get("Content-Type"), "text/javascript") ||
+			r.Header.Get("Cache-Control") != "public, max-age=31536000, immutable" {
+			t.Errorf("%s: asset %d %v %q", rt, r.StatusCode, r.Header, b)
+		}
+		if r, _ := get("GET", "/assets/styles-Cx6X9hdU.css", "", nil); !strings.HasPrefix(r.Header.Get("Content-Type"), "text/css") {
+			t.Errorf("%s: css %v", rt, r.Header)
+		}
+		r, b = get("GET", "/robots.txt", "", nil)
+		if r.StatusCode != 200 || b != "User-agent: *" || !strings.HasPrefix(r.Header.Get("Content-Type"), "text/plain") || strings.Contains(r.Header.Get("Cache-Control"), "immutable") {
+			t.Errorf("%s: robots %d %v %q", rt, r.StatusCode, r.Header, b)
+		}
+		if r, b := get("HEAD", "/robots.txt", "", nil); r.StatusCode != 200 || b != "" {
+			t.Errorf("%s: HEAD %d %q", rt, r.StatusCode, b)
+		}
+		// nothing outside dist/client: those go to the handler
+		for _, path := range []string{"/../../secret.txt", "/%2e%2e/%2e%2e/secret.txt", "/assets/", "/"} {
+			if _, b := get("GET", path, "", nil); strings.Contains(b, "not served") || !strings.Contains(b, `"method":"GET"`) {
+				t.Errorf("%s: %s: %q", rt, path, b)
+			}
+		}
+		// the URL is the browser's, through the edge
+		r, b = get("POST", "/_serverFn/abc?x=1", "payload", map[string]string{"Host": "app.example.com", "X-Forwarded-Proto": "https", "X-Forwarded-Host": "app.example.com"})
+		if r.StatusCode != 200 || !strings.Contains(b, `"url":"https://app.example.com/_serverFn/abc?x=1"`) || !strings.Contains(b, `"method":"POST"`) || !strings.Contains(b, `"body":"payload"`) {
+			t.Errorf("%s: handler %d %q", rt, r.StatusCode, b)
+		}
+		if c := r.Header.Values("Set-Cookie"); len(c) != 2 {
+			t.Errorf("%s: cookies %v", rt, c)
+		}
+		// a POST to an asset's path is the handler's
+		if _, b := get("POST", "/robots.txt", "x", nil); !strings.Contains(b, `"method":"POST"`) {
+			t.Errorf("%s: POST asset %q", rt, b)
+		}
+		// without forwarded headers, the Host it was sent to
+		if _, b := get("GET", "/x", "", nil); !strings.Contains(b, `"url":"http://127.0.0.1:`+port+`/x"`) {
+			t.Errorf("%s: plain %q", rt, b)
+		}
+		if r, _ := get("GET", "/nope", "", nil); r.StatusCode != 404 {
+			t.Errorf("%s: 404 %d", rt, r.StatusCode)
+		}
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}
+	if ran == 0 {
+		t.Skip("no node or bun here")
 	}
 }
 

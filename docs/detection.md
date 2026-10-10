@@ -36,10 +36,6 @@ server. That happens in three ways:
   - next-bun-compile is a Next.js build adapter (set by `adapterPath` in
     next.config, or `NEXT_ADAPTER_PATH=next-bun-compile`) and writes
     `./server`.
-  - svelte-smol is a SvelteKit adapter that writes `<out>/server`, or the
-    `outfile`/`name` you give it. On SvelteKit 2 it serves `client/` and
-    `prerendered/` from beside the binary, so homeport ships that folder as
-    a bundle, with the binary as its `bin`.
 - **`bun build --compile` of the framework's own server output**: Nitro's
   `.output/server/index.mjs`, from Nuxt (`nuxt build --preset bun`) or
   TanStack Start (`nitro({ preset: 'bun' })`). homeport runs the file that
@@ -76,7 +72,7 @@ health path (`/`). Each one can be overridden in the build settings.
 | Next.js | `next` | `.next/standalone` with `.next/static` and `public/` | `server.js` |
 | Nuxt | `nuxt` | Nitro's `.output/` | `server/index.mjs` |
 | TanStack Start, with Nitro | `@tanstack/react-start` or `@tanstack/solid-start`, and `nitro` | Nitro's `.output/` | `server/index.mjs` |
-| TanStack Start, without Nitro | `@tanstack/react-start` or `@tanstack/solid-start` | the app with production dependencies | the start script |
+| TanStack Start, without Nitro | `@tanstack/react-start` or `@tanstack/solid-start` | the app with production dependencies | the start script, else homeport's server (`.homeport/tanstack-start.mjs`) |
 | SvelteKit on Bun | `@sveltejs/adapter-bun` | the app with production dependencies, on Bun | `build/index.js` (or the adapter's `out`) |
 | SvelteKit | `@sveltejs/adapter-node` | the app with production dependencies | `build/index.js` (or the adapter's `out`, from `svelte.config.js` or, in SvelteKit 3, the Vite config) |
 | Astro | `@astrojs/node`, standalone mode | the app with production dependencies | `dist/server/entry.mjs` |
@@ -98,12 +94,37 @@ plugins), as TanStack's Node and Bun hosting guides use. homeport then
 ships Nitro's `.output/` and starts `server/index.mjs`, on Node, or on Bun
 with `nitro({ preset: 'bun' })` (or a start script that runs it with
 `bun`). A Nitro preset for another platform (`vercel`, `netlify`, …) is
-refused. Without Nitro, the build's `dist/server/server.js` is a request
-handler, not a server, so the start script must serve it (`srvx --prod -s
-../client dist/server/server.js`, or TanStack's `bun run server.ts`). With
-neither, it's refused, saying to add Nitro. Server functions check that a
-call is same-origin with the browser's `Sec-Fetch-Site` header, which
-passes through homeport's edge as it is.
+refused.
+
+Without Nitro, which is how TanStack's starter (`@tanstack/cli create`)
+comes, the build's `dist/server/server.js` is a request handler, not a
+server. If the app has a start script, that serves it (`srvx --prod -s
+../client dist/server/server.js`, or TanStack's `bun run server.ts`).
+Otherwise homeport ships a small server of its own in the bundle,
+`.homeport/tanstack-start.mjs`, written by the build:
+
+- It serves `dist/client`'s files to `GET` and `HEAD`, each with its type.
+  The hashed ones under `assets/` are cached for good
+  (`public, max-age=31536000, immutable`); the rest are revalidated.
+- Every other request goes to the handler's `fetch()`, which renders
+  pages, answers server functions and says 404.
+- The request's URL is the one the browser used: the scheme and host
+  from the edge's `X-Forwarded-Proto` and `X-Forwarded-Host`. TanStack
+  checks that a server function's caller is same-origin by the browser's
+  `Sec-Fetch-Site` header, or else its `Origin` against that URL, so both
+  pass behind the edge, which terminates TLS.
+- It listens on `PORT` and `HOST`, with `Bun.serve` on Bun or `node:http`
+  on Node. It runs on Bun unless the project pins Node (`engines.node`,
+  `.nvmrc` or `.node-version`).
+
+It's a bundle, not a binary, since the handler imports the app's
+production dependencies at runtime. A start script of your own (or a start
+command) replaces it. srvx and TanStack's Bun `server.ts` build the request
+URL from the connection, which is plain HTTP behind the edge: server
+functions still work from current browsers, which send `Sec-Fetch-Site`,
+but an `Origin`-only caller gets a 403. srvx's `trustProxy` option, in a
+server entry of yours, makes it read the forwarded headers; or drop the
+start script and homeport's server serves the build.
 
 **SvelteKit on Bun.** `@sveltejs/adapter-bun` writes a `Bun.serve` server,
 so it always runs on Bun: an `.nvmrc` doesn't change that, and setting the
