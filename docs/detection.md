@@ -270,7 +270,7 @@ first shown. None of this happens when you set your own build command.
 
 Views aren't precompiled when the release command doesn't run: a bundle
 uploaded from CI, or the live release shipped again (a change of settings,
-a move to another host). There, each view compiles the first time it's
+or homeport moving it). There, each view compiles the first time it's
 shown, and is kept for the rest of that release.
 
 ### Inertia server-side rendering

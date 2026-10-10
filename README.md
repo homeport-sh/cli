@@ -10,6 +10,19 @@ homeport link       # pick the team, app and environment for this folder
 homeport deploy     # upload the working tree, build it, follow it live
 ```
 
+| Command | What it does |
+| --- | --- |
+| `homeport login` | sign in: approve this device at `app.homeport.sh/cli` (`--name`, `--no-browser`) |
+| `homeport logout` | sign out: this device's session is revoked |
+| `homeport whoami` | who you're signed in as, and your teams |
+| `homeport link` | link this folder to an app's environment (`--team`, `--app`, `--env`) |
+| `homeport deploy` | upload the working tree, build and release it, follow it until it's live |
+| `homeport token create --name <where>` | a token for CI (`HOMEPORT_TOKEN`), printed once |
+| `homeport env pull [--env <name>]` | an environment's database and storage credentials into `.env.local`, never production's |
+| `homeport mcp` | an MCP server on stdio for your editor or agent |
+| `homeport build-plan` | what a hosted build runs for this repository (JSON) |
+| `homeport version` | this CLI's version |
+
 ## Signing in
 
 `homeport login` shows a code and opens `app.homeport.sh/cli`, where you
@@ -106,8 +119,6 @@ on your laptop against staging's database and bucket.
 - No value is printed.
 - Each pull is recorded, and a person can pull 30 times an hour.
 
-`logs` and `cron` from the terminal come next.
-
 ## MCP: homeport in your editor
 
 `homeport mcp` is an [MCP](https://modelcontextprotocol.io) server on stdio,
@@ -128,7 +139,7 @@ Cursor (`~/.cursor/mcp.json`, or `.cursor/mcp.json` in a project):
 | Tool | What it does |
 | --- | --- |
 | `list_apps` | your teams, their apps and environments (reads) |
-| `deploy` | deploys **the folder the server runs in**, as `homeport link` linked it, like `homeport deploy`, and answers the address (**changes it**) |
+| `deploy` | deploys **the folder `homeport mcp` runs in**, as `homeport link` linked it, like `homeport deploy`, and answers the address (**changes it**) |
 | `deploy_status` | a build's status and log, then its release's (reads) |
 | `runtime_logs` | an environment's runtime logs (reads) |
 | `list_variables` | an environment's variables, **names only** (reads) |
@@ -146,10 +157,10 @@ changes unless you start the server with `homeport mcp --allow-changes`.
 **With `--allow-changes` nobody is asked: the agent's changes are made as
 it asks, production included.** Use it only for an editor that can't ask,
 and only if you'd let that agent change production unattended.
-No tool takes a folder: `deploy` deploys the one the server runs in. No
+No tool takes a folder: `deploy` deploys the one `homeport mcp` runs in. No
 tool returns a variable's value or a secret, and none deletes: apps,
-databases and domains are deleted from the dashboard. The server makes at
-most 20 changes a minute.
+databases and domains are deleted from the dashboard. `homeport mcp` makes
+at most 20 changes a minute.
 
 ## `build-plan`
 
