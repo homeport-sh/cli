@@ -15,6 +15,18 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Inertia's SSR renderer runs beside the web under a supervisor in the
+      # app's PHP (pcntl): tested with the renderer on the runner's Node, on
+      # Bun, and compiled by bun build --compile
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.5"
+          extensions: pcntl
+          coverage: none
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
       - name: go vet
         run: go vet ./...
 

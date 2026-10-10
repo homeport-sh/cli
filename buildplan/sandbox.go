@@ -35,9 +35,10 @@ var (
 	binArgsRe  = regexp.MustCompile(`^[A-Za-z0-9 ._:/=@,+-]+$`)
 	procNameRe = regexp.MustCompile(`^[a-z][a-z0-9]{0,14}$`)
 	// mem_mb's shape: at most 8 digits, then K, M or G; cpu: at most 4 digits
-	procMemRe   = regexp.MustCompile(`^([0-9]{1,8})([KMG])$`)
-	procCPURe   = regexp.MustCompile(`^([0-9]{1,4})%$`)
-	binArgsSays = "letters, digits, spaces and . _ : / = @ , + - only; no ; && | or variables"
+	procMemRe    = regexp.MustCompile(`^([0-9]{1,8})([KMG])$`)
+	procCPURe    = regexp.MustCompile(`^([0-9]{1,4})%$`)
+	binArgsSays  = "letters, digits, spaces and . _ : / = @ , + - only; no ; && | or variables"
+	procArgsSays = "letters, digits, spaces and . _ : / = @ , + - ${} only; no ; && |"
 )
 
 // CheckRun says whether run is args the sandbox can start the app with.
@@ -75,7 +76,9 @@ func CheckRelease(release string) error {
 
 // CheckProcesses says whether processes are ones the sandbox can run beside
 // the web: at most MaxProcesses, each named once (never web or release) and
-// args to the app's bin, with its memory and CPU, if any, in their shapes.
+// args to the app's bin, which may name $PORT and $HOST as a start command
+// may (homeportd gives each process a port of its own: Reverb's listens on
+// it), with its memory and CPU, if any, in their shapes.
 func CheckProcesses(procs []Process) error {
 	if len(procs) > MaxProcesses {
 		return fmt.Errorf("at most %d processes", MaxProcesses)
@@ -91,8 +94,8 @@ func CheckProcesses(procs []Process) error {
 			return fmt.Errorf("process %q needs a command: its args to the app's binary", p.Name)
 		case len(p.Run) > maxCommandSz:
 			return fmt.Errorf("process %q: its command is at most %d characters", p.Name, maxCommandSz)
-		case !binArgsRe.MatchString(p.Run):
-			return fmt.Errorf("process %q: args to the app's binary, without a shell (%s)", p.Name, binArgsSays)
+		case !runRe.MatchString(p.Run) || strings.Contains(runVarRe.ReplaceAllString(p.Run, ""), "$"):
+			return fmt.Errorf("process %q: args to the app's binary, without a shell (%s; $PORT and $HOST, its own, are the only variables)", p.Name, procArgsSays)
 		case p.Memory != "" && !memoryOK(p.Memory):
 			return fmt.Errorf("process %q: memory must be 1M to %dM, like 256M or 1G", p.Name, MaxProcessMemoryMB)
 		case p.CPU != "" && !cpuOK(p.CPU):

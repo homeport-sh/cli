@@ -231,3 +231,133 @@ required.
 
 Not handled yet: workspace members, whose lockfile is above the app's
 folder (refused, saying so), Yarn Plug'n'Play at runtime, and Deno.
+
+## PHP and Laravel apps
+
+A PHP app ships as a **bundle**: its files, installed with Composer
+(`--no-dev`), its front-end assets built with Bun (`bun run build`), and
+FrankenPHP as `bin`. Nothing is compiled per app. It's served with
+`php-server --root public --listen :$PORT`, or, when it requires
+`laravel/octane`, through Octane's worker in FrankenPHP's worker mode.
+
+### Inertia server-side rendering
+
+An app renders its Inertia pages before sending them when it requires
+`inertiajs/inertia-laravel` and has an SSR build: a `build:ssr` script in
+`package.json`, or an SSR entry in its Vite config (`ssr: 'resources/js/ssr.jsx'`
+for `laravel-vite-plugin` or `@inertiajs/vite`). Then:
+
+- **The build** runs `bun run build:ssr` in place of `bun run build`, since
+  that script builds both. With no `build:ssr`, it runs `bun run build`, then
+  `vite build --ssr`.
+- **What runs** is one of three things, as for a JavaScript app:
+  - **The binary your SSR build compiles.** If `build:ssr`, or a script it
+    runs, has `bun build --compile`, that binary runs as it is, and no
+    runtime ships. Since the build's own Bun is the Alpine (musl) one, the
+    command is run once more on the pinned Bun for the Linux the app runs
+    on (glibc), checked by its sha256, with the build's architecture as its
+    `--target`. A `-musl` target is refused.
+  - **Otherwise the SSR bundle** that Vite made (`bootstrap/ssr/ssr.js`,
+    `app.js`, `ssr.mjs` or `app.mjs`, in the order Inertia looks), bundled
+    again into one file with every package it imports, at
+    `bootstrap/ssr/ssr.mjs`, on Node or Bun (below). No `node_modules`
+    ships, and a cold start reads one file.
+- **It runs beside the web, in the same sandbox**, so PHP reaches it at
+  Inertia's default address, `http://127.0.0.1:13714`, with nothing to
+  configure, whichever of the three it is. homeport starts the web through
+  `.homeport/beside.php`, a small supervisor in the app's own PHP. It starts
+  what `.homeport/beside` lists (the renderer), then the web. A renderer
+  that exits is started again after a second, then longer, up to 30
+  seconds. A stop reaches the web, and when the web exits, so does the
+  renderer. Each copy of the app has its own. An app that sleeps when idle
+  sleeps and wakes with its renderer.
+- **While the renderer isn't answering** (it failed, or a request came in
+  as it started), Inertia renders those pages in the browser instead, and
+  the app logs why.
+
+**Its memory is the app's.** The renderer runs within the app's memory,
+and takes about 60-70 MB beside the web, so give an app that renders on the
+server at least 512 MB (the plan says so). Its heap is held to a quarter of
+the app's memory, and at least 64 MB: `--max-old-space-size` on Node,
+`--smol` on Bun, and the JavaScript engine's RAM size for a compiled
+renderer. On Node, its compile cache is kept with the release, so a cold
+start after the first doesn't compile the bundle again.
+
+**Which runtime: Node or Bun.** The rules are a JavaScript app's (see
+*Which runtime* above), applied to the SSR renderer:
+
+1. The build settings' runtime, or `runtime:` in `homeport.yaml`.
+2. `package.json`'s `engines`, when it names only `bun` or only `node`.
+3. A version file: `.bun-version` means Bun; `.nvmrc` or `.node-version`
+   means Node.
+4. What the project runs its SSR bundle with: a `package.json` script that
+   runs `bootstrap/ssr/…` (`bun bootstrap/ssr/ssr.js`), else a Composer
+   script's `inertia:start-ssr --runtime=bun` (or `node`).
+5. A Bun lockfile (`bun.lock`, `bun.lockb`).
+6. Otherwise Node.
+
+Unless the renderer is compiled, the pinned official binary ships in the
+bundle as `.homeport/node` or `.homeport/bun`, checked against its
+sha256: Node from nodejs.org's tarball, at the version `.nvmrc`, `.node-version` or `engines.node` asks
+for (24 by default), or Bun 1.4.2. The plan says which runtime it chose and
+why (`runtime`, `runtime_version`, `runtime_reason`; a compiled renderer
+is `bun`, and its reason says it's compiled), and `ssr` is `inertia`.
+
+If you set a build command, it replaces the build and the bundle, so the
+renderer isn't added.
+
+### Laravel Reverb
+
+An app that requires `laravel/reverb` runs Reverb as a process of its own,
+named `reverb`:
+
+```
+reverb: php-cli artisan reverb:start --host=$HOST --port=$PORT
+```
+
+On each of the app's domains, WebSocket connections to `/app/…` and
+signed calls to Reverb's API on `/apps/…`, which Laravel broadcasts
+through, go to it. Other requests under `/app` and `/apps` stay the app's.
+Open connections stay open when homeport's routing changes. A deploy
+restarts Reverb, and Echo reconnects on its own.
+
+homeport sets the variables Laravel's Reverb and Echo configuration read,
+unless you set them yourself:
+
+| Variable | Value |
+|---|---|
+| `REVERB_APP_ID`, `REVERB_APP_KEY`, `REVERB_APP_SECRET` | generated for the environment, once |
+| `REVERB_HOST` | the app's domain |
+| `REVERB_PORT` | `443` |
+| `REVERB_SCHEME` | `https` |
+| `BROADCAST_CONNECTION` | `reverb` |
+
+The build gets `VITE_REVERB_APP_KEY`, `VITE_REVERB_HOST`,
+`VITE_REVERB_PORT` and `VITE_REVERB_SCHEME` from those, as Laravel's
+`.env.example` does, so Echo connects as generated by
+`php artisan install:broadcasting` with no edits. Any variable starting
+with `VITE_` that you set is given to the build too, since Vite builds
+it into the page. While `REVERB_HOST` is still the value homeport set, a
+change of the app's domain changes it too, at the next deploy. One you set
+yourself is left as it is.
+
+Reverb's process has 128 MB of its own, not the app's whole size, and is
+billed as any process is, for its memory the whole time it runs.
+Processes run only while the app is always on (at least 1 copy), so
+Reverb does too, and an open connection never finds it asleep. **On a plan
+where apps sleep when idle (Free), processes don't run, so Reverb doesn't
+either, and Echo won't connect.**
+
+To run Reverb with options of your own, or another size, declare a process
+named `reverb`: yours replaces homeport's. It must listen on `$PORT`
+(`--port=$PORT`) and every address (`--host=$HOST`), since that's where its
+requests go. It counts toward the four processes an app may have; when the
+app has four already, Reverb isn't run, and the plan says so. To not run
+Reverb at all though the app requires it, set `BROADCAST_CONNECTION` to
+another connection (`log`, `null`, …): the next deploy leaves its process
+out.
+
+### Processes and their port
+
+Each process has a port of its own. Like the start command, a process
+may name `$PORT` and `$HOST`, and no other variable.

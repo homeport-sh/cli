@@ -658,10 +658,13 @@ func (r reader) runtimeFor(pkg pkgJSON, pr *preset, st start, stErr error, stFro
 		return pr.needs, pr.name + " runs on " + title(pr.needs)
 	}
 	if rt == "" {
-		return "node", "nothing says Bun: Node, the default"
+		return "node", defaultRuntimeWhy
 	}
 	return rt, why
 }
+
+// defaultRuntimeWhy is why Node runs an app when nothing says which.
+const defaultRuntimeWhy = "nothing says Bun: Node, the default"
 
 func title(rt string) string { return map[string]string{"bun": "Bun", "node": "Node"}[rt] }
 
