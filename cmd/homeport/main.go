@@ -58,7 +58,5 @@ func (a *app) usage() {
 In CI, set HOMEPORT_TOKEN to a token from homeport token create. Exit codes:
 0 live, 1 error, 2 usage, 3 not signed in, 4 build failed, 5 release
 failed, 6 timed out.
-
-Logs and cron from the terminal come next.
 `)
 }
