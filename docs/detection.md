@@ -276,12 +276,19 @@ for `laravel-vite-plugin` or `@inertiajs/vite`). Then:
   the app logs why.
 
 **Its memory is the app's.** The renderer runs within the app's memory,
-and takes about 60-70 MB beside the web, so give an app that renders on the
-server at least 512 MB (the plan says so). Its heap is held to a quarter of
-the app's memory, and at least 64 MB: `--max-old-space-size` on Node,
-`--smol` on Bun, and the JavaScript engine's RAM size for a compiled
-renderer. On Node, its compile cache is kept with the release, so a cold
-start after the first doesn't compile the bundle again.
+beside the web: about 60-70 MB for a small app, more as its pages grow. Size
+the app with that in mind (the plan says so). An app at the smallest size,
+256 MB, renders, with less room left for the web.
+
+- **On Node**, its heap is capped at a quarter of the app's memory, and at
+  least 64 MB (`--max-old-space-size`). Past that, it's Node that stops,
+  not the web. Its compile cache is kept with the release, so a cold start
+  after the first doesn't compile the bundle again.
+- **On Bun**, and for a compiled renderer, it's tuned to collect garbage
+  sooner (`--smol`, and the JavaScript engine's RAM size set to a quarter
+  of the app's memory), but it isn't capped. A renderer that grows past
+  what's left of the app's memory takes the app down with it, and it's
+  restarted. If that's a risk, run the renderer on Node.
 
 **Which runtime: Node or Bun.** The rules are a JavaScript app's (see
 *Which runtime* above), applied to the SSR renderer:

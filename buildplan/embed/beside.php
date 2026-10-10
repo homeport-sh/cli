@@ -18,7 +18,7 @@ $say = function (string $message): void {
 };
 $io = [0 => STDIN, 1 => STDOUT, 2 => STDERR];
 
-// held to the app's memory (homeportd's HOMEPORT_MEMORY_MB): %heap% is a
+// sized to the app's memory (homeportd's HOMEPORT_MEMORY_MB): %heap% is a
 // quarter of it in MB, at least 64 (128 when it isn't known), %heapbytes% the
 // same in bytes. A word KEY=value before the command is its environment.
 $memory = (int) getenv('HOMEPORT_MEMORY_MB');

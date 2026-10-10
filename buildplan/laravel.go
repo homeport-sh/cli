@@ -52,7 +52,7 @@ const ReverbRun = "php-cli artisan reverb:start --host=$HOST --port=$PORT"
 const ReverbMemory = "128M"
 
 // ssrMemoryNote: the renderer runs in the app's memory.
-const ssrMemoryNote = "Inertia's SSR renderer runs in the app's memory (about 60-70 MB beside the web): give the app at least 512 MB"
+const ssrMemoryNote = "Inertia's SSR renderer runs in the app's memory, beside the web: about 60-70 MB for a small app, more as its pages grow - size the app with it in mind"
 
 // SSRInertia is Plan.SSR for Inertia's server-side rendering.
 const SSRInertia = "inertia"
@@ -289,8 +289,9 @@ func (r reader) ssrFor(cfg fileConfig, s Settings) (ssr, error) {
 // the runtime, checked), the supervisor and .homeport/wrap.
 func ssrAssemble(b string, x ssr) string {
 	var steps []string
-	// held to the app's memory: the supervisor fills in %heap% (a quarter
-	// of HOMEPORT_MEMORY_MB) and %heapbytes%
+	// sized to the app's memory: the supervisor fills in %heap% (a quarter
+	// of HOMEPORT_MEMORY_MB) and %heapbytes%. Node's heap is capped there;
+	// Bun's (--smol, the JSC RAM size) is tuned to collect sooner, not capped
 	beside := "BUN_JSC_forceRAMSize=%heapbytes% " + x.out
 	if x.out != "" {
 		steps = append(steps,
