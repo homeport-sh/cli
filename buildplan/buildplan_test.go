@@ -230,7 +230,7 @@ func TestAPHPAppShipsAsABundle(t *testing.T) {
 	php := map[string]string{"composer.json": `{"require":{"laravel/framework":"^13.0"}}`, "composer.lock": "{}"}
 	p := detect(t, php, buildplan.Settings{})
 	if p.Kind != buildplan.Bundle || p.Artifact != ".homeport-bundle" || p.StaticFallback ||
-		!strings.HasSuffix(p.Command, " && frankenphp-bundle . .homeport-bundle && mv -T .homeport-bundle/frankenphp .homeport-bundle/bin") || p.Run != "php-server --root public --listen :$PORT" {
+		!strings.Contains(p.Command, " && frankenphp-bundle . .homeport-bundle && mv -T .homeport-bundle/frankenphp .homeport-bundle/bin") || p.Run != "php-server --root public --listen :$PORT" {
 		t.Fatalf("default: %+v", p)
 	}
 	// on the base with the static FrankenPHP and Bun, pinned by digest: -2,
@@ -304,14 +304,16 @@ func TestALaravelAppIsBuiltWithItsCaches(t *testing.T) {
 		" || echo \"homeport: built without Laravel's event and route caches (artisan couldn't make them here); the app runs without them\" >&2"
 	laravel := map[string]string{"composer.json": `{"require":{"laravel/framework":"^13.0"}}`, "composer.lock": "{}"}
 	p := detect(t, laravel, buildplan.Settings{})
-	if p.Command != caches+" && frankenphp-bundle . .homeport-bundle && mv -T .homeport-bundle/frankenphp .homeport-bundle/bin" {
+	// (and the release runner that compiles its views after: laravel.go)
+	if !strings.HasPrefix(p.Command, caches+" && frankenphp-bundle . .homeport-bundle && mv -T .homeport-bundle/frankenphp .homeport-bundle/bin && ") {
 		t.Fatalf("laravel: %q", p.Command)
 	}
 	if strings.Contains(p.Command, "config:cache") || strings.Contains(p.Install, "artisan") {
 		t.Fatalf("config is the environment's: %+v", p)
 	}
 	// compiled views are named by their template's absolute path, which the
-	// build's isn't the release's: views cached here are never read
+	// build's isn't the release's: views cached here would never be read
+	// (the release compiles them)
 	if strings.Contains(p.Command, "view:cache") {
 		t.Fatalf("views cached where they're never read: %q", p.Command)
 	}
@@ -321,7 +323,7 @@ func TestALaravelAppIsBuiltWithItsCaches(t *testing.T) {
 		t.Fatalf("octane: %q", p.Command)
 	}
 	laravel["homeport.yaml"] = "build:\n  artifact: dist/app\n"
-	if p := detect(t, laravel, buildplan.Settings{}); p.Command != caches+" && frankenphp-bundle . dist/app && mv -T dist/app/frankenphp dist/app/bin" {
+	if p := detect(t, laravel, buildplan.Settings{}); !strings.HasPrefix(p.Command, caches+" && frankenphp-bundle . dist/app && mv -T dist/app/frankenphp dist/app/bin && mkdir -p dist/app/.homeport && ") {
 		t.Fatalf("artifact: %q", p.Command)
 	}
 	// not Laravel: no artisan to run

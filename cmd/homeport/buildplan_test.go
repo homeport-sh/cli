@@ -191,3 +191,18 @@ func TestAPHPRepoBuildsOnTheFrankenPHPBase(t *testing.T) {
 		t.Fatalf("no lockfile: %v", err)
 	}
 }
+
+// A Laravel app's release command in homeport.yaml that runs through ./bin
+// is refused, saying what to write - as before its views were compiled on
+// release - rather than wrapped into one that fails at deploy.
+func TestALaravelReleaseThroughBinIsStillRefused(t *testing.T) {
+	files := map[string]string{"composer.json": `{"require":{"laravel/framework":"^13.0"}}`, "composer.lock": "{}",
+		"homeport.yaml": "release: ./bin php-cli artisan migrate --force\n"}
+	if _, err := planBuild(repo(t, files), buildplan.Settings{}); err == nil || !strings.Contains(err.Error(), "write `php-cli artisan migrate --force`") {
+		t.Fatalf("%v", err)
+	}
+	files["homeport.yaml"] = "release: php-cli artisan migrate --force\n"
+	if p := plan(t, files); p.Release != "php-cli .homeport/release.php ./bin php-cli artisan migrate --force" {
+		t.Fatalf("release: %q", p.Release)
+	}
+}

@@ -240,6 +240,39 @@ FrankenPHP as `bin`. Nothing is compiled per app. It's served with
 `php-server --root public --listen :$PORT`, or, when it requires
 `laravel/octane`, through Octane's worker in FrankenPHP's worker mode.
 
+### Laravel's caches
+
+A Laravel app (one that requires `laravel/framework`) is built with
+`php artisan event:cache` and `route:cache`. If artisan can't boot without
+the app's environment, the build goes on without them and the log says so.
+Config isn't cached, because it holds the environment.
+
+Its Blade views are compiled once per deploy, by the release command, not
+at build and not as the app starts. Blade names a compiled view by its
+template's absolute path, and the build's path isn't the one the app serves
+from, but the release runs in the app's own sandbox at that path. The
+release command runs `.homeport/release.php`, which runs your own release
+command first (your migrations), then `php artisan view:cache` into
+`storage/framework/views`, the release's own folder:
+
+```
+php-cli .homeport/release.php ./bin php-cli artisan migrate --force
+```
+
+Set only your own command as the release command, for example
+`php-cli artisan migrate --force`. Never set the wrapped line above: homeport
+adds the wrapper itself. A release command the sandbox can't run, such as one
+starting with `./bin`, is refused at build, saying what to write.
+
+If your release command fails, the deploy stops, as before. If
+`view:cache` fails, the deploy goes on, and views compile as they're
+first shown. None of this happens when you set your own build command.
+
+Views aren't precompiled when the release command doesn't run: a bundle
+uploaded from CI, or the live release shipped again (a change of settings,
+a move to another host). There, each view compiles the first time it's
+shown, and is kept for the rest of that release.
+
 ### Inertia server-side rendering
 
 An app renders its Inertia pages before sending them when it requires

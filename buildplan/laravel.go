@@ -68,6 +68,44 @@ const (
 //go:embed embed/beside.php
 var besidePHP string
 
+// A Laravel app's views are compiled by its release command, once a deploy:
+// homeportd runs it in the sandbox the release serves from, at the path it
+// serves from - Blade names a compiled view by its template's absolute path
+// (view.relative_hash is off by default, and only config sets it), so views
+// compiled at build, at another path, would never be read. The release runs
+// .homeport/release.php, which runs the app's own release command first,
+// then artisan view:cache into storage/framework/views, the release's own.
+const (
+	releasePHPF   = ".homeport/release.php"
+	releaseRunner = "php-cli " + releasePHPF + " ./bin"
+)
+
+//go:embed embed/release.php
+var releasePHP string
+
+// releaseViewCache puts the release runner in the bundle b.
+func releaseViewCache(b string) string {
+	return join("mkdir -p "+b+"/.homeport",
+		"printf '%s' '"+base64.StdEncoding.EncodeToString([]byte(releasePHP))+"' | base64 -d > "+b+"/"+releasePHPF)
+}
+
+// cacheViewsOnRelease has the plan's release command run through the
+// runner, the app's own after it - unless that won't fit, when it runs as
+// it is and the plan says why the views aren't cached. One the sandbox
+// can't run (./bin in front, a shell's &&) is left as it is, for the check
+// that refuses it, saying why: wrapped, it would pass and fail at deploy.
+func cacheViewsOnRelease(p *Plan) {
+	if CheckRelease(p.Release) != nil {
+		return
+	}
+	release := strings.TrimSpace(releaseRunner + " " + p.Release)
+	if len(release) > maxCommandSz {
+		p.Warnings = append(p.Warnings, fmt.Sprintf("Laravel's views aren't compiled on release: the release command is too long to run beside it (at most %d characters)", maxCommandSz-len(releaseRunner)-1))
+		return
+	}
+	p.Release = release
+}
+
 // an SSR entry for laravel-vite-plugin in the Vite config: ssr: '…' or [ … ]
 var viteSSRRe = regexp.MustCompile(`\bssr\s*:\s*['"\x60\[]`)
 
