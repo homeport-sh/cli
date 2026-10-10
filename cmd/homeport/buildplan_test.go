@@ -48,7 +48,7 @@ func TestAGoRepoBuildsAStaticBinaryWithItsGoVersion(t *testing.T) {
 
 func TestABunRepoInstallsThenBuilds(t *testing.T) {
 	p := plan(t, map[string]string{
-		"package.json": `{"name":"app","packageManager":"bun@1.4.2","scripts":{"build":"bun build --compile src/index.ts --outfile server"}}`,
+		"package.json": `{"name":"app","packageManager":"bun@1.4.3","scripts":{"build":"bun build --compile src/index.ts --outfile server"}}`,
 		"bun.lock":     "{}",
 	})
 	if p.Toolchain != "bun" || p.Image != buildplan.BunImage || p.Install != "bun install --frozen-lockfile" ||

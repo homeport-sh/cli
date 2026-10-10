@@ -50,7 +50,7 @@ func TestThePackageManagerIsTheLockfiles(t *testing.T) {
 		says  string
 	}{
 		"packageManager without its lockfile": {js(with(`,"packageManager":"pnpm@10.4.1"`), "package-lock.json", "{}"), "pnpm-lock.yaml"},
-		"packageManager alone":                {map[string]string{"package.json": with(`,"packageManager":"bun@1.4.2"`)}, "lockfile"},
+		"packageManager alone":                {map[string]string{"package.json": with(`,"packageManager":"bun@1.4.3"`)}, "lockfile"},
 	} {
 		if _, err := buildplan.Detect(repo(c.files), buildplan.Settings{}); err == nil || !strings.Contains(err.Error(), c.says) {
 			t.Errorf("%s: %v", name, err)
