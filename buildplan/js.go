@@ -1,6 +1,10 @@
 package buildplan
 
 import (
+	"bytes"
+	"compress/gzip"
+	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -502,14 +506,16 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		stErr != nil && !errors.Is(stErr, errShell) && !errors.Is(stErr, errEnv)
 	if tanStackServer {
 		c := *pr
-		c.entry, c.needs = tanStackServerFile, "bun"
+		c.entry = tanStackServerFile
 		pr = &c
 	}
 
 	rt, reason := r.runtimeFor(pkg, pr, st, stErr, stFrom, runtime, runtimeFrom)
 	if tanStackServer {
-		if reason == pr.name+" runs on Bun" {
-			reason = "nothing pins Node: Bun"
+		// nothing to read a runtime from but how it installs: Bun when Bun
+		// does, else Node
+		if reason == defaultRuntimeWhy && pmName == "bun" {
+			rt, reason = "bun", "it installs with Bun"
 		}
 		reason = "homeport's server runs TanStack Start's dist/server/server.js (" + reason + ")"
 	}
@@ -641,7 +647,7 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 	p.build, p.assemble = build, assemble(layout, m, rt, bin, sums, binName, keepMaps, env)
 	if tanStackServer {
 		p.assemble = join(`{ [ -f dist/server/server.js ] || { echo 'homeport: the build made no dist/server/server.js' >&2; exit 1; }; }`,
-			p.assemble, "printf '%s' '"+tanStackServerJS+"' > "+BundleDir+"/"+tanStackServerFile)
+			p.assemble, "printf '%s' '"+tanStackServerFor(rt)+"' | base64 -d | gzip -dc > "+BundleDir+"/"+tanStackServerFile)
 	}
 	p.Command = join(build, p.assemble)
 	if binName != "" {
@@ -862,85 +868,33 @@ func (r reader) svelteBunCompiled() (compiledServer, bool) {
 	return c, true
 }
 
-// tanStackServerJS is homeport's server for TanStack Start's own build,
-// without Nitro: dist/server/server.js exports a fetch handler and no
-// server. It serves dist/client's files (GET and HEAD) - the hashed ones
-// under assets/ cached for good - and hands every other request to the
-// handler, with the URL the browser used: the edge terminates TLS and sets
-// X-Forwarded-Proto and X-Forwarded-Host, so a same-origin check sees
-// https. On PORT and HOST; Bun.serve on Bun, node:http on Node. No single
-// quotes: it's written in some.
+// homeport's server for TanStack Start's own build, without Nitro:
+// dist/server/server.js exports a fetch handler and no server. srvx serves
+// it (embed/tanstack-start/server.mjs, bundled with srvx per runtime by
+// gen.sh): dist/client's files, then the handler, with the URL the browser
+// used, on PORT and HOST.
 const tanStackServerFile = ".homeport/tanstack-start.mjs"
 
-const tanStackServerJS = `import { stat } from "node:fs/promises";
-import { createReadStream } from "node:fs";
-import { Readable } from "node:stream";
-import http from "node:http";
-const handler = (await import("../dist/server/server.js")).default;
-const root = new URL("../dist/client", import.meta.url).pathname;
-const types = { js: "text/javascript; charset=utf-8", mjs: "text/javascript; charset=utf-8", css: "text/css; charset=utf-8",
-  html: "text/html; charset=utf-8", txt: "text/plain; charset=utf-8", json: "application/json", map: "application/json",
-  xml: "application/xml", webmanifest: "application/manifest+json", wasm: "application/wasm", pdf: "application/pdf",
-  svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",
-  avif: "image/avif", ico: "image/x-icon", woff: "font/woff", woff2: "font/woff2", ttf: "font/ttf", otf: "font/otf",
-  mp4: "video/mp4", webm: "video/webm", mp3: "audio/mpeg" };
-// a file of dist/client, for a GET or HEAD
-async function file(method, pathname) {
-  if (method !== "GET" && method !== "HEAD") return;
-  let p;
-  try { p = decodeURIComponent(pathname); } catch { return; }
-  if (p.includes("\0") || p.split("/").includes("..") || p.endsWith("/")) return;
-  try {
-    const s = await stat(root + p);
-    if (!s.isFile()) return;
-    const ext = p.slice(p.lastIndexOf(".") + 1).toLowerCase();
-    return { path: root + p, headers: { "content-type": types[ext] ?? "application/octet-stream", "content-length": String(s.size),
-      "cache-control": p.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "public, max-age=0, must-revalidate" } };
-  } catch { return; }
+var (
+	//go:embed embed/tanstack-start/node.mjs
+	tanStackServerNode []byte
+	//go:embed embed/tanstack-start/bun.mjs
+	tanStackServerBun []byte
+)
+
+// tanStackServerFor: the runtime's server, gzipped and in base64, for the
+// build to write.
+func tanStackServerFor(rt string) string {
+	src := tanStackServerNode
+	if rt == "bun" {
+		src = tanStackServerBun
+	}
+	var b bytes.Buffer
+	w, _ := gzip.NewWriterLevel(&b, gzip.BestCompression)
+	_, _ = w.Write(src)
+	_ = w.Close()
+	return base64.StdEncoding.EncodeToString(b.Bytes())
 }
-// the URL the browser used: the edge says its scheme and host
-function url(get, u) {
-  const first = (v) => v?.split(",")[0].trim();
-  const proto = first(get("x-forwarded-proto"));
-  const host = first(get("x-forwarded-host")) || get("host") || u.host;
-  return (proto === "https" || proto === "http" ? proto : u.protocol.slice(0, -1)) + "://" + host + u.pathname + u.search;
-}
-const port = Number(process.env.PORT) || 3000, hostname = process.env.HOST || "0.0.0.0";
-if (typeof Bun !== "undefined") {
-  Bun.serve({ port, hostname, async fetch(req) {
-    const u = new URL(req.url);
-    const f = await file(req.method, u.pathname);
-    if (f) return new Response(req.method === "HEAD" ? null : Bun.file(f.path), { headers: f.headers });
-    return handler.fetch(new Request(url((n) => req.headers.get(n), u), req));
-  } });
-} else {
-  http.createServer(async (req, res) => {
-    try {
-      const u = new URL(req.url, "http://" + (req.headers.host || "localhost"));
-      const f = await file(req.method, u.pathname);
-      if (f) {
-        res.writeHead(200, f.headers);
-        if (req.method === "HEAD") return res.end();
-        return createReadStream(f.path).pipe(res);
-      }
-      const headers = new Headers();
-      for (const [k, v] of Object.entries(req.headers)) for (const x of [v].flat()) headers.append(k, x);
-      const body = req.method === "GET" || req.method === "HEAD" ? undefined : Readable.toWeb(req);
-      const r = await handler.fetch(new Request(url((n) => req.headers[n], u), { method: req.method, headers, body, duplex: "half" }));
-      for (const [k, v] of r.headers) if (k !== "set-cookie") res.setHeader(k, v);
-      const cookies = r.headers.getSetCookie();
-      if (cookies.length) res.setHeader("set-cookie", cookies);
-      res.writeHead(r.status);
-      if (!r.body || req.method === "HEAD") return res.end();
-      Readable.fromWeb(r.body).on("error", (e) => res.destroy(e)).pipe(res);
-    } catch (e) {
-      console.error(e);
-      if (!res.headersSent) res.statusCode = 500;
-      res.end();
-    }
-  }).listen(port, hostname);
-}
-`
 
 // tanStackStart: a TanStack Start app built with Nitro's Vite plugin (its
 // nitro package) ships Nitro's .output, as Nuxt does, on Bun when the

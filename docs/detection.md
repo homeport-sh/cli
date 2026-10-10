@@ -101,11 +101,13 @@ comes, the build's `dist/server/server.js` is a request handler, not a
 server. If the app has a start script, that serves it (`srvx --prod -s
 ../client dist/server/server.js`, or TanStack's `bun run server.ts`).
 Otherwise homeport ships a small server of its own in the bundle,
-`.homeport/tanstack-start.mjs`, written by the build:
+`.homeport/tanstack-start.mjs`, written by the build. It's built on srvx,
+TanStack's own server, bundled into the file (srvx 1.0.5), so the app
+needs no new dependency:
 
 - It serves `dist/client`'s files to `GET` and `HEAD`, each with its type.
   The hashed ones under `assets/` are cached for good
-  (`public, max-age=31536000, immutable`); the rest are revalidated.
+  (`max-age=31536000, immutable`); the rest are revalidated.
 - Every other request goes to the handler's `fetch()`, which renders
   pages, answers server functions and says 404.
 - The request's URL is the one the browser used: the scheme and host
@@ -113,12 +115,15 @@ Otherwise homeport ships a small server of its own in the bundle,
   checks that a server function's caller is same-origin by the browser's
   `Sec-Fetch-Site` header, or else its `Origin` against that URL, so both
   pass behind the edge, which terminates TLS.
-- It listens on `PORT` and `HOST`, with `Bun.serve` on Bun or `node:http`
-  on Node. It runs on Bun unless the project pins Node (`engines.node`,
-  `.nvmrc` or `.node-version`).
+- It listens on `PORT` and `HOST`.
+- It runs on the project's runtime, by the rules below. When none of them
+  says, which is the usual case since there's no start script, it runs on
+  Bun if the app installs with Bun (`bun.lock`, `bun.lockb`, or
+  `packageManager: bun`), else on Node.
 
 It's a bundle, not a binary, since the handler imports the app's
-production dependencies at runtime. A start script of your own (or a start
+production dependencies at runtime. With Nitro installed, Nitro's output
+is what runs, as above. A start script of your own (or a start
 command) replaces it. srvx and TanStack's Bun `server.ts` build the request
 URL from the connection, which is plain HTTP behind the edge: server
 functions still work from current browsers, which send `Sec-Fetch-Site`,
@@ -172,15 +177,17 @@ applies wins:
      `bun --bun`.
    - `npm run x`, `bun run x`, `pnpm x` and `yarn x` are followed to the
      script they name.
-5. **A framework that only runs on one runtime**: Elysia runs on Bun when
+5. **For homeport's TanStack Start server only**: Bun when the app
+   installs with Bun, else Node (see *TanStack Start*).
+6. **A framework that only runs on one runtime**: Elysia runs on Bun when
    nothing above said otherwise. A version file or start script that says
    Node wins, as with any app. SvelteKit's adapter-bun is the exception: it
    builds a `Bun.serve` server, so it runs on Bun whatever rules 2 to 4
    say, and only the build settings or `homeport.yaml` can say otherwise,
    which is refused.
-6. **Otherwise Node.**
+7. **Otherwise Node.**
 
-The lockfile decides only how dependencies install, never what runs. A
+The lockfile decides only how dependencies install, never what runs, except for homeport's TanStack Start server (rule 5), which has nothing else to go by. A
 Next.js app with `bun.lock` and `next start` installs with Bun and runs on
 Node. `packageManager` names an installer, so it isn't read as a runtime
 either.

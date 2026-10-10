@@ -1,6 +1,9 @@
 package buildplan_test
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"io"
 	"net/http"
 	"os"
@@ -73,7 +76,9 @@ func TestTanStackStartWithNothingToServeItGetsHomeportsServer(t *testing.T) {
 		run     string
 		install string // in the install, when Bun runs it beside npm
 	}{
-		"the React starter": {js(react), "bun", "--preload ./.homeport/boot.mjs .homeport/tanstack-start.mjs", "bun-linux-"},
+		"the React starter, npm":            {js(react), "node", "--import ./.homeport/boot.mjs .homeport/tanstack-start.mjs", "npm ci"},
+		"the React starter, bun.lock":       {js(react, "bun.lock", "{}"), "bun", "--preload ./.homeport/boot.mjs .homeport/tanstack-start.mjs", "bun install"},
+		"bun.lock, and an .nvmrc pins Node": {js(react, "bun.lock", "{}", ".nvmrc", "24\n"), "node", "--import ./.homeport/boot.mjs .homeport/tanstack-start.mjs", "bun-linux-"},
 		"Solid, bun.lock": {js(`{"scripts":{"build":"vite build"},"dependencies":{"@tanstack/solid-start":"^1","solid-js":"^1.9"},"devDependencies":{"vite":"^8"}}`, "bun.lock", "{}"),
 			"bun", "--preload ./.homeport/boot.mjs .homeport/tanstack-start.mjs", "bun install"},
 		"an .nvmrc pins Node": {js(react, ".nvmrc", "24\n"), "node", "--import ./.homeport/boot.mjs .homeport/tanstack-start.mjs", "npm ci"},
@@ -108,17 +113,33 @@ func TestTanStackStartWithNothingToServeItGetsHomeportsServer(t *testing.T) {
 	}
 }
 
-// tanStackServer is the server homeport ships for a TanStack Start app, as
-// its plan writes it.
-func tanStackServer(t *testing.T) string {
+// tanStackServer is the server homeport ships for a TanStack Start app on
+// the runtime, as its plan writes it.
+func tanStackServer(t *testing.T, rt string) string {
 	t.Helper()
-	p := detect(t, js(`{"scripts":{"build":"vite build"},"dependencies":{"@tanstack/react-start":"^1"}}`), buildplan.Settings{})
-	end := strings.Index(p.Command, "' > "+buildplan.BundleDir+"/.homeport/tanstack-start.mjs")
+	files := js(`{"scripts":{"build":"vite build"},"dependencies":{"@tanstack/react-start":"^1"}}`)
+	if rt == "bun" {
+		files = js(`{"scripts":{"build":"vite build"},"dependencies":{"@tanstack/react-start":"^1"}}`, "bun.lock", "{}")
+	}
+	p := detect(t, files, buildplan.Settings{})
+	if p.Runtime != rt {
+		t.Fatalf("runtime %s: %+v", rt, p)
+	}
+	end := strings.Index(p.Command, "' | base64 -d | gzip -dc > "+buildplan.BundleDir+"/.homeport/tanstack-start.mjs")
 	if end < 0 {
 		t.Fatalf("no server written: %s", p.Command)
 	}
 	begin := strings.LastIndex(p.Command[:end], "printf '%s' '")
-	return p.Command[begin+len("printf '%s' '") : end]
+	z, err := base64.StdEncoding.DecodeString(p.Command[begin+len("printf '%s' '") : end])
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := gzip.NewReader(bytes.NewReader(z))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(r)
+	return string(b)
 }
 
 // homeport's server serves dist/client's files - hashed assets cached for
@@ -137,7 +158,6 @@ func TestHomeportsTanStackStartServer(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write(".homeport/tanstack-start.mjs", tanStackServer(t))
 	write("dist/client/assets/main-B2jnoNjx.js", "console.log(1)")
 	write("dist/client/assets/styles-Cx6X9hdU.css", "body{}")
 	write("dist/client/robots.txt", "User-agent: *")
@@ -159,6 +179,7 @@ func TestHomeportsTanStackStartServer(t *testing.T) {
 			continue
 		}
 		ran++
+		write(".homeport/tanstack-start.mjs", tanStackServer(t, rt))
 		cmd := exec.Command(bin, ".homeport/tanstack-start.mjs")
 		cmd.Dir, cmd.Env = dir, append(os.Environ(), "PORT="+port, "HOST=127.0.0.1", "NODE_ENV=production")
 		var out strings.Builder
@@ -192,7 +213,7 @@ func TestHomeportsTanStackStartServer(t *testing.T) {
 		}
 		r, b := get("GET", "/assets/main-B2jnoNjx.js", "", nil)
 		if r.StatusCode != 200 || b != "console.log(1)" || !strings.HasPrefix(r.Header.Get("Content-Type"), "text/javascript") ||
-			r.Header.Get("Cache-Control") != "public, max-age=31536000, immutable" {
+			r.Header.Get("Cache-Control") != "max-age=31536000, immutable" {
 			t.Errorf("%s: asset %d %v %q", rt, r.StatusCode, r.Header, b)
 		}
 		if r, _ := get("GET", "/assets/styles-Cx6X9hdU.css", "", nil); !strings.HasPrefix(r.Header.Get("Content-Type"), "text/css") {
