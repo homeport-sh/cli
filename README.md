@@ -169,8 +169,8 @@ with or without a configuration file, and says how a hosted build will
 build it. It uses the same detection the platform's builders run.
 [docs/detection.md](docs/detection.md) says what it detects - Go, PHP,
 static sites, and JavaScript apps on Node or Bun (Next.js, Nuxt, SvelteKit,
-Astro, React Router, Remix, NestJS, Elysia, Hono, Fastify, Express) - and
-how each runs.
+TanStack Start, Astro, React Router, Remix, NestJS, Elysia, Hono, Fastify,
+Express) - and how each runs.
 
 The Go packages here (`buildplan`, `envfile`, `artifact`, `cidr`) are shared
 with the platform.

@@ -214,7 +214,7 @@ var SiteFolders = []string{"build", "dist", "out"}
 func Files() []string {
 	return slices.Concat([]string{ConfigFile, "go.mod", "composer.json", "composer.lock", "package.json", "bun.lock", "bun.lockb",
 		"package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", ".nvmrc", ".node-version", ".bun-version", "index.html",
-		"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"}, svelteConfigs, nextConfigs)
+		"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"}, svelteConfigs, nextConfigs, nuxtConfigs, nitroConfigs)
 }
 
 var (
@@ -552,20 +552,30 @@ func (r reader) rscKit(p *Plan, cfg fileConfig) {
 }
 
 // servers are packages that mean the app runs a server, not a site.
-var servers = []string{"@rsc-kit/core", "next", "nuxt", "@remix-run/node", "@react-router/node", "@tanstack/react-start",
-	"hono", "express", "elysia", "fastify", "koa", "@nestjs/core", "@sveltejs/adapter-node", "@astrojs/node"}
+var servers = []string{"@rsc-kit/core", "next", "nuxt", "@remix-run/node", "@react-router/node", "@tanstack/react-start", "@tanstack/solid-start",
+	"hono", "express", "elysia", "fastify", "koa", "@nestjs/core", "@sveltejs/adapter-node", "@sveltejs/adapter-bun", "@astrojs/node"}
+
+var staticPagesRe = regexp.MustCompile("\\bpages\\s*:\\s*['\"`]([^'\"`]+)['\"`]")
 
 // site recognises a JavaScript project whose build is a static site, from its
 // packages and config: where the site lands, unless something said otherwise.
 func (r reader) site(p *Plan, cfg fileConfig) bool {
 	deps := r.deps()
-	if slices.ContainsFunc(servers, func(s string) bool { return deps[s] }) {
+	// a SvelteKit config importing adapter-static is a site, whatever
+	// server adapter is installed beside it
+	imported := r.svelteAdapters()
+	static := deps["@sveltejs/adapter-static"] && len(imported) == 1 && imported[0] == "@sveltejs/adapter-static"
+	if !static && slices.ContainsFunc(servers, func(s string) bool { return deps[s] }) {
 		return false
 	}
 	framework, folder := "", ""
 	switch {
 	case deps["@sveltejs/adapter-static"]:
+		// its pages: where it writes the site (build)
 		framework, folder = "SvelteKit", "build"
+		if m := staticPagesRe.FindSubmatch(r.svelteAdapterCallOf("@sveltejs/adapter-static")); m != nil && relPath(string(m[1])) {
+			folder = clean(string(m[1]))
+		}
 	case deps["astro"]:
 		for _, f := range []string{"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"} {
 			if b, err := r.read(f); err == nil && astroServer.Match(b) {

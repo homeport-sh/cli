@@ -432,14 +432,19 @@ func TestTheBundleIsLeanAndCachesCompiledCode(t *testing.T) {
 	}
 }
 
-// A SvelteKit app behind homeport's proxy knows its origin from the
-// forwarded headers; the boot sets what each framework reads.
-func TestSvelteKitTrustsTheForwardedOrigin(t *testing.T) {
+// A SvelteKit app behind homeport's proxy knows its origin: the Host the
+// edge routed on, and the scheme from X-Forwarded-Proto. X-Forwarded-Host
+// is a visitor's to set, so it isn't read (HOST_HEADER).
+func TestSvelteKitTrustsOnlyTheForwardedScheme(t *testing.T) {
 	p := detect(t, js(`{"scripts":{"build":"vite build"},"devDependencies":{"@sveltejs/kit":"^2","@sveltejs/adapter-node":"^5"}}`,
 		"svelte.config.js", "import adapter from '@sveltejs/adapter-node';\nexport default { kit: { adapter: adapter({ out: 'out' }) } };\n"), buildplan.Settings{})
-	if !strings.Contains(p.Command, `"PROTOCOL_HEADER":"x-forwarded-proto"`) || !strings.Contains(p.Command, `"HOST_HEADER":"x-forwarded-host"`) ||
+	if !strings.Contains(p.Command, `"PROTOCOL_HEADER":"x-forwarded-proto"`) || strings.Contains(p.Command, "HOST_HEADER") ||
 		p.Run != "--import ./.homeport/boot.mjs out/index.js" {
 		t.Fatalf("%+v", p)
+	}
+	// the build fails if the adapter didn't write the server it starts
+	if !strings.Contains(p.Command, "[ -f out/index.js ]") {
+		t.Errorf("no entry check: %s", p.Command)
 	}
 }
 

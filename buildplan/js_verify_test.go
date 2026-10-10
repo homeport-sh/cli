@@ -65,13 +65,7 @@ func TestConfigIsReadWithoutCommentsAndInItsCall(t *testing.T) {
 			t.Errorf("%q: %+v", cfg, p)
 		}
 	}
-	smol := `{"scripts":{"build":"vite build"},"devDependencies":{"@sveltejs/kit":"^2","@orochibraru/svelte-smol":"^1"}}`
-	p := detect(t, js(smol, "bun.lock", "{}", "svelte.config.js",
-		"import adapter from '@orochibraru/svelte-smol'\nexport default { kit: { adapter: adapter(), version: { name: 'v2' } } }\n"), buildplan.Settings{})
-	if !strings.Contains(p.Command, "mv "+buildplan.BundleDir+"/server ") {
-		t.Errorf("kit.version.name: %s", p.Command)
-	}
-	p = detect(t, js(`{"scripts":{"build":"vite build"},"devDependencies":{"@sveltejs/kit":"^2","@sveltejs/adapter-node":"^5"}}`, "svelte.config.js",
+	p := detect(t, js(`{"scripts":{"build":"vite build"},"devDependencies":{"@sveltejs/kit":"^2","@sveltejs/adapter-node":"^5"}}`, "svelte.config.js",
 		"import adapter from '@sveltejs/adapter-node'\nexport default { kit: { adapter: adapter({ precompress: { brotli: true }, out: 'out' }) } }\n"), buildplan.Settings{})
 	if p.Run != "--import ./.homeport/boot.mjs out/index.js" {
 		t.Errorf("out after a nested object: %+v", p)
