@@ -45,7 +45,8 @@ func TestInertiaSSRIsDetectedAndBuilt(t *testing.T) {
 			t.Errorf("command has no %q: %s", want, p.Command)
 		}
 	}
-	if !strings.HasPrefix(p.Command, "frankenphp-bundle . .homeport-bundle && mv -T .homeport-bundle/frankenphp .homeport-bundle/bin && ") {
+	// Laravel's caches, then the bundle, then the SSR renderer into it
+	if !strings.HasPrefix(p.Command, buildplan.LaravelCaches+" && frankenphp-bundle . .homeport-bundle && mv -T .homeport-bundle/frankenphp .homeport-bundle/bin && ") {
 		t.Errorf("the bundle comes first: %s", p.Command)
 	}
 
