@@ -140,7 +140,7 @@ func TestTheRuntimeIsWhatTheProjectRuns(t *testing.T) {
 		"Elysia's start script wins over Elysia":  {js(`{"scripts":{"start":"node dist/index.js"},"dependencies":{"elysia":"^1"}}`, "bun.lock", "{}"), buildplan.Settings{}, "node", "node dist/index.js"},
 		"engines names bun":                       {js(`{"engines":{"bun":">=1.2"},"scripts":{"start":"node server.js"},"dependencies":{"express":"^5"}}`), buildplan.Settings{}, "bun", "engines"},
 		"engines names node":                      {js(`{"engines":{"node":">=22"},"scripts":{"start":"bun server.ts"},"dependencies":{"express":"^5"}}`, "bun.lock", "{}"), buildplan.Settings{}, "node", "engines"},
-		".bun-version":                            {js(sprintf(hono, "node dist/index.js"), ".bun-version", "1.4.2\n"), buildplan.Settings{}, "bun", ".bun-version"},
+		".bun-version":                            {js(sprintf(hono, "node dist/index.js"), ".bun-version", "1.4.3\n"), buildplan.Settings{}, "bun", ".bun-version"},
 		".nvmrc":                                  {js(sprintf(hono, "bun src/index.ts"), "bun.lock", "{}", ".nvmrc", "v24\n"), buildplan.Settings{}, "node", ".nvmrc"},
 		".node-version":                           {js(sprintf(hono, "bun src/index.ts"), "bun.lock", "{}", ".node-version", "24.21.0\n"), buildplan.Settings{}, "node", ".node-version"},
 		"a package's command runs on Node":        {js(`{"scripts":{"start":"fastify start -l info app.js"},"dependencies":{"fastify":"^5","fastify-cli":"^7"}}`, "bun.lock", "{}"), buildplan.Settings{}, "node", "fastify"},
@@ -278,7 +278,7 @@ func TestNodeIsAPinnedOfficialRelease(t *testing.T) {
 func TestBunIsPinnedUnlessTheProjectSaysOtherwise(t *testing.T) {
 	elysia := `{"scripts":{"start":"bun src/index.ts"},"dependencies":{"elysia":"^1"}%s}`
 	p := detect(t, js(strings.Replace(elysia, "%s", "", 1), "bun.lock", "{}"), buildplan.Settings{})
-	if p.Image != buildplan.BunImage || p.RuntimeVersion != buildplan.BunVersion || !strings.Contains(p.Command, "a83d263767d839e4d2649ca8e35d07159c7afc99afdc96d731ced29e056dda0c") {
+	if p.Image != buildplan.BunImage || p.RuntimeVersion != buildplan.BunVersion || !strings.Contains(p.Command, "7ce7d6b654eddeec20afddf2396317fba6dc19ab52788a27e894e1806bf8f24b") {
 		t.Fatalf("pinned: %+v", p)
 	}
 	for _, ok := range []string{`,"engines":{"bun":">=1.1"}`, `,"packageManager":"bun@1.4.0"`, `,"engines":{"bun":"1"}`} {

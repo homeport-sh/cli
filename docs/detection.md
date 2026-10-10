@@ -207,7 +207,7 @@ Test that before you rely on it. Elysia, SvelteKit's adapter-bun and Bun's own `
   that line, `node` runs the newest, and a range (`>=20`, `^22`) runs the
   default if it's in the range, else the newest that is. Any other version
   is refused.
-- **Bun.** homeport runs 1.4.2. A version the project names
+- **Bun.** homeport runs 1.4.3. A version the project names
   (`packageManager`, `.bun-version`, `engines.bun`) must be that one's: `1`,
   `1.4`, `1.4.x`, or a range it's in. Any other is refused, because every
   Bun homeport runs is pinned by digest and checksum.
@@ -423,7 +423,7 @@ the app with that in mind (the plan says so). An app at the smallest size,
 Unless the renderer is compiled, the pinned official binary ships in the
 bundle as `.homeport/node` or `.homeport/bun`, checked against its
 sha256: Node from nodejs.org's tarball, at the version `.nvmrc`, `.node-version` or `engines.node` asks
-for (24 by default), or Bun 1.4.2. The plan says which runtime it chose and
+for (24 by default), or Bun 1.4.3. The plan says which runtime it chose and
 why (`runtime`, `runtime_version`, `runtime_reason`; a compiled renderer
 is `bun`, and its reason says it's compiled), and `ssr` is `inertia`.
 

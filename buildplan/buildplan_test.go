@@ -233,10 +233,10 @@ func TestAPHPAppShipsAsABundle(t *testing.T) {
 		!strings.Contains(p.Command, " && frankenphp-bundle . .homeport-bundle && mv -T .homeport-bundle/frankenphp .homeport-bundle/bin") || p.Run != "php-server --root public --listen :$PORT" {
 		t.Fatalf("default: %+v", p)
 	}
-	// on the base with the static FrankenPHP and Bun, pinned by digest: -2,
-	// whose bundles' opcache skips timestamp checks and keeps its compiled
-	// scripts across wakes
-	if p.Image != "ghcr.io/homeport-sh/frankenphp:8.5-1.12.7-bun1.4.2-2@sha256:dd12c9841c2e27b0fb2ae07862eeba65e48ae8db9307515543b7b3e0d5e1cabc" {
+	// on the base with the static FrankenPHP and Bun 1.4.3, pinned by
+	// digest, whose bundles' opcache skips timestamp checks and keeps its
+	// compiled scripts across wakes
+	if p.Image != "ghcr.io/homeport-sh/frankenphp:8.5-1.12.7-bun1.4.3@sha256:ae01b5385d2f6039be569c0a0b7aa96741ea7b3ab5af09e404dd3576039222e2" {
 		t.Fatalf("image: %s", p.Image)
 	}
 	if b, _ := json.Marshal(p); !strings.Contains(string(b), `"kind":"bundle"`) {
