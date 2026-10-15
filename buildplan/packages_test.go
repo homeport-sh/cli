@@ -1,6 +1,7 @@
 package buildplan_test
 
 import (
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -21,20 +22,30 @@ var published = buildplan.Package{
 	},
 }
 
-// Lightpanda is the first package. Until its image is published nobody can
-// choose it: a build would have nothing to unpack.
-func TestLightpandaIsCuratedButNotYetPublished(t *testing.T) {
+// Lightpanda is the first package: published (homeport-sh/homeport
+// images/pkg-lightpanda, upstream's exact files), so an app can choose it,
+// but unlisted until its licence is confirmed.
+func TestLightpandaIsPublishedAndUnlisted(t *testing.T) {
 	i := slices.IndexFunc(buildplan.Packages(), func(p buildplan.Package) bool { return p.Name == "lightpanda" })
 	if i < 0 {
 		t.Fatalf("lightpanda isn't on the list: %+v", buildplan.Packages())
 	}
 	p := buildplan.Packages()[i]
-	if p.Version != "1.0.0" || !slices.Equal(p.Provides, []string{"lightpanda"}) || p.License != "AGPL-3.0" || p.Published() {
+	if p.Version != "1.0.0" || !slices.Equal(p.Provides, []string{"lightpanda"}) || p.License != "AGPL-3.0" || p.Listed || !p.Published() {
 		t.Fatalf("%+v", p)
 	}
-	err := buildplan.Settings{Packages: []string{"lightpanda"}}.Check()
-	if err == nil || !strings.Contains(err.Error(), "isn't published yet") {
-		t.Fatalf("an unpublished package was accepted: %v", err)
+	want := map[string]string{
+		artifact.ArchAMD64: "ghcr.io/homeport-sh/pkg-lightpanda:1.0.0-x86-64@sha256:d2a12d302a3719d487a09bc719a9df65b1ee813b66d6f3c59774b02a5208369b",
+		artifact.ArchARM64: "ghcr.io/homeport-sh/pkg-lightpanda:1.0.0-arm64@sha256:3d156a0bd32766646073018af3efefdf563b5780e26cd4ebb3783a3cfdfca579",
+	}
+	if !maps.Equal(p.Images, want) || p.Size[artifact.ArchAMD64] != 188303266 || p.Size[artifact.ArchARM64] != 192792091 {
+		t.Fatalf("images %v, sizes %v", p.Images, p.Size)
+	}
+	if err := (buildplan.Settings{Packages: []string{"lightpanda"}}).Check(); err != nil {
+		t.Fatalf("lightpanda, by name: %v", err)
+	}
+	if slices.ContainsFunc(buildplan.Listed(), func(p buildplan.Package) bool { return p.Name == "lightpanda" }) {
+		t.Fatal("lightpanda is in the dashboard's list")
 	}
 }
 

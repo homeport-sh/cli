@@ -6,6 +6,8 @@ import (
 	"maps"
 	"slices"
 	"strings"
+
+	"github.com/homeport-sh/cli/artifact"
 )
 
 // System packages: executables an app runs beside its own (a headless
@@ -71,6 +73,12 @@ var catalog = []Package{
 		Name: "lightpanda", Version: "1.0.0", License: "AGPL-3.0",
 		About:    "Lightpanda, a headless browser for scraping and automation (Chrome DevTools Protocol)",
 		Provides: []string{"lightpanda"},
+		// published 2026-10-15 from images/pkg-lightpanda (homeport-sh/homeport)
+		Images: map[string]string{
+			artifact.ArchAMD64: "ghcr.io/homeport-sh/pkg-lightpanda:1.0.0-x86-64@sha256:d2a12d302a3719d487a09bc719a9df65b1ee813b66d6f3c59774b02a5208369b",
+			artifact.ArchARM64: "ghcr.io/homeport-sh/pkg-lightpanda:1.0.0-arm64@sha256:3d156a0bd32766646073018af3efefdf563b5780e26cd4ebb3783a3cfdfca579",
+		},
+		Size: map[string]int64{artifact.ArchAMD64: 188303266, artifact.ArchARM64: 192792091},
 	},
 }
 

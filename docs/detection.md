@@ -506,7 +506,7 @@ Nothing is installed on the server: the release carries them.
 |---|---|---|---|
 | `lightpanda` | 1.0.0 | `lightpanda`, a headless browser (CDP) | AGPL-3.0 |
 
-Lightpanda can't be chosen until its image is published. It's unlisted
+Lightpanda is published (`ghcr.io/homeport-sh/pkg-lightpanda`). It's unlisted
 while its licence is confirmed: you can choose it by name, but the
 dashboard's list doesn't show it. homeport turns its telemetry off
 (`LIGHTPANDA_DISABLE_TELEMETRY=true`) wherever it ships.
