@@ -36,8 +36,12 @@ type Package struct {
 	About    string   `json:"about"`    // one line, for the list in build settings
 	Provides []string `json:"provides"` // its executables, in its bin/
 	License  string   `json:"license"`  // SPDX, of what ships
+	// Listed: shown in the dashboard's list (Listed). An unlisted package
+	// can still be chosen by name, in build settings or homeport.yaml.
+	Listed bool `json:"listed"`
 	// Images: per architecture (artifact.ArchAMD64, artifact.ArchARM64),
-	// its image, pinned by digest; none until it's published
+	// its image, ghcr.io/homeport-sh/pkg-<name>:<version>-<arch>, pinned
+	// by digest; none until it's published
 	Images map[string]string `json:"images,omitempty"`
 	// Size: what it adds to a release, unpacked, in bytes, per architecture
 	Size map[string]int64 `json:"size,omitempty"`
@@ -59,7 +63,9 @@ type PlanPackage struct {
 // starts as `lightpanda serve --host 127.0.0.1 --port <p>` and drives with
 // puppeteer-core or playwright over localhost. Upstream's linux binaries,
 // linked against glibc only (libc, libm, ld.so; at most GLIBC_2.38 on
-// arm64, 2.35 on x86-64), so the host's /lib is all they need.
+// arm64, 2.35 on x86-64), so the host's /lib is all they need. Its image
+// is upstream's exact files (homeport-sh/homeport images/pkg-lightpanda).
+// Unlisted until its licence (AGPL-3.0) is confirmed for redistribution.
 var catalog = []Package{
 	{
 		Name: "lightpanda", Version: "1.0.0", License: "AGPL-3.0",
@@ -68,7 +74,19 @@ var catalog = []Package{
 	},
 }
 
-// Packages is the list, for showing.
+// Listed is what the dashboard shows a person to choose from: the
+// published, listed packages.
+func Listed() []Package {
+	var out []Package
+	for _, p := range Packages() {
+		if p.Listed && p.Published() {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// Packages is the whole list, listed or not.
 func Packages() []Package {
 	out := make([]Package, len(catalog))
 	for i, p := range catalog {

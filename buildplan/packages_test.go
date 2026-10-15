@@ -16,8 +16,8 @@ const goMod = "module x\n\ngo 1.26\n"
 var published = buildplan.Package{
 	Name: "lightpanda", Version: "1.0.0", About: "a headless browser", Provides: []string{"lightpanda"}, License: "AGPL-3.0",
 	Images: map[string]string{
-		artifact.ArchAMD64: "ghcr.io/homeport-sh/pkg-lightpanda:1.0.0@sha256:" + strings.Repeat("a", 64),
-		artifact.ArchARM64: "ghcr.io/homeport-sh/pkg-lightpanda:1.0.0@sha256:" + strings.Repeat("b", 64),
+		artifact.ArchAMD64: "ghcr.io/homeport-sh/pkg-lightpanda:1.0.0-x86-64@sha256:" + strings.Repeat("a", 64),
+		artifact.ArchARM64: "ghcr.io/homeport-sh/pkg-lightpanda:1.0.0-arm64@sha256:" + strings.Repeat("b", 64),
 	},
 }
 
@@ -145,7 +145,7 @@ func TestTheCatalogIsWellFormed(t *testing.T) {
 		}
 		for arch, ref := range p.Images {
 			if (arch != artifact.ArchAMD64 && arch != artifact.ArchARM64) || !pkgImageRe.MatchString(ref) ||
-				!strings.HasPrefix(ref, "ghcr.io/homeport-sh/pkg-"+p.Name+":"+p.Version+"@") {
+				!strings.HasPrefix(ref, "ghcr.io/homeport-sh/pkg-"+p.Name+":"+p.Version+"-"+arch+"@") {
 				t.Errorf("%s: %s %s", p.Name, arch, ref)
 			}
 		}
@@ -161,4 +161,30 @@ func TestTheCatalogIsWellFormed(t *testing.T) {
 func samePkg(a, b buildplan.PlanPackage) bool {
 	return a.Name == b.Name && a.Version == b.Version && len(a.Images) == len(b.Images) &&
 		a.Images[artifact.ArchAMD64] == b.Images[artifact.ArchAMD64] && a.Images[artifact.ArchARM64] == b.Images[artifact.ArchARM64]
+}
+
+// Lightpanda is unlisted until its licence is confirmed: an app can choose
+// it by name, but the dashboard's list doesn't show it. Listed is what the
+// dropdown shows: published and listed.
+func TestAnUnlistedPackageIsChosenByNameOnly(t *testing.T) {
+	i := slices.IndexFunc(buildplan.Packages(), func(p buildplan.Package) bool { return p.Name == "lightpanda" })
+	if i < 0 || buildplan.Packages()[i].Listed {
+		t.Fatalf("lightpanda is listed: %+v", buildplan.Packages())
+	}
+	unlisted, listed := published, published
+	listed.Name, listed.Provides, listed.Listed = "ffmpeg", []string{"ffmpeg"}, true
+	listed.Images = map[string]string{
+		artifact.ArchAMD64: "ghcr.io/homeport-sh/pkg-ffmpeg:1.0.0-x86-64@sha256:" + strings.Repeat("c", 64),
+		artifact.ArchARM64: "ghcr.io/homeport-sh/pkg-ffmpeg:1.0.0-arm64@sha256:" + strings.Repeat("d", 64),
+	}
+	notYet := listed
+	notYet.Name, notYet.Provides, notYet.Images = "pandoc", []string{"pandoc"}, nil
+	defer buildplan.WithCatalog([]buildplan.Package{unlisted, listed, notYet})()
+	if err := (buildplan.Settings{Packages: []string{"lightpanda", "ffmpeg"}}).Check(); err != nil {
+		t.Fatalf("an unlisted package, by name: %v", err)
+	}
+	got := buildplan.Listed()
+	if len(got) != 1 || got[0].Name != "ffmpeg" {
+		t.Fatalf("the dropdown shows %+v, want ffmpeg alone", got)
+	}
 }
