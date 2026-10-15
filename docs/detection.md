@@ -8,6 +8,9 @@ build does.
 What a person sets in the app's build settings wins over `homeport.yaml`,
 and `homeport.yaml` wins over detection.
 
+Response headers (`headers:` in `homeport.yaml`) are in
+[headers.md](headers.md).
+
 | Files | Toolchain | Produces |
 |---|---|---|
 | `go.mod` | Go (`golang:<go.mod's version>`) | a binary |
