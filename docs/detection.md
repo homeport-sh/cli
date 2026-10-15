@@ -485,3 +485,25 @@ out.
 
 Each process has a port of its own. Like the start command, a process
 may name `$PORT` and `$HOST`, and no other variable.
+
+## System packages
+
+An app can ship with executables from a short list homeport curates and
+patches, chosen in the build settings or in `homeport.yaml`:
+
+```yaml
+packages: [lightpanda]
+```
+
+The build settings' list, when it has any, replaces the file's. Only a
+package on the list is accepted (`buildplan.Packages`), each at most once,
+at most eight; a static site can't have any, since nothing of it runs.
+The build unpacks each package into the release, at
+`.homeport/pkgs/<name>/`, and the app finds its executables on `PATH`.
+Nothing is installed on the server: the release carries them.
+
+| Package | Version | Provides | Licence |
+|---|---|---|---|
+| `lightpanda` | 1.0.0 | `lightpanda`, a headless browser (CDP) | AGPL-3.0 |
+
+Lightpanda can't be chosen until its image is published.

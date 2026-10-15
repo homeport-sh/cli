@@ -65,17 +65,21 @@ type Settings struct {
 	// Runtime: what runs a JavaScript app, bun or node; empty is what the
 	// project says (its engines, version files, start script)
 	Runtime string `json:"runtime,omitempty"`
+	// Packages: the system packages it ships with (packages.go), replacing
+	// homeport.yaml's when there are any
+	Packages []string `json:"packages,omitempty"`
 }
 
 // IsZero says whether nothing is set.
 func (s Settings) IsZero() bool {
 	return s.Root == "" && s.Kind == "" && s.Install == "" && s.Command == "" && s.Output == "" &&
-		s.Run == "" && s.Release == "" && len(s.Processes) == 0 && s.Octane == nil && s.Runtime == ""
+		s.Run == "" && s.Release == "" && len(s.Processes) == 0 && s.Octane == nil && s.Runtime == "" &&
+		len(s.Packages) == 0
 }
 
 // With is s with what o sets in its place: one deploy's settings over the
-// app's saved ones. What o leaves empty is s's; processes, when o has any,
-// are o's alone.
+// app's saved ones. What o leaves empty is s's; processes and packages,
+// when o has any, are o's alone.
 func (s Settings) With(o Settings) Settings {
 	pick := func(a, b string) string {
 		if b != "" {
@@ -86,9 +90,12 @@ func (s Settings) With(o Settings) Settings {
 	out := Settings{Root: pick(s.Root, o.Root), Kind: pick(s.Kind, o.Kind), Install: pick(s.Install, o.Install),
 		Command: pick(s.Command, o.Command), Output: pick(s.Output, o.Output), Run: pick(s.Run, o.Run),
 		Release: pick(s.Release, o.Release), Processes: slices.Clone(s.Processes), Octane: s.Octane,
-		Runtime: pick(s.Runtime, o.Runtime)}
+		Runtime: pick(s.Runtime, o.Runtime), Packages: slices.Clone(s.Packages)}
 	if len(o.Processes) > 0 {
 		out.Processes = slices.Clone(o.Processes)
+	}
+	if len(o.Packages) > 0 {
+		out.Packages = slices.Clone(o.Packages)
 	}
 	if o.Octane != nil {
 		v := *o.Octane
@@ -150,6 +157,10 @@ type Plan struct {
 	// which the app's WebSocket paths go to.
 	SSR    string `json:"ssr,omitempty"`
 	Reverb bool   `json:"reverb,omitempty"`
+
+	// Packages: the system packages the builder unpacks into the release
+	// (PackagesDir), by name
+	Packages []PlanPackage `json:"packages,omitempty"`
 
 	// a bundle's build, and what makes the bundle from what it left
 	// (Command is both): a build command someone sets replaces the first;
@@ -238,6 +249,7 @@ type fileConfig struct {
 	Run       string                   `yaml:"run"`
 	Release   string                   `yaml:"release"`
 	Processes map[string]processConfig `yaml:"processes"`
+	Packages  []string                 `yaml:"packages"`
 }
 
 type processConfig struct {
@@ -294,6 +306,9 @@ func (s Settings) Check() error {
 	if err := CheckRelease(s.Release); err != nil {
 		return err
 	}
+	if err := CheckPackages(s.Packages); err != nil {
+		return err
+	}
 	return CheckProcesses(s.Processes)
 }
 
@@ -336,6 +351,9 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 
 	if cfg.Runtime != "" && cfg.Runtime != "bun" && cfg.Runtime != "node" {
 		return Plan{}, fmt.Errorf("%s: runtime %q: bun or node", ConfigFile, cfg.Runtime)
+	}
+	if err := CheckPackages(cfg.Packages); err != nil {
+		return Plan{}, fmt.Errorf("%s: %w", ConfigFile, err)
 	}
 	p, err := r.detect(cfg, s)
 	if err != nil {
@@ -434,6 +452,14 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 			p.Run, p.Octane = phpServerRoot(p.Run), p.Run == PHPOctaneRun
 		}
 	}
+	packages := cfg.Packages
+	if len(s.Packages) > 0 {
+		packages = s.Packages
+	}
+	if p.Kind == Static && len(packages) > 0 {
+		return Plan{}, errStaticPackages
+	}
+	p.Packages = planPackages(packages)
 	if p.Kind == Static {
 		p.Run, p.Release, p.Processes = "", "", nil // nothing runs
 		p.Runtime, p.RuntimeVersion, p.RuntimeReason, p.Health = "", "", "", ""
