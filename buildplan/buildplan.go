@@ -68,18 +68,21 @@ type Settings struct {
 	// Packages: the system packages it ships with (packages.go), replacing
 	// homeport.yaml's when there are any
 	Packages []string `json:"packages,omitempty"`
+	// Headers: the app's response headers, replacing homeport.yaml's when
+	// there are any (headers.go)
+	Headers []HeaderRule `json:"headers,omitempty"`
 }
 
 // IsZero says whether nothing is set.
 func (s Settings) IsZero() bool {
 	return s.Root == "" && s.Kind == "" && s.Install == "" && s.Command == "" && s.Output == "" &&
 		s.Run == "" && s.Release == "" && len(s.Processes) == 0 && s.Octane == nil && s.Runtime == "" &&
-		len(s.Packages) == 0
+		len(s.Packages) == 0 && len(s.Headers) == 0
 }
 
 // With is s with what o sets in its place: one deploy's settings over the
-// app's saved ones. What o leaves empty is s's; processes and packages,
-// when o has any, are o's alone.
+// app's saved ones. What o leaves empty is s's; processes, packages and
+// headers, when o has any, are o's alone.
 func (s Settings) With(o Settings) Settings {
 	pick := func(a, b string) string {
 		if b != "" {
@@ -90,12 +93,15 @@ func (s Settings) With(o Settings) Settings {
 	out := Settings{Root: pick(s.Root, o.Root), Kind: pick(s.Kind, o.Kind), Install: pick(s.Install, o.Install),
 		Command: pick(s.Command, o.Command), Output: pick(s.Output, o.Output), Run: pick(s.Run, o.Run),
 		Release: pick(s.Release, o.Release), Processes: slices.Clone(s.Processes), Octane: s.Octane,
-		Runtime: pick(s.Runtime, o.Runtime), Packages: slices.Clone(s.Packages)}
+		Runtime: pick(s.Runtime, o.Runtime), Packages: slices.Clone(s.Packages), Headers: slices.Clone(s.Headers)}
 	if len(o.Processes) > 0 {
 		out.Processes = slices.Clone(o.Processes)
 	}
 	if len(o.Packages) > 0 {
 		out.Packages = slices.Clone(o.Packages)
+	}
+	if len(o.Headers) > 0 {
+		out.Headers = slices.Clone(o.Headers)
 	}
 	if o.Octane != nil {
 		v := *o.Octane
@@ -161,6 +167,9 @@ type Plan struct {
 	// Packages: the system packages the builder unpacks into the release
 	// (PackagesDir), by name
 	Packages []PlanPackage `json:"packages,omitempty"`
+	// Headers: the app's response headers - homeport.yaml's, or the
+	// settings' when they have any (headers.go); a static site's too
+	Headers []HeaderRule `json:"headers,omitempty"`
 
 	// a bundle's build, and what makes the bundle from what it left
 	// (Command is both): a build command someone sets replaces the first;
@@ -250,6 +259,7 @@ type fileConfig struct {
 	Release   string                   `yaml:"release"`
 	Processes map[string]processConfig `yaml:"processes"`
 	Packages  []string                 `yaml:"packages"`
+	Headers   []HeaderRule             `yaml:"headers"`
 }
 
 type processConfig struct {
@@ -293,6 +303,9 @@ func (s Settings) Check() error {
 	}
 	if s.Runtime != "" && s.Runtime != "bun" && s.Runtime != "node" {
 		return fmt.Errorf("runtime %q: bun or node", s.Runtime)
+	}
+	if err := CheckHeaders(s.Headers); err != nil {
+		return err
 	}
 	for name, v := range map[string]string{"install": s.Install, "build": s.Command, "run": s.Run} {
 		if len(v) > maxCommandSz || strings.ContainsAny(v, "\n\r\x00") {
@@ -355,6 +368,9 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	if err := CheckPackages(cfg.Packages); err != nil {
 		return Plan{}, fmt.Errorf("%s: %w", ConfigFile, err)
 	}
+	if err := CheckHeaders(cfg.Headers); err != nil {
+		return Plan{}, fmt.Errorf("%s: %w", ConfigFile, err)
+	}
 	p, err := r.detect(cfg, s)
 	if err != nil {
 		return Plan{}, err
@@ -408,6 +424,10 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	}
 	if s.Release != "" {
 		p.Release = s.Release
+	}
+	p.Headers = cfg.Headers
+	if len(s.Headers) > 0 {
+		p.Headers = slices.Clone(s.Headers) // the person's, in place of the file's
 	}
 	if len(s.Processes) > 0 {
 		p.Processes = slices.SortedFunc(slices.Values(s.Processes), func(a, b Process) int { return strings.Compare(a.Name, b.Name) })

@@ -171,6 +171,8 @@ build it. It uses the same detection the platform's builders run.
 static sites, and JavaScript apps on Node or Bun (Next.js, Nuxt, SvelteKit,
 TanStack Start, Astro, React Router, Remix, NestJS, Elysia, Hono, Fastify,
 Express) - and how each runs.
+[docs/headers.md](docs/headers.md) is an app's response headers
+(`headers:` in `homeport.yaml`).
 
 The Go packages here (`buildplan`, `envfile`, `artifact`, `cidr`) are shared
 with the platform.
