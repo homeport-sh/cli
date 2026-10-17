@@ -55,15 +55,21 @@ type fakeAPI struct {
 	detail   string
 	buildGet int
 
-	tokenNames []string          // tokens made for CI, by name
-	env        map[string]string // an environment's variables, as set
-	files      map[string][]byte // its file variables, as set
-	envApp     string            // the environment the last set was for
-	envPosts   int               // how many sets reached the platform
-	dbCalls    []string
-	pulled     []string // the apps whose add-on credentials were pulled
-	pullValues map[string]string
-	withheld   []string
+	tokenNames   []string          // tokens made for CI, by name
+	env          map[string]string // an environment's variables, as set
+	files        map[string][]byte // its file variables, as set
+	envApp       string            // the environment the last set was for
+	envPosts     int               // how many sets reached the platform
+	available    map[string]string // who sees each variable, by name, as the platform holds it
+	availSent    map[string]string // the availability the last set sent
+	homeport     map[string]string // what homeport set, by name: why
+	rebuilds     int               // env rebuilds asked for
+	builtChanged map[string]bool   // names whose change a build sees since the last rebuild
+	noLive       bool              // nothing live to rebuild
+	dbCalls      []string
+	pulled       []string // the apps whose add-on credentials were pulled
+	pullValues   map[string]string
+	withheld     []string
 }
 
 func newFakeAPI(t *testing.T) *fakeAPI {
@@ -219,15 +225,61 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 			files = append(files, map[string]any{"Name": n, "Meta": envfile.Inspect(f.files[n])})
 		}
 		slices.Sort(names)
-		f.write(w, 200, map[string]any{"Names": names, "Files": files})
+		vars := []map[string]any{}
+		needs := false
+		for _, n := range names {
+			a := f.available[n]
+			if a == "" {
+				a = "runtime"
+			}
+			src, why := "own", ""
+			if w, ok := f.homeport[n]; ok {
+				src, why = "homeport", w
+			}
+			vars = append(vars, map[string]any{"Name": n, "Available": a, "Source": src, "Why": why})
+			needs = needs || f.builtChanged[n]
+		}
+		f.write(w, 200, map[string]any{"Names": names, "Files": files, "Vars": vars, "NeedsRebuild": needs})
+	case strings.HasSuffix(p, "/rebuild") && r.Method == "POST":
+		if f.noLive {
+			f.write(w, 400, map[string]any{"Error": "nothing is live to rebuild: deploy first"})
+			return
+		}
+		f.rebuilds++
+		f.builtChanged = nil
+		f.write(w, 200, map[string]any{"build": "b9"})
 	case strings.HasSuffix(p, "/env") && r.Method == "POST":
 		var in struct {
-			Set   map[string]string
-			Files map[string][]byte
-			Unset []string
+			Set       map[string]string
+			Files     map[string][]byte
+			Unset     []string
+			Available map[string]string
 		}
 		json.NewDecoder(r.Body).Decode(&in)
 		f.envPosts++
+		f.availSent = in.Available
+		if f.available == nil {
+			f.available = map[string]string{}
+		}
+		if f.builtChanged == nil {
+			f.builtChanged = map[string]bool{}
+		}
+		for k := range in.Set {
+			if _, had := f.available[k]; !had {
+				f.available[k] = string(envfile.DefaultAvailable(k))
+			}
+		}
+		for k, a := range in.Available {
+			if f.available[k] != "runtime" || a != "runtime" {
+				f.builtChanged[k] = true
+			}
+			f.available[k] = a
+		}
+		for k := range in.Set {
+			if f.available[k] != "runtime" {
+				f.builtChanged[k] = true
+			}
+		}
 		f.envApp = strings.TrimSuffix(strings.TrimPrefix(p, "/v1/cli/teams/"+team1+"/apps/"), "/env")
 		if f.env == nil {
 			f.env = map[string]string{}
