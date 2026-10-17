@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/homeport-sh/cli/envfile"
 	"github.com/homeport-sh/cli/internal/cloud"
 	"github.com/homeport-sh/cli/internal/config"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -385,44 +386,78 @@ func (a *app) mcpServer() *mcp.Server {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_variables", Annotations: readOnly,
-		Description: "Lists an environment's variables by name. Values are never returned, by this or any tool. Changes nothing."},
+		Description: "Lists an environment's variables by name, and of each file variable where the app reads it and what it is (a certificate's subject and expiry, a key, JSON). Values and file contents are never returned, by this or any tool. Changes nothing."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in where) (*mcp.CallToolResult, any, error) {
 			c, t, err := at(ctx, in)
 			if err != nil {
 				return refused(err)
 			}
-			names, err := c.EnvNames(ctx, t.link.Team, t.link.App)
+			env, err := c.Env(ctx, t.link.Team, t.link.App)
 			if err != nil {
 				return refused(err)
 			}
-			return result(map[string]any{"environment": t.link.Environment, "names": names})
+			files := []map[string]string{}
+			for _, f := range env.Files {
+				files = append(files, map[string]string{"name": f.Name, "path": secretPath(f.Name), "what": f.Meta.Summary()})
+			}
+			return result(map[string]any{"environment": t.link.Environment, "names": env.Names, "files": files})
 		})
 
 	type setIn struct {
 		where
-		Set map[string]string `json:"set" jsonschema:"variables to set, name to value"`
+		Set   map[string]string `json:"set,omitempty" jsonschema:"variables to set, name to value (one line each)"`
+		Files map[string]string `json:"files,omitempty" jsonschema:"file variables to set, name to the path of a file on this computer (a certificate, a key, a service account's JSON - any multi-line or binary value): the CLI reads it, so its content never passes through you; the app reads it at /run/secrets/NAME and $NAME holds that path"`
 	}
 	mcp.AddTool(s, &mcp.Tool{Name: "set_variables", Annotations: changes("Set variables"),
-		Description: "Sets an environment's variables - production unless another is named - adding or replacing them. The running app gets them on its next start, which this may cause. Answers the names it has after; values never come back." + asks},
+		Description: "Sets an environment's variables - production unless another is named - adding or replacing them: plain ones by value, file variables by a local file's path. The running app gets them on its next start, which this may cause. Answers the names it has after; values never come back." + asks},
 		func(ctx context.Context, req *mcp.CallToolRequest, in setIn) (*mcp.CallToolResult, any, error) {
+			if len(in.Set) == 0 && len(in.Files) == 0 {
+				return refused(errors.New("names no variable to set"))
+			}
+			for _, n := range slices.Sorted(maps.Keys(in.Set)) {
+				if strings.ContainsAny(in.Set[n], "\r\n") {
+					return refused(fmt.Errorf("%s: a value is one line; a multi-line one is a file variable: name a file holding it in files", n))
+				}
+				if _, err := envfile.Line(n, in.Set[n]); err != nil {
+					return refused(err)
+				}
+			}
+			// read here, checked as the platform would, before anything's
+			// asked or sent
+			files := map[string][]byte{}
+			var described []string
+			for _, n := range slices.Sorted(maps.Keys(in.Files)) {
+				_, b, err := readFileVar(a.wd, n, in.Files[n])
+				if err != nil {
+					return refused(err)
+				}
+				files[n] = b
+				described = append(described, fmt.Sprintf("%s from %s (%s)", n, in.Files[n], envfile.Inspect(b).Summary()))
+			}
 			c, t, err := at(ctx, in.where)
 			if err != nil {
 				return refused(err)
 			}
-			if len(in.Set) == 0 {
-				return refused(errors.New("set names no variable"))
-			}
 			setting := slices.Sorted(maps.Keys(in.Set))
-			var values []string
+			var unshown []string
 			for _, n := range setting {
-				values = append(values, n+"="+in.Set[n])
+				unshown = append(unshown, n+"="+in.Set[n])
 			}
-			if ask, err := approve(req, fmt.Sprintf("Set %s on %s? (The values aren't shown here.)", quoted(setting), envName(t)), values...); err != nil {
+			for _, n := range slices.Sorted(maps.Keys(files)) {
+				sum := sha256.Sum256(files[n])
+				unshown = append(unshown, n+"@"+hex.EncodeToString(sum[:]))
+			}
+			var what []string
+			if len(setting) > 0 {
+				what = append(what, quoted(setting)+" (the values aren't shown here)")
+			}
+			what = append(what, described...)
+			if ask, err := approve(req, fmt.Sprintf("Set %s on %s?", strings.Join(what, ", "), envName(t)), unshown...); err != nil {
 				return refused(err)
 			} else if ask != nil {
 				return ask, nil, nil
 			}
-			names, err := c.SetEnv(ctx, t.link.Team, t.link.App, in.Set, nil)
+			names, err := c.SetEnv(ctx, t.link.Team, t.link.App, in.Set, files, nil)
 			if err != nil {
 				return refused(err)
 			}
@@ -448,7 +483,7 @@ func (a *app) mcpServer() *mcp.Server {
 			} else if ask != nil {
 				return ask, nil, nil
 			}
-			names, err := c.SetEnv(ctx, t.link.Team, t.link.App, nil, in.Names)
+			names, err := c.SetEnv(ctx, t.link.Team, t.link.App, nil, nil, in.Names)
 			if err != nil {
 				return refused(err)
 			}

@@ -36,6 +36,13 @@ func (a *app) usage() {
                       [--save] [--unset run|release|processes|octane]…
                       [--team <slug> --app <name> [--env <name>]]
                       [--detach] [--timeout 30m]
+  homeport env set    sets an environment's variables: NAME=value…, or a
+                      file variable (a certificate, a key, any multi-line
+                      or binary value) the app reads at /run/secrets/NAME:
+                      [NAME] --from-file <path>
+                      [--env <name>] [--team <slug> --app <name>]
+  homeport env unset  removes variables: NAME…
+  homeport env ls     an environment's variables by name; never a value
   homeport env pull   an environment's database and storage credentials into
                       .env.local (0600), to develop against; never
                       production's, never your app's own variables
