@@ -316,8 +316,29 @@ required.
 - **Kind** `static`: the output folder is served as a site.
 - **Runtime** (`bun` or `node`): see above.
 
-Not handled yet: workspace members, whose lockfile is above the app's
-folder (refused, saying so), Yarn Plug'n'Play at runtime, and Deno.
+### Workspace members
+
+An app folder whose lockfile is above it, in a bun, npm, pnpm or Yarn
+workspace (`apps/web` in a monorepo), is a workspace member. Its workspace
+is the nearest folder above it with a lockfile, and that folder must list
+it: package.json's `workspaces`, or pnpm's `pnpm-workspace.yaml`. The
+install runs at the workspace's root, only for the member where the package
+manager can say so:
+
+| Package manager | Install, at the workspace's root |
+| --- | --- |
+| Bun | `bun install --frozen-lockfile --filter ./<member>` |
+| npm | `npm ci --workspace=<member> --include-workspace-root` |
+| pnpm, Yarn | the whole workspace, as above |
+
+Everything else happens in the member's folder: detection, the build, and
+the output and artifact paths, which are relative to it. A bundle ships the
+dependencies the workspace hoisted to its root, with the member's own over
+them, and workspace packages are copied in as files. A Next.js member's
+standalone server is at `.next/standalone/<member>/server.js`, since Next.js
+traces from the workspace's root.
+
+Not handled yet: Yarn Plug'n'Play at runtime, and Deno.
 
 ## PHP and Laravel apps
 

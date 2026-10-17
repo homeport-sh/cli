@@ -226,6 +226,17 @@ type pm struct {
 }
 
 func (r reader) pmFor(name string, pkg pkgJSON, pinnedBun bool) pm {
+	if r.ws != nil {
+		if root := r.lock().pkg(); root.PackageManager != "" {
+			pkg.PackageManager = root.PackageManager
+		}
+	}
+	return r.ws.inWorkspace(r.lock().pmHere(name, pkg, pinnedBun))
+}
+
+// pmHere is how the package manager installs, prunes and runs scripts in
+// the folder of its lockfile.
+func (r reader) pmHere(name string, pkg pkgJSON, pinnedBun bool) pm {
 	corepack := "mkdir -p /tmp/homeport/bin && export PATH=/tmp/homeport/bin:$PATH COREPACK_ENABLE_DOWNLOAD_PROMPT=0 && " +
 		"{ command -v corepack >/dev/null || npm install -g --prefix /tmp/homeport --no-fund --no-audit corepack@" + CorepackVersion + " >/dev/null; } && " +
 		"corepack enable --install-directory /tmp/homeport/bin " + name
@@ -394,7 +405,16 @@ func parseStart(scripts map[string]string, name string, depth int) (start, error
 func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun string) error {
 	pkg := r.pkg()
 	deps := r.deps()
-	pmName, warning, err := r.packageManagerOf(pkg)
+	// the lockfile, and the packageManager that picks among lockfiles, are
+	// the workspace's root's when it's a member
+	lockPkg := pkg
+	if r.ws != nil {
+		lockPkg = r.lock().pkg()
+		if lockPkg.PackageManager == "" {
+			lockPkg.PackageManager = pkg.PackageManager
+		}
+	}
+	pmName, warning, err := r.lock().packageManagerOf(lockPkg)
 	if err != nil {
 		return err
 	}
@@ -408,7 +428,7 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		if err := r.bunVersion(pkg); err != nil {
 			return err
 		}
-		p.Toolchain, p.Image, p.Install, p.Framework = "bun", BunImage, "bun install --frozen-lockfile", "Bun"
+		p.Toolchain, p.Image, p.Install, p.Framework = "bun", BunImage, r.pmFor("bun", pkg, false).install, "Bun"
 		if p.Command == "" {
 			p.Command = "bun run build"
 		}
@@ -636,7 +656,7 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 			bin = "/tmp/homeport/bin/bun"
 		}
 	}
-	p.build, p.assemble = build, assemble(layout, m, rt, bin, sums, binName, keepMaps, env)
+	p.build, p.assemble = build, assemble(layout, m, rt, bin, sums, binName, keepMaps, env, r.ws)
 	if pr != nil && pr.name == "SvelteKit" && entry != "" && binName == "" && settingsRun == "" && cfg.Run == "" {
 		// what it starts is the adapter's: missing, the build fails here,
 		// not the deploy
@@ -645,6 +665,10 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 	p.Command = join(build, p.assemble)
 	if binName != "" {
 		entry = ".homeport/start.mjs"
+	}
+	if layout == "standalone" && r.ws != nil && binName == "" {
+		// traced from the workspace's root: the member's server is in its folder
+		entry = r.ws.rel + "/" + entry
 	}
 	if entry != "" {
 		p.Run = runArgs(rt, entry, flags, args)
@@ -1110,6 +1134,9 @@ func (r reader) bunVersion(pkg pkgJSON) error {
 	if e, ok := pkg.Engines["bun"].(string); ok {
 		asked = append(asked, struct{ from, v string }{"engines.bun", e})
 	}
+	if r.ws != nil {
+		asked = append(asked, struct{ from, v string }{r.lock().name("package.json") + "'s packageManager", r.lock().packageManager("bun")})
+	}
 	pinned := mustVersion(BunVersion)
 	for _, a := range asked {
 		v := strings.TrimPrefix(strings.TrimSpace(a.v), "v")
@@ -1235,8 +1262,15 @@ func checkSum(path string, sums map[string]string, what string) string {
 // the runtime as bin, and the boot.
 // bin is where the runtime is in the image, sums its pinned checksums (nil:
 // not pinned, not checked).
-func assemble(layout string, m pm, rt, bin string, sums map[string]string, binName string, keepMaps bool, env map[string]string) string {
+// w is the app's workspace, when it's a member: links may point anywhere in
+// it, and the dependencies it hoisted to its root ship with the app.
+func assemble(layout string, m pm, rt, bin string, sums map[string]string, binName string, keepMaps bool, env map[string]string, w *workspace) string {
 	const b = BundleDir
+	// what links may point into: the app's folder, or its workspace
+	inside := "r=$(pwd -P)"
+	if w != nil {
+		inside = "r=$(cd " + w.up + " && pwd -P)"
+	}
 	// a tree's files into the bundle: links followed, hard links copied
 	put := func(src, dst string, exclude ...string) string {
 		ex := ""
@@ -1248,17 +1282,24 @@ func assemble(layout string, m pm, rt, bin string, sums map[string]string, binNa
 		// - every link, whatever its name (find -exec, not a read loop);
 		// the copy through a file, not a pipe, so a failed tar -c fails
 		return "find " + src + " -xtype l -delete && " +
-			`r=$(pwd -P) && find ` + src + ` -type l -exec sh -c 'r=$1; shift; for l; do t=$(readlink -f -- "$l"); case "$t" in "$r"|"$r"/*) ;; *) printf "homeport: %s links outside the app (%s)\n" "$l" "$t" >&2; exit 1 ;; esac; done' sh "$r" {} + && ` +
+			inside + ` && find ` + src + ` -type l -exec sh -c 'r=$1; shift; for l; do t=$(readlink -f -- "$l"); case "$t" in "$r"|"$r"/*) ;; *) printf "homeport: %s links outside the app (%s)\n" "$l" "$t" >&2; exit 1 ;; esac; done' sh "$r" {} + && ` +
 			"(cd " + src + " && tar -chf \"$r/.homeport-copy.tar\" --hard-dereference --exclude=./.homeport-copy.tar" + ex + " .) && tar -xf \"$r/.homeport-copy.tar\" -C " + dst + " && rm -f \"$r/.homeport-copy.tar\""
 	}
 	steps := []string{"rm -rf " + b + " && mkdir -p " + b + "/.homeport"}
 	switch layout {
 	case "standalone":
+		// a workspace member's server is in its folder: Next.js traces from
+		// the workspace's root
+		at, cache := "", "./.next/cache"
+		if w != nil {
+			at = "/" + w.rel
+			cache = "." + at + "/.next/cache"
+		}
 		steps = append(steps,
-			`{ [ -f .next/standalone/server.js ] || { echo 'homeport: the build made no .next/standalone/server.js - set output: "standalone" in next.config' >&2; exit 1; }; }`,
-			put(".next/standalone", b, "./.next/cache"),
-			"mkdir -p "+b+"/.next/static && "+put(".next/static", b+"/.next/static"),
-			"{ [ ! -d public ] || { mkdir -p "+b+"/public && "+put("public", b+"/public")+"; }; }")
+			`{ [ -f .next/standalone`+at+`/server.js ] || { echo 'homeport: the build made no .next/standalone`+at+`/server.js - set output: "standalone" in next.config' >&2; exit 1; }; }`,
+			put(".next/standalone", b, cache),
+			"mkdir -p "+b+at+"/.next/static && "+put(".next/static", b+at+"/.next/static"),
+			"{ [ ! -d public ] || { mkdir -p "+b+at+"/public && "+put("public", b+at+"/public")+"; }; }")
 	case "output":
 		steps = append(steps,
 			`{ [ -f .output/server/index.mjs ] || { echo 'homeport: the build made no .output/server/index.mjs' >&2; exit 1; }; }`,
@@ -1274,6 +1315,15 @@ func assemble(layout string, m pm, rt, bin string, sums map[string]string, binNa
 				"{ t=$(readlink -f node_modules/.bin/"+binName+") && [ -f \"$t\" ] || { echo 'homeport: the start script runs "+binName+", which is in no production dependency' >&2; exit 1; }; }",
 				"t=${t#\"$(pwd -P)\"/}",
 				`printf 'import Module, { createRequire } from "node:module";\nprocess.argv[1] = new URL("../%s", import.meta.url).pathname;\nif (typeof Bun === "undefined") Module.runMain();\nelse { Bun.main = process.argv[1]; createRequire(process.argv[1])(process.argv[1]); }\n' "$t" > `+b+"/.homeport/start.mjs")
+		}
+		if w != nil {
+			// what the workspace hoisted to its root, under the member's own
+			// (which is copied over it): never the member itself
+			self := []string{"./.cache"}
+			if w.name != "" {
+				self = append(self, "./"+w.name)
+			}
+			steps = append(steps, "{ [ ! -d "+w.up+"/node_modules ] || { mkdir -p "+b+"/node_modules && "+put(w.up+"/node_modules", b+"/node_modules", self...)+"; }; }")
 		}
 		steps = append(steps,
 			put(".", b, "./.git", "./"+b, "./node_modules/.cache"),
@@ -1329,19 +1379,4 @@ func boot(env map[string]string) string {
 		`S.prototype.listen=function(...a){const x=a[0];` +
 		`if(x&&typeof x==="object"&&Number(x.port)===p&&l.includes(x.host))a[0]={...x,host:"0.0.0.0"};` +
 		`else if(Number(x)===p&&l.includes(a[1]))a[1]="0.0.0.0";return o.apply(this,a)}}`
-}
-
-// lockfileAbove: a lockfile in a folder above the app's, up to the
-// repository's root - a workspace's.
-func (r reader) lockfileAbove() bool {
-	for d := path.Dir(r.root); ; d = path.Dir(d) {
-		for _, l := range lockfiles {
-			if st, err := lstat(r.fsys, path.Join(d, l.file)); err == nil && st.Mode().IsRegular() {
-				return true
-			}
-		}
-		if d == "." || d == "/" {
-			return false
-		}
-	}
 }

@@ -521,6 +521,15 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 		p.Kind, p.Artifact, p.StaticFallback = Static, clean(cfg.Static), false
 	}
 
+	// a workspace member: its lockfile is its workspace's, above it
+	if cfg.Build.Image == "" && !r.exists("composer.json") && !r.exists("go.mod") && r.exists("package.json") && !r.hasLockfile() {
+		w, err := r.findWorkspace()
+		if err != nil {
+			return Plan{}, err
+		}
+		r.ws = w
+	}
+
 	switch {
 	case cfg.Build.Image != "":
 		if !imageRe.MatchString(cfg.Build.Image) || len(cfg.Build.Image) > 255 {
@@ -579,7 +588,7 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 		if p.Command == "" {
 			p.Command = `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ` + p.Artifact + " ."
 		}
-	case r.exists("package.json") && r.hasLockfile():
+	case r.exists("package.json") && (r.hasLockfile() || r.ws != nil):
 		runtime, from := s.Runtime, "the build settings"
 		if runtime == "" && cfg.Runtime != "" {
 			runtime, from = cfg.Runtime, ConfigFile
@@ -587,8 +596,6 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 		if err := r.js(&p, cfg, runtime, from, s.Run); err != nil {
 			return Plan{}, err
 		}
-	case r.exists("package.json") && !r.exists("index.html") && r.root != "." && r.lockfileAbove():
-		return Plan{}, fmt.Errorf("%s looks like a workspace member: its lockfile is above it, in the repository. Workspace members aren't supported yet - give the app a lockfile of its own in %s, or set the root directory to the workspace", r.root, r.root)
 	case r.exists("package.json") && !r.exists("index.html"):
 		return Plan{}, errors.New("package.json without a lockfile: commit the lockfile (package-lock.json, pnpm-lock.yaml, yarn.lock or bun.lock), so the build installs what you tested")
 	case r.exists("index.html"):
@@ -664,6 +671,7 @@ func (r reader) site(p *Plan, cfg fileConfig) bool {
 type reader struct {
 	fsys fs.FS
 	root string
+	ws   *workspace // the app's workspace, when it's a member (workspace.go)
 }
 
 func (r reader) name(n string) string { return path.Join(r.root, n) }
