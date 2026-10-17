@@ -540,3 +540,29 @@ func TestSettingsHoldNoControlCharacters(t *testing.T) {
 		t.Fatalf("plain text: %v", err)
 	}
 }
+
+// PHP is the one homeport's FrankenPHP base runs, PHPVersion (the image's
+// tag says so too). composer.json's require.php must allow it - read as
+// Composer reads it: ^ ~ * ranges, || or |, and , or a space between - or
+// the app is refused at detection, before any build, saying which PHP runs.
+// A constraint this can't read is left to the build's composer
+// check-platform-reqs.
+func TestPHPIsTheVersionHomeportRuns(t *testing.T) {
+	if !strings.HasPrefix(buildplan.FrankenPHPImage, "ghcr.io/homeport-sh/frankenphp:"+buildplan.PHPVersion+"-") {
+		t.Fatalf("the image isn't PHP %s's: %s", buildplan.PHPVersion, buildplan.FrankenPHPImage)
+	}
+	app := func(php string) map[string]string {
+		return map[string]string{"composer.json": `{"require":{"php":"` + php + `","laravel/framework":"^13.0"}}`, "composer.lock": "{}"}
+	}
+	for _, ok := range []string{"^8.2", ">=8.1", "~8.4", "8.5.*", "^8.3 || ^9.0", "^8.2|^8.3", ">=8.2,<9", ">=8.2 <9", "*", ">=8.5.3", "8.4 - 8.5", "banana"} {
+		if p, err := buildplan.Detect(repo(app(ok)), buildplan.Settings{}); err != nil || p.Toolchain != "php" {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	for _, no := range []string{"~8.4.0", "8.4.*", ">=8.2 <8.5", "^8.2,<8.5", "^7.4", "~7.4", "^9.0", "8.4.12"} {
+		_, err := buildplan.Detect(repo(app(no)), buildplan.Settings{})
+		if err == nil || !strings.Contains(err.Error(), "homeport runs PHP "+buildplan.PHPVersion) || !strings.Contains(err.Error(), no) {
+			t.Errorf("%s: %v", no, err)
+		}
+	}
+}
