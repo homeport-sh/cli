@@ -648,10 +648,8 @@ func (r reader) site(p *Plan, cfg fileConfig) bool {
 			folder = clean(string(m[1]))
 		}
 	case deps["astro"]:
-		for _, f := range []string{"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"} {
-			if b, err := r.read(f); err == nil && astroServer.Match(b) {
-				return false
-			}
+		if r.astroServerOutput() {
+			return false
 		}
 		framework, folder = "Astro", "dist"
 	case deps["vite"] && !deps["@sveltejs/kit"]:
