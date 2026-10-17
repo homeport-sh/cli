@@ -118,6 +118,7 @@ type Plan struct {
 	Image     string `json:"image,omitempty"`     // the toolchain's image; none for none
 	Install   string `json:"install,omitempty"`
 	Command   string `json:"command,omitempty"` // empty: nothing to build
+	Build     string `json:"build,omitempty"`   // the app's own build: Command less homeport's bundling; empty when it has none
 	Artifact  string `json:"artifact"`          // the binary, or the site's or bundle's folder, relative to Root
 	Root      string `json:"root,omitempty"`    // the app's folder in the repository; "" is its root
 	// StaticFallback: Artifact is a guess at a binary; if the build makes
@@ -484,6 +485,16 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 		return Plan{}, errStaticPackages
 	}
 	p.Packages = planPackages(packages)
+	switch {
+	case s.Command != "":
+		p.Build = s.Command
+	case p.assemble != "":
+		p.Build = p.build
+	case php && cfg.Build.Command == "":
+		// frankenphp-bundle, and Laravel's caches: homeport's
+	default:
+		p.Build = p.Command
+	}
 	if p.Kind == Static {
 		p.Run, p.Release, p.Processes = "", "", nil // nothing runs
 		p.Runtime, p.RuntimeVersion, p.RuntimeReason, p.Health = "", "", "", ""
