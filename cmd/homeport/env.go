@@ -22,10 +22,12 @@ import (
 // localEnv is where `homeport env pull` writes.
 const localEnv = ".env.local"
 
-const envUsage = `usage: homeport env set NAME=value…
+const envUsage = `usage: homeport env set NAME=value… [--build | --build-only | --runtime]
+       homeport env set NAME… --build | --build-only | --runtime
        homeport env set [NAME] --from-file <path>
        homeport env unset NAME…
        homeport env ls
+       homeport env rebuild
        homeport env pull
   each [--env <environment>] [--team <slug> --app <name>]`
 
@@ -44,6 +46,8 @@ func (a *app) env(ctx context.Context, args []string) error {
 		return a.envUnset(ctx, args[1:])
 	case "ls":
 		return a.envLs(ctx, args[1:])
+	case "rebuild":
+		return a.envRebuild(ctx, args[1:])
 	}
 	return usageErr("%s", envUsage)
 }
@@ -136,20 +140,42 @@ func readFileVar(dir, name, path string) (string, []byte, error) {
 }
 
 // envSet is `homeport env set`: plain variables as NAME=value, or one file
-// variable from a file here - read here, its bytes sent as they are. What
-// the platform would refuse is refused before anything is sent; a value is
-// never printed.
+// variable from a file here - read here, its bytes sent as they are - and
+// who sees them: --build, --build-only or --runtime, else a new one its
+// name's (envfile.DefaultAvailable). A name alone with one of those changes
+// who sees it, its value kept. What the platform would refuse is refused
+// before anything is sent; a value is never printed.
 func (a *app) envSet(ctx context.Context, args []string) error {
 	fs, f := a.envFlagSet("env set")
 	fromFile := fs.String("from-file", "", "a file variable from this file: the app reads it at "+envfile.SecretsDir+"/NAME, $NAME holds that path")
+	build := fs.Bool("build", false, "available to its build and its running app")
+	buildOnly := fs.Bool("build-only", false, "available to its build alone")
+	runtime := fs.Bool("runtime", false, "available to its running app alone, whatever its name")
 	pos, err := parseMixed(fs, args)
 	if err != nil {
 		return err
 	}
+	var chosen envfile.Availability
+	for _, c := range []struct {
+		on bool
+		a  envfile.Availability
+	}{{*build, envfile.Build}, {*buildOnly, envfile.BuildOnly}, {*runtime, envfile.Runtime}} {
+		if !c.on {
+			continue
+		}
+		if chosen != "" {
+			return usageErr("--build, --build-only and --runtime are one choice: name one")
+		}
+		chosen = c.a
+	}
 	set := map[string]string{}
+	available := map[string]envfile.Availability{}
 	var fileName string
 	var content []byte
 	if *fromFile != "" {
+		if chosen != "" {
+			return usageErr("a file variable is its running app's alone: --from-file takes none of --build, --build-only, --runtime")
+		}
 		if len(pos) > 1 {
 			return usageErr("--from-file sets one name: %s", strings.Join(pos, " "))
 		}
@@ -169,7 +195,14 @@ func (a *app) envSet(ctx context.Context, args []string) error {
 		for _, arg := range pos {
 			name, value, ok := strings.Cut(arg, "=")
 			if !ok {
-				return usageErr("%s: NAME=value, or a file's content with `homeport env set %s --from-file <path>`", arg, arg)
+				if chosen == "" {
+					return usageErr("%s: NAME=value; a name alone with --build, --build-only or --runtime; or a file's content with `homeport env set %s --from-file <path>`", arg, arg)
+				}
+				if !envfile.ValidName(name) {
+					return usageErr("%q isn't a variable's name", name)
+				}
+				available[name] = chosen
+				continue
 			}
 			if strings.ContainsAny(value, "\r\n") {
 				return fmt.Errorf("%s: a value is one line; a multi-line one is a file variable: `homeport env set %s --from-file <path>`", name, name)
@@ -178,6 +211,29 @@ func (a *app) envSet(ctx context.Context, args []string) error {
 				return err
 			}
 			set[name] = value
+			if chosen != "" {
+				available[name] = chosen
+			}
+		}
+		// a build's rules, for a value a build sees: checked here as the
+		// platform checks them
+		for _, n := range slices.Sorted(maps.Keys(set)) {
+			if a, ok := available[n]; ok && !a.BuildSees() || !ok && !envfile.DefaultAvailable(n).BuildSees() {
+				continue
+			}
+			if err := envfile.CheckBuildName(n); err != nil {
+				return err
+			}
+			if err := envfile.CheckBuildValue(n, set[n]); err != nil {
+				return err
+			}
+		}
+		for n, a := range available {
+			if _, ok := set[n]; !ok && a.BuildSees() {
+				if err := envfile.CheckBuildName(n); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	c, t, _, err := a.envTarget(ctx, f)
@@ -188,7 +244,7 @@ func (a *app) envSet(ctx context.Context, args []string) error {
 	if fileName != "" {
 		files = map[string][]byte{fileName: content}
 	}
-	if _, err := c.SetEnv(ctx, t.link.Team, t.link.App, set, files, nil); err != nil {
+	if _, err := c.ChangeEnv(ctx, t.link.Team, t.link.App, cloud.EnvChange{Set: set, Files: files, Available: available}); err != nil {
 		return err
 	}
 	if fileName != "" {
@@ -196,8 +252,67 @@ func (a *app) envSet(ctx context.Context, args []string) error {
 			fileName, envWhere(t), envfile.Inspect(content).Summary(), secretPath(fileName), fileName)
 		return nil
 	}
-	fmt.Fprintf(a.out, "Set %s on %s: the app restarts to get them.\n", strings.Join(slices.Sorted(maps.Keys(set)), ", "), envWhere(t))
+	// who sees each, as the platform has it now (a name's own, kept, when
+	// none was chosen)
+	env, err := c.Env(ctx, t.link.Team, t.link.App)
+	if err != nil {
+		return err
+	}
+	seen := map[string]envfile.Availability{}
+	for _, v := range env.Vars {
+		seen[v.Name] = v.Available
+	}
+	var parts []string
+	restarts := false
+	for _, n := range slices.Sorted(maps.Keys(available)) {
+		if _, ok := set[n]; !ok {
+			set[n] = "" // named alone: said with the rest
+			// what the running app gets may change with it
+			restarts = true
+		}
+	}
+	for _, n := range slices.Sorted(maps.Keys(set)) {
+		av := seen[n]
+		if av == "" {
+			av = available[n]
+		}
+		if av == "" {
+			parts = append(parts, n)
+			restarts = true
+			continue
+		}
+		restarts = restarts || av.RuntimeSees()
+		why := ""
+		if _, ok := available[n]; !ok && av == envfile.Build {
+			if p := publicPrefix(n); p != "" {
+				why = ", from its " + p + " prefix"
+			}
+		}
+		parts = append(parts, fmt.Sprintf("%s (%s%s)", n, availableSays(av), why))
+	}
+	next := "."
+	if restarts {
+		next = ": the app restarts with them."
+	}
+	fmt.Fprintf(a.out, "Set %s on %s%s\n", strings.Join(parts, ", "), envWhere(t), next)
+	if env.NeedsRebuild {
+		fmt.Fprintf(a.out, "Its build sees a change: rebuild to put it in the built app: `homeport env rebuild`.\n")
+	}
 	return nil
+}
+
+// availableSays is who sees a variable, in a sentence.
+func availableSays(a envfile.Availability) string { return strings.ToLower(a.Label()) }
+
+// publicPrefix is the public prefix (envfile.PublicPrefixes) name has, if
+// any.
+func publicPrefix(name string) string {
+	for _, p := range envfile.PublicPrefixes {
+		if len(name) > len(p) && strings.HasPrefix(name, p) {
+			return p
+		}
+	}
+	return ""
 }
 
 // envUnset is `homeport env unset`: variables removed, plain or file.
@@ -226,8 +341,10 @@ func (a *app) envUnset(ctx context.Context, args []string) error {
 	return nil
 }
 
-// envLs is `homeport env ls`: an environment's variables by name, and of a
-// file variable where the app reads it and what it is. No value.
+// envLs is `homeport env ls`: every variable an environment gets, by name,
+// with who sees it and where it comes from, and of a file variable where
+// the app reads it and what it is; and whether it needs a rebuild. No
+// value.
 func (a *app) envLs(ctx context.Context, args []string) error {
 	fs, f := a.envFlagSet("env ls")
 	if err := parse(fs, args); err != nil {
@@ -241,7 +358,13 @@ func (a *app) envLs(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(env.Names) == 0 {
+	vars := env.Vars
+	if len(vars) == 0 { // a platform before Vars: its own, by name
+		for _, n := range env.Names {
+			vars = append(vars, cloud.EnvVar{Name: n, Source: "own"})
+		}
+	}
+	if len(vars) == 0 {
 		fmt.Fprintf(a.out, "%s has no variables.\n", envWhere(t))
 		return nil
 	}
@@ -249,15 +372,62 @@ func (a *app) envLs(ctx context.Context, args []string) error {
 	for _, fv := range env.Files {
 		files[fv.Name] = fv.Meta
 	}
-	tw := tabwriter.NewWriter(a.out, 0, 4, 2, ' ', 0)
-	for _, n := range env.Names {
-		if m, ok := files[n]; ok {
-			fmt.Fprintf(tw, "%s\tfile\t%s\t%s\n", n, secretPath(n), m.Summary())
+	var table strings.Builder
+	tw := tabwriter.NewWriter(&table, 0, 4, 2, ' ', 0)
+	fmt.Fprintf(tw, "NAME\tAVAILABLE TO\tKIND\tSOURCE\t\t\n")
+	for _, v := range vars {
+		source := v.Source
+		if v.PerDeploy {
+			source += ", each deploy"
+		}
+		if m, ok := files[v.Name]; ok {
+			fmt.Fprintf(tw, "%s\t%s\tfile\t%s\t%s\t%s\n", v.Name, availableShort(v.Available), source, secretPath(v.Name), m.Summary())
 			continue
 		}
-		fmt.Fprintf(tw, "%s\tplain\t\t\n", n)
+		fmt.Fprintf(tw, "%s\t%s\tplain\t%s\t\t\n", v.Name, availableShort(v.Available), source)
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	for l := range strings.Lines(table.String()) {
+		fmt.Fprintln(a.out, strings.TrimRight(l, " \n"))
+	}
+	if env.NeedsRebuild {
+		fmt.Fprintf(a.out, "\n%s needs a rebuild: its build sees a change since its live release was built. `homeport env rebuild`\n", envWhere(t))
+	}
+	return nil
+}
+
+// availableShort is who sees a variable, in a column.
+func availableShort(a envfile.Availability) string {
+	switch a {
+	case envfile.Build:
+		return "build + runtime"
+	case envfile.BuildOnly:
+		return "build only"
+	case envfile.Runtime:
+		return "runtime"
+	}
+	return "-"
+}
+
+// envRebuild is `homeport env rebuild`: the environment's live commit built
+// again with its variables as they are now.
+func (a *app) envRebuild(ctx context.Context, args []string) error {
+	fs, f := a.envFlagSet("env rebuild")
+	if err := parse(fs, args); err != nil {
+		return err
+	}
+	c, t, _, err := a.envTarget(ctx, f)
+	if err != nil {
+		return err
+	}
+	build, err := c.Rebuild(ctx, t.link.Team, t.link.App)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.out, "Rebuilding %s's live commit with its variables as they are now: build %s.\nThe app moves to the new release when it ships.\n", envWhere(t), build)
+	return nil
 }
 
 // envPull is `homeport env pull`: an environment's add-on credentials - its
