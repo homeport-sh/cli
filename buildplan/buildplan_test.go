@@ -540,3 +540,62 @@ func TestSettingsHoldNoControlCharacters(t *testing.T) {
 		t.Fatalf("plain text: %v", err)
 	}
 }
+
+// PHP is the one homeport's FrankenPHP base runs, PHPVersion (the image's
+// tag says so too). composer.json's require.php must allow it - read as
+// Composer reads it: ^ ~ * ranges, || or |, and , or a space between - or
+// the app is refused at detection, before any build, saying which PHP runs.
+// A constraint this can't read is left to the build's composer
+// check-platform-reqs.
+func TestPHPIsTheVersionHomeportRuns(t *testing.T) {
+	if !strings.HasPrefix(buildplan.FrankenPHPImage, "ghcr.io/homeport-sh/frankenphp:"+buildplan.PHPVersion+"-") {
+		t.Fatalf("the image isn't PHP %s's: %s", buildplan.PHPVersion, buildplan.FrankenPHPImage)
+	}
+	app := func(php string) map[string]string {
+		return map[string]string{"composer.json": `{"require":{"php":"` + php + `","laravel/framework":"^13.0"}}`, "composer.lock": "{}"}
+	}
+	for _, ok := range []string{"^8.2", ">=8.1", "~8.4", "8.5.*", "^8.3 || ^9.0", "^8.2|^8.3", ">=8.2,<9", ">=8.2 <9", "*", ">=8.5.3", "8.4 - 8.5", "banana"} {
+		if p, err := buildplan.Detect(repo(app(ok)), buildplan.Settings{}); err != nil || p.Toolchain != "php" {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	for _, no := range []string{"~8.4.0", "8.4.*", ">=8.2 <8.5", "^8.2,<8.5", "^7.4", "~7.4", "^9.0", "8.4.12"} {
+		_, err := buildplan.Detect(repo(app(no)), buildplan.Settings{})
+		if err == nil || !strings.Contains(err.Error(), "homeport runs PHP "+buildplan.PHPVersion) || !strings.Contains(err.Error(), no) {
+			t.Errorf("%s: %v", no, err)
+		}
+	}
+}
+
+// Build is the app's own build, apart from what homeport adds to make the
+// bundle (Command is both): empty when the app has no build step of its
+// own, so a person is shown theirs and not homeport's bundling.
+func TestBuildIsTheAppsOwn(t *testing.T) {
+	express := js(`{"scripts":{"start":"node server.js"},"dependencies":{"express":"^5"}}`)
+	p := detect(t, express, buildplan.Settings{})
+	if p.Build != "" || p.Command == "" {
+		t.Errorf("express, no build script: build %q, command %q", p.Build, p.Command)
+	}
+	built := js(`{"scripts":{"build":"tsc","start":"node dist/server.js"},"dependencies":{"express":"^5"},"devDependencies":{"typescript":"^5"}}`)
+	p = detect(t, built, buildplan.Settings{})
+	if p.Build != "npm run build" || !strings.HasPrefix(p.Command, p.Build+" && ") {
+		t.Errorf("express with a build script: build %q, command %q", p.Build, p.Command)
+	}
+	p = detect(t, express, buildplan.Settings{Command: "make server"})
+	if p.Build != "make server" || !strings.HasPrefix(p.Command, "make server && ") {
+		t.Errorf("a build someone set: build %q, command %q", p.Build, p.Command)
+	}
+	// a Go binary's build is the app's: it compiles it
+	p = detect(t, map[string]string{"go.mod": "module x\n\ngo 1.25\n"}, buildplan.Settings{})
+	if p.Build == "" || p.Build != p.Command {
+		t.Errorf("go: build %q, command %q", p.Build, p.Command)
+	}
+	// a PHP app's bundling and caches are homeport's; its assets build in install
+	p = detect(t, map[string]string{"composer.json": `{"require":{"laravel/framework":"^13.0"}}`, "composer.lock": "{}"}, buildplan.Settings{})
+	if p.Build != "" || p.Command == "" {
+		t.Errorf("php: build %q, command %q", p.Build, p.Command)
+	}
+	if b, _ := json.Marshal(detect(t, built, buildplan.Settings{})); !strings.Contains(string(b), `"build":"npm run build"`) {
+		t.Errorf("json: %s", b)
+	}
+}

@@ -118,6 +118,7 @@ type Plan struct {
 	Image     string `json:"image,omitempty"`     // the toolchain's image; none for none
 	Install   string `json:"install,omitempty"`
 	Command   string `json:"command,omitempty"` // empty: nothing to build
+	Build     string `json:"build,omitempty"`   // the app's own build: Command less homeport's bundling; empty when it has none
 	Artifact  string `json:"artifact"`          // the binary, or the site's or bundle's folder, relative to Root
 	Root      string `json:"root,omitempty"`    // the app's folder in the repository; "" is its root
 	// StaticFallback: Artifact is a guess at a binary; if the build makes
@@ -189,13 +190,17 @@ type Process struct {
 	CPU    string `json:"cpu,omitempty"`
 }
 
+// PHPVersion is the PHP homeport runs: its FrankenPHP base's. composer.json's
+// require.php must allow it (php.go).
+const PHPVersion = "8.5"
+
 // FrankenPHPImage is homeport's FrankenPHP base (images/frankenphp): a
-// static FrankenPHP 1.13.1 with PHP 8.5 and the standard extensions, built
+// static FrankenPHP 1.13.1 with PHP 8.5 (PHPVersion) and the standard extensions, built
 // once, that bundles ship (frankenphp-bundle); composer, and Bun 1.4.3 for
 // front-end assets. A Laravel bundle's php.ini has opcache skip timestamp
 // checks and keep what it compiles, in the release's storage/, across
 // wakes. Pinned by digest: a tag can be pushed again.
-const FrankenPHPImage = "ghcr.io/homeport-sh/frankenphp:8.5-1.13.1-bun1.4.3@sha256:3364499ca7e72d47d2e816240163429b2f4f7e7b4dfaf1acebbe2d0f5ca3cec4"
+const FrankenPHPImage = "ghcr.io/homeport-sh/frankenphp:" + PHPVersion + "-1.13.1-bun1.4.3@sha256:3364499ca7e72d47d2e816240163429b2f4f7e7b4dfaf1acebbe2d0f5ca3cec4"
 
 // BundleDir is where a PHP app's build puts its bundle, in the app's folder.
 const BundleDir = ".homeport-bundle"
@@ -480,6 +485,16 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 		return Plan{}, errStaticPackages
 	}
 	p.Packages = planPackages(packages)
+	switch {
+	case s.Command != "":
+		p.Build = s.Command
+	case p.assemble != "":
+		p.Build = p.build
+	case php && cfg.Build.Command == "":
+		// frankenphp-bundle, and Laravel's caches: homeport's
+	default:
+		p.Build = p.Command
+	}
 	if p.Kind == Static {
 		p.Run, p.Release, p.Processes = "", "", nil // nothing runs
 		p.Runtime, p.RuntimeVersion, p.RuntimeReason, p.Health = "", "", "", ""
@@ -522,6 +537,9 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 		// bundled with that FrankenPHP: nothing is compiled.
 		if !r.exists("composer.lock") {
 			return Plan{}, errors.New("composer.json without composer.lock: commit the lockfile, so the build installs what you tested")
+		}
+		if err := r.phpVersion(); err != nil {
+			return Plan{}, err
 		}
 		p.Toolchain, p.Image, p.Framework = "php", FrankenPHPImage, "PHP"
 		p.Install = "composer check-platform-reqs --no-dev --lock && composer install --no-dev --optimize-autoloader --no-interaction"
