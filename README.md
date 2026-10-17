@@ -18,6 +18,10 @@ homeport deploy     # upload the working tree, build it, follow it live
 | `homeport link` | link this folder to an app's environment (`--team`, `--app`, `--env`) |
 | `homeport deploy` | upload the working tree, build and release it, follow it until it's live |
 | `homeport token create --name <where>` | a token for CI (`HOMEPORT_TOKEN`), printed once |
+| `homeport env set NAME=value…` | sets an environment's variables; the app restarts to get them (`--env`, `--team`, `--app`) |
+| `homeport env set [NAME] --from-file <path>` | a file variable: a certificate, key or any multi-line or binary value, read at `/run/secrets/NAME` |
+| `homeport env unset NAME…` | removes variables, plain or file |
+| `homeport env ls` | an environment's variables by name, and what each file variable is; never a value |
 | `homeport env pull [--env <name>]` | an environment's database and storage credentials into `.env.local`, never production's |
 | `homeport mcp` | an MCP server on stdio for your editor or agent |
 | `homeport build-plan` | what a hosted build runs for this repository (JSON) |
@@ -95,6 +99,34 @@ address once it's live. Exit codes, for CI:
 | 5 | built, but the release didn't go live |
 | 6 | still going when `--timeout` (30m) ran out; it carries on |
 
+## Variables
+
+```sh
+homeport env set API_KEY=… MAIL_FROM=hello@example.com
+homeport env set --from-file do-ca.crt          # DO_CA_CRT, from the file's name
+homeport env set NODE_EXTRA_CA_CERTS --from-file ca.pem --env staging
+homeport env ls
+homeport env unset API_KEY
+```
+
+A value is one line. Anything else - a CA certificate, a client
+certificate and key, a service account's JSON, a keystore - is a **file
+variable**: the app reads it at `/run/secrets/NAME`, read-only, and
+`$NAME` holds that path (`NODE_EXTRA_CA_CERTS`, `PGSSLROOTCERT` and
+`GOOGLE_APPLICATION_CREDENTIALS` take a path already).
+
+- `--from-file` reads the file on this computer and sends its bytes as they
+  are, text or binary. Without a name, the name comes from the file's:
+  upper case, anything but letters and digits `_` (`do-ca.crt` is
+  `DO_CA_CRT`).
+- A file holds 1 byte to 256 KB; an environment's files, 1 MB and 32 files
+  at most. The same on every plan. What the platform would refuse is
+  refused before anything is sent.
+- `env ls` shows a certificate's subject and expiry (certificates are
+  public) and of anything else what it is - never a value or a file's
+  content.
+- Setting or removing a variable restarts the app to get it.
+
 ## Developing against an environment's add-ons
 
 ```sh
@@ -142,8 +174,8 @@ Cursor (`~/.cursor/mcp.json`, or `.cursor/mcp.json` in a project):
 | `deploy` | deploys **the folder `homeport mcp` runs in**, as `homeport link` linked it, like `homeport deploy`, and answers the address (**changes it**) |
 | `deploy_status` | a build's status and log, then its release's (reads) |
 | `runtime_logs` | an environment's runtime logs (reads) |
-| `list_variables` | an environment's variables, **names only** (reads) |
-| `set_variables` | sets variables (**changes it**) |
+| `list_variables` | an environment's variables, **names only**, and what each file variable is (reads) |
+| `set_variables` | sets variables, and file variables from a file's path here, read by the CLI so its content never passes through the agent (**changes it**) |
 | `unset_variables` | removes variables, for good (**changes it**) |
 | `get_database` | an environment's database, never its password (reads) |
 | `create_database`, `attach_database`, `detach_database` | its database (**change it**) |

@@ -130,7 +130,7 @@ func TestTheRestOfTheTokenAPI(t *testing.T) {
 			json.NewDecoder(r.Body).Decode(&setBody)
 			io.WriteString(w, `["A","B"]`)
 		case strings.HasSuffix(r.URL.Path, "/env"):
-			io.WriteString(w, `{"Names":["A","B"]}`)
+			io.WriteString(w, `{"Names":["A","B"],"Files":[{"Name":"B","Meta":{"bytes":3,"type":"text"}}]}`)
 		case strings.HasSuffix(r.URL.Path, "/logs"):
 			io.WriteString(w, `{"Cursor":"c2","Lines":[{"Time":"2026-10-08T12:00:00Z","Level":"info","Message":"hi","Process":"web"}]}`)
 		default:
@@ -140,13 +140,18 @@ func TestTheRestOfTheTokenAPI(t *testing.T) {
 	defer srv.Close()
 	c := &Client{Base: srv.URL, Token: "t"}
 	ctx := context.Background()
-	if names, err := c.EnvNames(ctx, "t1", "a1"); err != nil || strings.Join(names, ",") != "A,B" {
-		t.Fatalf("names %v %v", names, err)
+	if env, err := c.Env(ctx, "t1", "a1"); err != nil || strings.Join(env.Names, ",") != "A,B" ||
+		len(env.Files) != 1 || env.Files[0].Name != "B" || env.Files[0].Meta.Type != "text" {
+		t.Fatalf("env %+v %v", env, err)
 	}
-	if names, err := c.SetEnv(ctx, "t1", "a1", map[string]string{"A": "1"}, []string{"C"}); err != nil || len(names) != 2 {
+	// a file's bytes as they are, base64
+	if names, err := c.SetEnv(ctx, "t1", "a1", map[string]string{"A": "1"}, map[string][]byte{"B": {0, '\n', 0xff}}, []string{"C"}); err != nil || len(names) != 2 {
 		t.Fatalf("set %v %v", names, err)
 	}
 	if set, _ := setBody["set"].(map[string]any); set["A"] != "1" {
+		t.Fatalf("sent %v", setBody)
+	}
+	if files, _ := setBody["files"].(map[string]any); files["B"] != "AAr/" {
 		t.Fatalf("sent %v", setBody)
 	}
 	logs, err := c.Logs(ctx, "t1", "a1", "c1")

@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/homeport-sh/cli/envfile"
 	"github.com/homeport-sh/cli/internal/cloud"
 	"github.com/homeport-sh/cli/internal/config"
 )
@@ -56,6 +57,9 @@ type fakeAPI struct {
 
 	tokenNames []string          // tokens made for CI, by name
 	env        map[string]string // an environment's variables, as set
+	files      map[string][]byte // its file variables, as set
+	envApp     string            // the environment the last set was for
+	envPosts   int               // how many sets reached the platform
 	dbCalls    []string
 	pulled     []string // the apps whose add-on credentials were pulled
 	pullValues map[string]string
@@ -208,26 +212,44 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		f.write(w, 200, map[string]any{"ID": "b1", "Status": status, "Reason": f.reason, "Deploy": deploy, "Log": f.tails[i]})
 	case strings.HasSuffix(p, "/env") && r.Method == "GET":
-		var names []string
-		for k := range f.env {
-			names = append(names, k)
+		names := slices.Sorted(maps.Keys(f.env))
+		files := []map[string]any{}
+		for _, n := range slices.Sorted(maps.Keys(f.files)) {
+			names = append(names, n)
+			files = append(files, map[string]any{"Name": n, "Meta": envfile.Inspect(f.files[n])})
 		}
 		slices.Sort(names)
-		f.write(w, 200, map[string]any{"Names": names})
+		f.write(w, 200, map[string]any{"Names": names, "Files": files})
 	case strings.HasSuffix(p, "/env") && r.Method == "POST":
 		var in struct {
 			Set   map[string]string
+			Files map[string][]byte
 			Unset []string
 		}
 		json.NewDecoder(r.Body).Decode(&in)
+		f.envPosts++
+		f.envApp = strings.TrimSuffix(strings.TrimPrefix(p, "/v1/cli/teams/"+team1+"/apps/"), "/env")
 		if f.env == nil {
 			f.env = map[string]string{}
 		}
-		maps.Copy(f.env, in.Set)
-		for _, k := range in.Unset {
+		if f.files == nil {
+			f.files = map[string][]byte{}
+		}
+		for k, v := range in.Set {
+			f.env[k] = v
+			delete(f.files, k)
+		}
+		for k, v := range in.Files {
+			f.files[k] = v
 			delete(f.env, k)
 		}
+		for _, k := range in.Unset {
+			delete(f.env, k)
+			delete(f.files, k)
+		}
 		names := slices.Sorted(maps.Keys(f.env))
+		names = append(names, slices.Collect(maps.Keys(f.files))...)
+		slices.Sort(names)
 		f.write(w, 200, names)
 	case strings.HasSuffix(p, "/logs"):
 		f.write(w, 200, map[string]any{"Cursor": "c2", "Lines": []map[string]any{{"Time": "2026-10-08T12:00:00Z", "Level": "error", "Message": "panic: boom", "Process": "web"}}})

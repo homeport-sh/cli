@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/homeport-sh/cli/buildplan"
+	"github.com/homeport-sh/cli/envfile"
 )
 
 // DefaultAPI is homeport.sh's API.
@@ -342,17 +343,35 @@ func appPath(team, app string) string {
 	return "/v1/cli/teams/" + url.PathEscape(team) + "/apps/" + url.PathEscape(app)
 }
 
-// EnvNames are an environment's variables, by name: no value comes back.
-func (c *Client) EnvNames(ctx context.Context, team, app string) ([]string, error) {
-	var out struct{ Names []string }
-	err := c.call(ctx, "GET", appPath(team, app)+"/env", nil, &out)
-	return out.Names, err
+// Env is an environment's variables, by name - no value comes back - and
+// of its file variables what may be shown (envfile.FileMeta).
+type Env struct {
+	Names []string
+	Files []FileVar
 }
 
-// SetEnv sets and removes an environment's variables; its names after.
-func (c *Client) SetEnv(ctx context.Context, team, app string, set map[string]string, unset []string) ([]string, error) {
+// FileVar is one file variable: its name and what may be shown of it.
+type FileVar struct {
+	Name string
+	Meta envfile.FileMeta
+}
+
+// Env is an environment's variables (Env).
+func (c *Client) Env(ctx context.Context, team, app string) (*Env, error) {
+	var out Env
+	err := c.call(ctx, "GET", appPath(team, app)+"/env", nil, &out)
+	return &out, err
+}
+
+// SetEnv sets and removes an environment's variables - files the file
+// variables, their bytes as they are - and answers its names after.
+func (c *Client) SetEnv(ctx context.Context, team, app string, set map[string]string, files map[string][]byte, unset []string) ([]string, error) {
 	var out []string
-	err := c.call(ctx, "POST", appPath(team, app)+"/env", map[string]any{"set": set, "unset": unset}, &out)
+	body := map[string]any{"set": set, "unset": unset}
+	if len(files) > 0 {
+		body["files"] = files // base64, as encoding/json writes []byte
+	}
+	err := c.call(ctx, "POST", appPath(team, app)+"/env", body, &out)
 	return out, err
 }
 
