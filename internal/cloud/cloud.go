@@ -346,8 +346,24 @@ func appPath(team, app string) string {
 // Env is an environment's variables, by name - no value comes back - and
 // of its file variables what may be shown (envfile.FileMeta).
 type Env struct {
-	Names []string
+	Names []string // its own
 	Files []FileVar
+	// Vars: every variable it gets, its own and inherited, with who sees
+	// each and where it comes from (none from a platform before them)
+	Vars []EnvVar
+	// NeedsRebuild: what its build sees changed since its live release was
+	// built
+	NeedsRebuild bool
+}
+
+// EnvVar is one variable an environment gets, by name.
+type EnvVar struct {
+	Name      string
+	Available envfile.Availability
+	Source    string // own, global, addon or homeport
+	Why       string // homeport's: what its framework needs it for
+	Fixed     bool   // who sees it can't be changed: its framework reads it one way
+	PerDeploy bool   // homeport's, made for each deploy and never stored
 }
 
 // FileVar is one file variable: its name and what may be shown of it.
@@ -366,13 +382,43 @@ func (c *Client) Env(ctx context.Context, team, app string) (*Env, error) {
 // SetEnv sets and removes an environment's variables - files the file
 // variables, their bytes as they are - and answers its names after.
 func (c *Client) SetEnv(ctx context.Context, team, app string, set map[string]string, files map[string][]byte, unset []string) ([]string, error) {
+	return c.ChangeEnv(ctx, team, app, EnvChange{Set: set, Files: files, Unset: unset})
+}
+
+// EnvChange is one change of an environment's variables.
+type EnvChange struct {
+	Set   map[string]string
+	Files map[string][]byte // file variables, their bytes as they are
+	Unset []string
+	// Available: who sees each, by name - set with it, or alone, its value
+	// kept. A name set without one keeps its own, or a new one takes its
+	// name's (envfile.DefaultAvailable).
+	Available map[string]envfile.Availability
+}
+
+// ChangeEnv makes one change of an environment's variables (EnvChange),
+// and answers its names after.
+func (c *Client) ChangeEnv(ctx context.Context, team, app string, ch EnvChange) ([]string, error) {
 	var out []string
-	body := map[string]any{"set": set, "unset": unset}
-	if len(files) > 0 {
-		body["files"] = files // base64, as encoding/json writes []byte
+	body := map[string]any{"set": ch.Set, "unset": ch.Unset}
+	if len(ch.Files) > 0 {
+		body["files"] = ch.Files // base64, as encoding/json writes []byte
+	}
+	if len(ch.Available) > 0 {
+		body["available"] = ch.Available
 	}
 	err := c.call(ctx, "POST", appPath(team, app)+"/env", body, &out)
 	return out, err
+}
+
+// Rebuild builds an environment's live commit again with its variables as
+// they are now, and answers the build.
+func (c *Client) Rebuild(ctx context.Context, team, app string) (string, error) {
+	var out struct {
+		Build string `json:"build"`
+	}
+	err := c.call(ctx, "POST", appPath(team, app)+"/rebuild", nil, &out)
+	return out.Build, err
 }
 
 // LogLine is one line of an environment's runtime log.

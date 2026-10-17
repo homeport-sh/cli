@@ -386,7 +386,7 @@ func (a *app) mcpServer() *mcp.Server {
 		})
 
 	mcp.AddTool(s, &mcp.Tool{Name: "list_variables", Annotations: readOnly,
-		Description: "Lists an environment's variables by name, and of each file variable where the app reads it and what it is (a certificate's subject and expiry, a key, JSON). Values and file contents are never returned, by this or any tool. Changes nothing."},
+		Description: "Lists an environment's variables by name: of each, who sees it (runtime, build or build_only) and where it comes from (own, global, addon, homeport - a key its framework needs, homeport's to make), and of each file variable where the app reads it and what it is (a certificate's subject and expiry, a key, JSON); and whether it needs a rebuild for a change its build sees. Values and file contents are never returned, by this or any tool. Changes nothing."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in where) (*mcp.CallToolResult, any, error) {
 			c, t, err := at(ctx, in)
 			if err != nil {
@@ -400,19 +400,53 @@ func (a *app) mcpServer() *mcp.Server {
 			for _, f := range env.Files {
 				files = append(files, map[string]string{"name": f.Name, "path": secretPath(f.Name), "what": f.Meta.Summary()})
 			}
-			return result(map[string]any{"environment": t.link.Environment, "names": env.Names, "files": files})
+			vars := []map[string]any{}
+			for _, v := range env.Vars {
+				m := map[string]any{"name": v.Name, "available": v.Available, "source": v.Source}
+				if v.Why != "" {
+					m["why"] = v.Why
+				}
+				if v.Fixed {
+					m["fixed"] = true
+				}
+				if v.PerDeploy {
+					m["per_deploy"] = true
+				}
+				vars = append(vars, m)
+			}
+			return result(map[string]any{"environment": t.link.Environment, "names": env.Names, "files": files, "variables": vars, "needs_rebuild": env.NeedsRebuild})
 		})
 
 	type setIn struct {
 		where
-		Set   map[string]string `json:"set,omitempty" jsonschema:"variables to set, name to value (one line each)"`
-		Files map[string]string `json:"files,omitempty" jsonschema:"file variables to set, name to the path of a file on this computer (a certificate, a key, a service account's JSON - any multi-line or binary value): the CLI reads it, so its content never passes through you; the app reads it at /run/secrets/NAME and $NAME holds that path"`
+		Set       map[string]string `json:"set,omitempty" jsonschema:"variables to set, name to value (one line each)"`
+		Files     map[string]string `json:"files,omitempty" jsonschema:"file variables to set, name to the path of a file on this computer (a certificate, a key, a service account's JSON - any multi-line or binary value): the CLI reads it, so its content never passes through you; the app reads it at /run/secrets/NAME and $NAME holds that path"`
+		Available map[string]string `json:"available,omitempty" jsonschema:"who sees a variable, name to runtime (the running app alone), build (its build and the running app) or build_only (its build alone): for one set here, or alone to change who sees one already set, its value kept. Unsaid, a new name with a public prefix (NEXT_PUBLIC_, VITE_, PUBLIC_, ...) is build, any other runtime. File variables are runtime alone. A change the build sees reaches the built app only after a rebuild"`
 	}
 	mcp.AddTool(s, &mcp.Tool{Name: "set_variables", Annotations: changes("Set variables"),
 		Description: "Sets an environment's variables - production unless another is named - adding or replacing them: plain ones by value, file variables by a local file's path. The running app gets them on its next start, which this may cause. Answers the names it has after; values never come back." + asks},
 		func(ctx context.Context, req *mcp.CallToolRequest, in setIn) (*mcp.CallToolResult, any, error) {
-			if len(in.Set) == 0 && len(in.Files) == 0 {
+			if len(in.Set) == 0 && len(in.Files) == 0 && len(in.Available) == 0 {
 				return refused(errors.New("names no variable to set"))
+			}
+			available := map[string]envfile.Availability{}
+			for _, n := range slices.Sorted(maps.Keys(in.Available)) {
+				av, err := envfile.ParseAvailability(in.Available[n])
+				if err != nil {
+					return refused(fmt.Errorf("%s: %w", n, err))
+				}
+				if _, ok := in.Files[n]; ok && av != envfile.Runtime {
+					return refused(fmt.Errorf("%s: a file variable is the running app's alone", n))
+				}
+				if !envfile.ValidName(n) {
+					return refused(fmt.Errorf("%q isn't a variable's name", n))
+				}
+				if av.BuildSees() {
+					if err := envfile.CheckBuildName(n); err != nil {
+						return refused(err)
+					}
+				}
+				available[n] = av
 			}
 			for _, n := range slices.Sorted(maps.Keys(in.Set)) {
 				if strings.ContainsAny(in.Set[n], "\r\n") {
@@ -447,21 +481,47 @@ func (a *app) mcpServer() *mcp.Server {
 				sum := sha256.Sum256(files[n])
 				unshown = append(unshown, n+"@"+hex.EncodeToString(sum[:]))
 			}
+			for _, n := range setting {
+				if av, ok := available[n]; ok && !av.BuildSees() || !ok && !envfile.DefaultAvailable(n).BuildSees() {
+					continue
+				}
+				if err := envfile.CheckBuildName(n); err != nil {
+					return refused(err)
+				}
+				if err := envfile.CheckBuildValue(n, in.Set[n]); err != nil {
+					return refused(err)
+				}
+			}
 			var what []string
 			if len(setting) > 0 {
 				what = append(what, quoted(setting)+" (the values aren't shown here)")
 			}
 			what = append(what, described...)
+			var who []string
+			for _, n := range slices.Sorted(maps.Keys(available)) {
+				who = append(who, n+": "+availableSays(available[n]))
+				unshown = append(unshown, n+"~"+string(available[n]))
+			}
+			if len(who) > 0 {
+				what = append(what, "available to "+strings.Join(who, ", "))
+			}
 			if ask, err := approve(req, fmt.Sprintf("Set %s on %s?", strings.Join(what, ", "), envName(t)), unshown...); err != nil {
 				return refused(err)
 			} else if ask != nil {
 				return ask, nil, nil
 			}
-			names, err := c.SetEnv(ctx, t.link.Team, t.link.App, in.Set, files, nil)
+			names, err := c.ChangeEnv(ctx, t.link.Team, t.link.App, cloud.EnvChange{Set: in.Set, Files: files, Available: available})
 			if err != nil {
 				return refused(err)
 			}
-			return result(map[string]any{"environment": t.link.Environment, "names": names})
+			ans := map[string]any{"environment": t.link.Environment, "names": names}
+			if env, err := c.Env(ctx, t.link.Team, t.link.App); err == nil {
+				ans["needs_rebuild"] = env.NeedsRebuild
+				if env.NeedsRebuild {
+					ans["next"] = "its build sees a change: it reaches the built app after a rebuild of the live commit (`homeport env rebuild`), which the person runs"
+				}
+			}
+			return result(ans)
 		})
 
 	type unsetIn struct {
