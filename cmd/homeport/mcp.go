@@ -422,12 +422,18 @@ func (a *app) mcpServer() *mcp.Server {
 		Set       map[string]string `json:"set,omitempty" jsonschema:"variables to set, name to value (one line each)"`
 		Files     map[string]string `json:"files,omitempty" jsonschema:"file variables to set, name to the path of a file on this computer (a certificate, a key, a service account's JSON - any multi-line or binary value): the CLI reads it, so its content never passes through you; the app reads it at /run/secrets/NAME and $NAME holds that path"`
 		Available map[string]string `json:"available,omitempty" jsonschema:"who sees a variable, name to runtime (the running app alone), build (its build and the running app) or build_only (its build alone): for one set here, or alone to change who sees one already set, its value kept. Unsaid, a new name with a public prefix (NEXT_PUBLIC_, VITE_, PUBLIC_, ...) is build, any other runtime. File variables are runtime alone. A change the build sees reaches the built app only after a rebuild"`
+		Secret    map[string]bool   `json:"secret,omitempty" jsonschema:"which a variable is, name to true (a secret: its value is never shown again) or false (a variable: its value is shown, to the team and in list_variables): for one set here, or alone to change one already set - a secret becomes a variable only with a new value. Unsaid, a value keeps its kind and a new one is a secret. A file variable is always a secret"`
 	}
 	mcp.AddTool(s, &mcp.Tool{Name: "set_variables", Annotations: changes("Set variables"),
 		Description: "Sets an environment's variables - production unless another is named - adding or replacing them: plain ones by value, file variables by a local file's path. The running app gets them on its next start, which this may cause. Answers the names it has after; values never come back." + asks},
 		func(ctx context.Context, req *mcp.CallToolRequest, in setIn) (*mcp.CallToolResult, any, error) {
-			if len(in.Set) == 0 && len(in.Files) == 0 && len(in.Available) == 0 {
+			if len(in.Set) == 0 && len(in.Files) == 0 && len(in.Available) == 0 && len(in.Secret) == 0 {
 				return refused(errors.New("names no variable to set"))
+			}
+			for n, secret := range in.Secret {
+				if _, file := in.Files[n]; file && !secret {
+					return refused(fmt.Errorf("%s: a file variable is always a secret", n))
+				}
 			}
 			available := map[string]envfile.Availability{}
 			for _, n := range slices.Sorted(maps.Keys(in.Available)) {
@@ -505,12 +511,24 @@ func (a *app) mcpServer() *mcp.Server {
 			if len(who) > 0 {
 				what = append(what, "available to "+strings.Join(who, ", "))
 			}
+			var kinds []string
+			for _, n := range slices.Sorted(maps.Keys(in.Secret)) {
+				k := "a variable"
+				if in.Secret[n] {
+					k = "a secret"
+				}
+				kinds = append(kinds, n+": "+k)
+				unshown = append(unshown, fmt.Sprintf("%s!%t", n, in.Secret[n]))
+			}
+			if len(kinds) > 0 {
+				what = append(what, strings.Join(kinds, ", "))
+			}
 			if ask, err := approve(req, fmt.Sprintf("Set %s on %s?", strings.Join(what, ", "), envName(t)), unshown...); err != nil {
 				return refused(err)
 			} else if ask != nil {
 				return ask, nil, nil
 			}
-			names, err := c.ChangeEnv(ctx, t.link.Team, t.link.App, cloud.EnvChange{Set: in.Set, Files: files, Available: available})
+			names, err := c.ChangeEnv(ctx, t.link.Team, t.link.App, cloud.EnvChange{Set: in.Set, Files: files, Available: available, Secret: in.Secret})
 			if err != nil {
 				return refused(err)
 			}

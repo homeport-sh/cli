@@ -112,7 +112,7 @@ func TestEnvLsSaysWhoSeesEach(t *testing.T) {
 		t.Fatalf("header %q", lines[0])
 	}
 	for name, want := range map[string][]string{
-		"NEXT_PUBLIC_API_URL":                {"build + runtime", "plain", "own"},
+		"NEXT_PUBLIC_API_URL":                {"build + runtime", "secret", "own"},
 		"NPM_TOKEN":                          {"build only", "own"},
 		"NEXT_SERVER_ACTIONS_ENCRYPTION_KEY": {"build + runtime", "homeport"},
 		"STRIPE_KEY":                         {"runtime", "own"},

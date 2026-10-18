@@ -387,6 +387,10 @@ type EnvVar struct {
 	// (design/variable-roles.md in homeport-sh/cloud).
 	Roles     []string
 	RolesOnly bool
+	// Secret: its value is never shown again; else a variable, its Value
+	// shown (design/secret-variables.md in homeport-sh/cloud)
+	Secret bool
+	Value  string
 }
 
 // FileVar is one file variable: its name and what may be shown of it.
@@ -420,12 +424,17 @@ type EnvChange struct {
 	// Roles: values for one part of the app alone, by role (web, release,
 	// a process's name) - set, or that role's own removed. Never a build's.
 	Roles map[string]RoleChange
+	// Secret: which each is, by name - a secret (never shown again) or a
+	// variable (shown). A name without one keeps its kind; a new one is a
+	// secret.
+	Secret map[string]bool
 }
 
-// RoleChange is one role's values set and removed.
+// RoleChange is one role's values set and removed, and which each is.
 type RoleChange struct {
-	Set   map[string]string `json:"set,omitempty"`
-	Unset []string          `json:"unset,omitempty"`
+	Set    map[string]string `json:"set,omitempty"`
+	Unset  []string          `json:"unset,omitempty"`
+	Secret map[string]bool   `json:"secret,omitempty"`
 }
 
 // ChangeEnv makes one change of an environment's variables (EnvChange),
@@ -438,6 +447,9 @@ func (c *Client) ChangeEnv(ctx context.Context, team, app string, ch EnvChange) 
 	}
 	if len(ch.Available) > 0 {
 		body["available"] = ch.Available
+	}
+	if len(ch.Secret) > 0 {
+		body["secret"] = ch.Secret
 	}
 	if len(ch.Roles) > 0 {
 		// a platform without them refuses the field: nothing is saved,
