@@ -18,6 +18,7 @@ homeport deploy     # upload the working tree, build it, follow it live
 | `homeport link` | link this folder to an app's environment (`--team`, `--app`, `--env`) |
 | `homeport deploy` | upload the working tree, build and release it, follow it until it's live |
 | `homeport token create --name <where>` | a token for CI (`HOMEPORT_TOKEN`), printed once |
+| `homeport rollback [<deploy\|commit>]` | lists the earlier releases you can roll back to; with one, ships its build again without building (asks first; `--yes`, `--run-release`) |
 | `homeport env set NAME=value…` | sets an environment's variables; the app restarts to get them (`--env`, `--team`, `--app`) |
 | `homeport env set [NAME] --from-file <path>` | a file variable: a certificate, key or any multi-line or binary value, read at `/run/secrets/NAME` |
 | `homeport env unset NAME…` | removes variables, plain or file |
@@ -100,6 +101,23 @@ address once it's live. Exit codes, for CI:
 | 4 | the build failed, or was canceled or superseded |
 | 5 | built, but the release didn't go live |
 | 6 | still going when `--timeout` (30m) ran out; it carries on |
+
+## Rolling back
+
+```sh
+homeport rollback                     # what you can roll back to
+homeport rollback 3f7a1c2             # by commit (or a deploy id), asks first
+homeport rollback 3f7a1c2 --yes       # in CI: no terminal to ask in
+homeport rollback 3f7a1c2 --run-release
+```
+
+The dashboard's **Roll back to this**: an earlier release that went live
+ships its stored build again, with no build, as a deploy of its own. The
+build is the old one (its code and the build variables it was given);
+runtime variables and settings stay as they are now. Builds are kept 30
+days. Its release command is skipped unless you pass `--run-release`:
+migrations go forward. It follows the release as `deploy` does, with the
+same exit codes.
 
 ## Variables
 

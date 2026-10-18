@@ -36,6 +36,11 @@ func (a *app) usage() {
                       [--save] [--unset run|release|processes|octane]…
                       [--team <slug> --app <name> [--env <name>]]
                       [--detach] [--timeout 30m]
+  homeport rollback   lists the earlier releases you can roll back to;
+                      rollback <deploy|commit> ships that build again, no
+                      build, as the dashboard's Roll back to this; asks
+                      first [--yes] [--run-release] [--env <name>]
+                      [--detach] [--timeout 30m]
   homeport env set    sets an environment's variables: NAME=value…, or a
                       file variable (a certificate, a key, any multi-line
                       or binary value) the app reads at /run/secrets/NAME:

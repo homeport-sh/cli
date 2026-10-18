@@ -216,6 +216,22 @@ type Deploy struct {
 	Detail    string
 	CreatedAt time.Time
 	Build     string
+	// RollbackOf: a rollback's, the deploy whose build it shipped again;
+	// By: who rolled back
+	RollbackOf string
+	By         string
+	// Rollback: an earlier release that can be rolled back to (nil: not)
+	Rollback *RollbackOffer
+}
+
+// RollbackOffer is what rolling back to an earlier release would ship:
+// its build, kept until KeptUntil. Release: its release command, run only
+// if asked; BuildVariablesDiffer: it was built with other build variables
+// than the environment has now.
+type RollbackOffer struct {
+	KeptUntil            time.Time
+	Release              string
+	BuildVariablesDiffer bool
 }
 
 // App is one of a team's environments of an app.
@@ -230,6 +246,8 @@ type App struct {
 	Builds      string // hosted, ci or upload
 	Status      string
 	LastDeploy  *Deploy
+	// Deploys: its latest, newest first (App alone answers them)
+	Deploys []Deploy
 }
 
 // Apps are a team's environments.
@@ -419,6 +437,17 @@ func (c *Client) Rebuild(ctx context.Context, team, app string) (string, error) 
 	}
 	err := c.call(ctx, "POST", appPath(team, app)+"/rebuild", nil, &out)
 	return out.Build, err
+}
+
+// Rollback ships an earlier release's build again (deploy, one its app's
+// detail offers), its release command too if runRelease; the deploy that
+// ships it.
+func (c *Client) Rollback(ctx context.Context, team, app, deploy string, runRelease bool) (string, error) {
+	var out struct {
+		Deploy string `json:"deploy"`
+	}
+	err := c.call(ctx, "POST", appPath(team, app)+"/rollback", map[string]any{"deploy": deploy, "run_release": runRelease}, &out)
+	return out.Deploy, err
 }
 
 // LogLine is one line of an environment's runtime log.
