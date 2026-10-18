@@ -187,6 +187,16 @@ func (a *app) follow(ctx context.Context, c *cloud.Client, t *target, build, pag
 			return stillGoing()
 		}
 	}
+	return a.followDeploy(ctx, c, t, deploy, page)
+}
+
+// followDeploy prints a deploy's steps until it's live (its address) or it
+// isn't (why, and a code that says which).
+func (a *app) followDeploy(ctx context.Context, c *cloud.Client, t *target, deploy, page string) error {
+	l := t.link
+	stillGoing := func() error {
+		return withCode(exitTimeout, fmt.Errorf("still going after --timeout; it carries on: %s", page))
+	}
 	last := ""
 	for {
 		d, err := c.DeployStatus(ctx, l.Team, deploy)

@@ -70,6 +70,10 @@ type fakeAPI struct {
 	pulled       []string // the apps whose add-on credentials were pulled
 	pullValues   map[string]string
 	withheld     []string
+	rollbacks    []struct {
+		Deploy     string `json:"deploy"`
+		RunRelease bool   `json:"run_release"`
+	}
 }
 
 func newFakeAPI(t *testing.T) *fakeAPI {
@@ -311,6 +315,14 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 			"Attachable": []map[string]any{{"ID": "db2", "Name": "api-production", "UsedBy": []string{"api-production"}}}})
 	case strings.HasSuffix(p, "/usage"):
 		f.write(w, 200, map[string]any{"Plan": "Starter", "Estimate": map[string]any{"TotalCents": 900}})
+	case strings.HasSuffix(p, "/rollback") && r.Method == "POST":
+		var in struct {
+			Deploy     string `json:"deploy"`
+			RunRelease bool   `json:"run_release"`
+		}
+		json.NewDecoder(r.Body).Decode(&in)
+		f.rollbacks = append(f.rollbacks, in)
+		f.write(w, 200, map[string]string{"deploy": "d1"})
 	case r.Method == "GET" && p == "/v1/cli/teams/"+team1+"/deploys/d1":
 		s := f.steps[0]
 		if len(f.steps) > 1 {
