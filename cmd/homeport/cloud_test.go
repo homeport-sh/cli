@@ -55,17 +55,20 @@ type fakeAPI struct {
 	detail   string
 	buildGet int
 
-	tokenNames   []string          // tokens made for CI, by name
-	env          map[string]string // an environment's variables, as set
-	files        map[string][]byte // its file variables, as set
-	envApp       string            // the environment the last set was for
-	envPosts     int               // how many sets reached the platform
-	available    map[string]string // who sees each variable, by name, as the platform holds it
-	availSent    map[string]string // the availability the last set sent
-	homeport     map[string]string // what homeport set, by name: why
-	rebuilds     int               // env rebuilds asked for
-	builtChanged map[string]bool   // names whose change a build sees since the last rebuild
-	noLive       bool              // nothing live to rebuild
+	tokenNames   []string                  // tokens made for CI, by name
+	env          map[string]string         // an environment's variables, as set
+	files        map[string][]byte         // its file variables, as set
+	envApp       string                    // the environment the last set was for
+	envPosts     int                       // how many sets reached the platform
+	available    map[string]string         // who sees each variable, by name, as the platform holds it
+	availSent    map[string]string         // the availability the last set sent
+	rolesSent    map[string]fakeRoleChange // the values for one role the last set sent
+	roles        map[string][]string       // the roles with a value of their own, by name
+	rolesOnly    map[string]bool           // names with no value for all
+	homeport     map[string]string         // what homeport set, by name: why
+	rebuilds     int                       // env rebuilds asked for
+	builtChanged map[string]bool           // names whose change a build sees since the last rebuild
+	noLive       bool                      // nothing live to rebuild
 	dbCalls      []string
 	pulled       []string // the apps whose add-on credentials were pulled
 	pullValues   map[string]string
@@ -74,6 +77,11 @@ type fakeAPI struct {
 		Deploy     string `json:"deploy"`
 		RunRelease bool   `json:"run_release"`
 	}
+}
+
+type fakeRoleChange struct {
+	Set   map[string]string
+	Unset []string
 }
 
 func newFakeAPI(t *testing.T) *fakeAPI {
@@ -240,7 +248,14 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 			if w, ok := f.homeport[n]; ok {
 				src, why = "homeport", w
 			}
-			vars = append(vars, map[string]any{"Name": n, "Available": a, "Source": src, "Why": why})
+			v := map[string]any{"Name": n, "Available": a, "Source": src, "Why": why}
+			if r := f.roles[n]; len(r) > 0 {
+				v["Roles"] = r
+			}
+			if f.rolesOnly[n] {
+				v["RolesOnly"] = true
+			}
+			vars = append(vars, v)
 			needs = needs || f.builtChanged[n]
 		}
 		f.write(w, 200, map[string]any{"Names": names, "Files": files, "Vars": vars, "NeedsRebuild": needs})
@@ -258,10 +273,12 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 			Files     map[string][]byte
 			Unset     []string
 			Available map[string]string
+			Roles     map[string]fakeRoleChange
 		}
 		json.NewDecoder(r.Body).Decode(&in)
 		f.envPosts++
 		f.availSent = in.Available
+		f.rolesSent = in.Roles
 		if f.available == nil {
 			f.available = map[string]string{}
 		}
