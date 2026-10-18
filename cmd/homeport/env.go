@@ -22,9 +22,9 @@ import (
 // localEnv is where `homeport env pull` writes.
 const localEnv = ".env.local"
 
-const envUsage = `usage: homeport env set NAME=value… [--build | --build-only | --runtime]
-       homeport env set NAME… --build | --build-only | --runtime
-       homeport env set NAME=value… --for ROLE…
+const envUsage = `usage: homeport env set NAME=value… [--build | --build-only | --runtime] [--secret | --plain]
+       homeport env set NAME… --build | --build-only | --runtime | --secret | --plain
+       homeport env set NAME=value… --for ROLE… [--secret | --plain]
        homeport env set [NAME] --from-file <path>
        homeport env unset NAME… [--for ROLE…]
        homeport env ls
@@ -33,7 +33,7 @@ const envUsage = `usage: homeport env set NAME=value… [--build | --build-only 
   each [--env <environment>] [--team <slug> --app <name>]`
 
 // env is `homeport env`: an environment's variables set, removed and listed
-// (never a value shown), and `pull`.
+// (a secret's value never shown), and `pull`.
 func (a *app) env(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return usageErr("%s", envUsage)
@@ -183,9 +183,59 @@ func roleSays(r string) string {
 	return r
 }
 
+// kindFlags are --secret and --plain: which a value is, a secret (never
+// shown again) or a variable (shown). Neither: a value keeps its kind, and
+// a new one is a secret.
+type kindFlags struct{ secret, plain *bool }
+
+func addKindFlags(fs *flag.FlagSet) kindFlags {
+	return kindFlags{
+		secret: fs.Bool("secret", false, "a secret: its value is never shown again (a new value is one unless --plain)"),
+		plain:  fs.Bool("plain", false, "a variable: its value is shown, in env ls and on the dashboard"),
+	}
+}
+
+// chosen is the kind named, if one was.
+func (k kindFlags) chosen() (*bool, error) {
+	switch {
+	case *k.secret && *k.plain:
+		return nil, usageErr("--secret and --plain are one choice: name one")
+	case *k.secret, *k.plain:
+		return k.secret, nil
+	}
+	return nil, nil
+}
+
+// kindOf is names each the kind chosen, nil when none was.
+func kindOf(secret *bool, names []string) map[string]bool {
+	if secret == nil {
+		return nil
+	}
+	out := make(map[string]bool, len(names))
+	for _, n := range names {
+		out[n] = *secret
+	}
+	return out
+}
+
+// kindSays is what names now are, in a sentence: "" when no kind was chosen.
+func kindSays(secret *bool, names []string) string {
+	switch {
+	case secret == nil:
+		return ""
+	case len(names) == 1 && *secret:
+		return fmt.Sprintf("%s is a secret: its value is never shown again.\n", names[0])
+	case len(names) == 1:
+		return fmt.Sprintf("%s is a variable: its value is shown.\n", names[0])
+	case *secret:
+		return fmt.Sprintf("%s are secrets: their values are never shown again.\n", strings.Join(names, ", "))
+	}
+	return fmt.Sprintf("%s are variables: their values are shown.\n", strings.Join(names, ", "))
+}
+
 // envSetFor is `homeport env set NAME=value… --for ROLE…`: values for those
 // roles alone, never in the value for all.
-func (a *app) envSetFor(ctx context.Context, f envFlags, pos []string, roles roleFlags) error {
+func (a *app) envSetFor(ctx context.Context, f envFlags, pos []string, roles roleFlags, secret *bool) error {
 	if len(pos) == 0 {
 		return usageErr("%s", envUsage)
 	}
@@ -207,9 +257,10 @@ func (a *app) envSetFor(ctx context.Context, f envFlags, pos []string, roles rol
 	if err != nil {
 		return err
 	}
+	names := slices.Sorted(maps.Keys(set))
 	ch := cloud.EnvChange{Roles: map[string]cloud.RoleChange{}}
 	for _, r := range roles {
-		ch.Roles[r] = cloud.RoleChange{Set: set}
+		ch.Roles[r] = cloud.RoleChange{Set: set, Secret: kindOf(secret, names)}
 	}
 	if _, err := c.ChangeEnv(ctx, t.link.Team, t.link.App, ch); err != nil {
 		return err
@@ -226,17 +277,18 @@ func (a *app) envSetFor(ctx context.Context, f envFlags, pos []string, roles rol
 	if running := slices.DeleteFunc(slices.Clone(sorted), func(r string) bool { return r == "release" }); len(running) > 0 {
 		next = append(next, "the app restarts with it")
 	}
-	fmt.Fprintf(a.out, "Set %s for %s on %s: %s.\n", strings.Join(slices.Sorted(maps.Keys(set)), ", "),
-		strings.Join(says, ", "), envWhere(t), strings.Join(next, "; "))
+	fmt.Fprintf(a.out, "Set %s for %s on %s: %s.\n%s", strings.Join(names, ", "),
+		strings.Join(says, ", "), envWhere(t), strings.Join(next, "; "), kindSays(secret, names))
 	return nil
 }
 
 // envSet is `homeport env set`: plain variables as NAME=value, or one file
 // variable from a file here - read here, its bytes sent as they are - and
 // who sees them: --build, --build-only or --runtime, else a new one its
-// name's (envfile.DefaultAvailable). A name alone with one of those changes
-// who sees it, its value kept. What the platform would refuse is refused
-// before anything is sent; a value is never printed.
+// name's (envfile.DefaultAvailable); and which each is: --secret or
+// --plain, else its kind kept (a new one a secret). A name alone with one
+// of those changes that alone, its value kept. What the platform would
+// refuse is refused before anything is sent; a value is never printed.
 func (a *app) envSet(ctx context.Context, args []string) error {
 	fs, f := a.envFlagSet("env set")
 	fromFile := fs.String("from-file", "", "a file variable from this file: the app reads it at "+envfile.SecretsDir+"/NAME, $NAME holds that path")
@@ -245,7 +297,12 @@ func (a *app) envSet(ctx context.Context, args []string) error {
 	runtime := fs.Bool("runtime", false, "available to its running app alone, whatever its name")
 	var roles roleFlags
 	fs.Var(&roles, "for", forUsage)
+	kind := addKindFlags(fs)
 	pos, err := parseMixed(fs, args)
+	if err != nil {
+		return err
+	}
+	secret, err := kind.chosen()
 	if err != nil {
 		return err
 	}
@@ -256,7 +313,7 @@ func (a *app) envSet(ctx context.Context, args []string) error {
 		case *fromFile != "":
 			return usageErr("a file variable is for every part of the app: --for takes no --from-file")
 		}
-		return a.envSetFor(ctx, f, pos, roles)
+		return a.envSetFor(ctx, f, pos, roles, secret)
 	}
 	var chosen envfile.Availability
 	for _, c := range []struct {
@@ -273,12 +330,17 @@ func (a *app) envSet(ctx context.Context, args []string) error {
 	}
 	set := map[string]string{}
 	available := map[string]envfile.Availability{}
+	var named []string // names alone: their availability or kind changed, their value kept
 	var fileName string
 	var content []byte
 	if *fromFile != "" {
 		if chosen != "" {
 			return usageErr("a file variable is its running app's alone: --from-file takes none of --build, --build-only, --runtime")
 		}
+		if *kind.plain {
+			return usageErr("a file variable is always a secret: --from-file takes no --plain")
+		}
+		secret = nil
 		if len(pos) > 1 {
 			return usageErr("--from-file sets one name: %s", strings.Join(pos, " "))
 		}
@@ -298,13 +360,16 @@ func (a *app) envSet(ctx context.Context, args []string) error {
 		for _, arg := range pos {
 			name, value, ok := strings.Cut(arg, "=")
 			if !ok {
-				if chosen == "" {
-					return usageErr("%s: NAME=value; a name alone with --build, --build-only or --runtime; or a file's content with `homeport env set %s --from-file <path>`", arg, arg)
+				if chosen == "" && secret == nil {
+					return usageErr("%s: NAME=value; a name alone with --build, --build-only, --runtime, --secret or --plain; or a file's content with `homeport env set %s --from-file <path>`", arg, arg)
 				}
 				if !envfile.ValidName(name) {
 					return usageErr("%q isn't a variable's name", name)
 				}
-				available[name] = chosen
+				if chosen != "" {
+					available[name] = chosen
+				}
+				named = append(named, name)
 				continue
 			}
 			if strings.ContainsAny(value, "\r\n") {
@@ -347,7 +412,8 @@ func (a *app) envSet(ctx context.Context, args []string) error {
 	if fileName != "" {
 		files = map[string][]byte{fileName: content}
 	}
-	if _, err := c.ChangeEnv(ctx, t.link.Team, t.link.App, cloud.EnvChange{Set: set, Files: files, Available: available}); err != nil {
+	kinds := slices.Sorted(slices.Values(append(slices.Collect(maps.Keys(set)), named...)))
+	if _, err := c.ChangeEnv(ctx, t.link.Team, t.link.App, cloud.EnvChange{Set: set, Files: files, Available: available, Secret: kindOf(secret, kinds)}); err != nil {
 		return err
 	}
 	if fileName != "" {
@@ -367,7 +433,7 @@ func (a *app) envSet(ctx context.Context, args []string) error {
 	}
 	var parts []string
 	restarts := false
-	for _, n := range slices.Sorted(maps.Keys(available)) {
+	for _, n := range named {
 		if _, ok := set[n]; !ok {
 			set[n] = "" // named alone: said with the rest
 			// what the running app gets may change with it
@@ -397,7 +463,7 @@ func (a *app) envSet(ctx context.Context, args []string) error {
 	if restarts {
 		next = ": the app restarts with them."
 	}
-	fmt.Fprintf(a.out, "Set %s on %s%s\n", strings.Join(parts, ", "), envWhere(t), next)
+	fmt.Fprintf(a.out, "Set %s on %s%s\n%s", strings.Join(parts, ", "), envWhere(t), next, kindSays(secret, kinds))
 	if env.NeedsRebuild {
 		fmt.Fprintf(a.out, "Its build sees a change: rebuild to put it in the built app: `homeport env rebuild`.\n")
 	}
@@ -462,9 +528,9 @@ func (a *app) envUnset(ctx context.Context, args []string) error {
 }
 
 // envLs is `homeport env ls`: every variable an environment gets, by name,
-// with who sees it and where it comes from, and of a file variable where
-// the app reads it and what it is; and whether it needs a rebuild. No
-// value.
+// with who sees it, which it is and where it comes from, a variable's value
+// (never a secret's), and of a file variable where the app reads it and
+// what it is; and whether it needs a rebuild.
 func (a *app) envLs(ctx context.Context, args []string) error {
 	fs, f := a.envFlagSet("env ls")
 	if err := parse(fs, args); err != nil {
@@ -494,7 +560,7 @@ func (a *app) envLs(ctx context.Context, args []string) error {
 	}
 	var table strings.Builder
 	tw := tabwriter.NewWriter(&table, 0, 4, 2, ' ', 0)
-	fmt.Fprintf(tw, "NAME\tAVAILABLE TO\tFOR\tKIND\tSOURCE\t\t\n")
+	fmt.Fprintf(tw, "NAME\tAVAILABLE TO\tFOR\tKIND\tSOURCE\tVALUE\t\n")
 	for _, v := range vars {
 		source := v.Source
 		if v.PerDeploy {
@@ -504,7 +570,11 @@ func (a *app) envLs(ctx context.Context, args []string) error {
 			fmt.Fprintf(tw, "%s\t%s\t%s\tfile\t%s\t%s\t%s\n", v.Name, availableShort(v.Available), forShort(v), source, secretPath(v.Name), m.Summary())
 			continue
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\tplain\t%s\t\t\n", v.Name, availableShort(v.Available), forShort(v), source)
+		kind, value := "secret", ""
+		if !v.Secret {
+			kind, value = "variable", v.Value
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t\n", v.Name, availableShort(v.Available), forShort(v), kind, source, value)
 	}
 	if err := tw.Flush(); err != nil {
 		return err

@@ -24,7 +24,8 @@ homeport deploy     # upload the working tree, build it, follow it live
 | `homeport env unset NAME…` | removes variables, plain or file |
 | `homeport env set NAME=value… --build` | available to the build too (`--build-only`: the build alone; `--runtime`: the running app alone). Names with a public prefix (`NEXT_PUBLIC_`, `VITE_`, `PUBLIC_`, …) are build and runtime by default; `homeport env set NAME --build` changes who sees one, its value kept |
 | `homeport env set NAME=value… --for <role>` | a value for one part of the app alone: `release` (the release command), `web`, or a process by name; `--for` once for each. `homeport env unset NAME --for <role>` removes that part's own value alone. Needs homeportd 0.36.0 where the app runs |
-| `homeport env ls` | every variable an environment gets, who sees it (runtime, build + runtime, build only), which parts of the app get it (`all`, `release`, `all; own: worker`) and where it comes from (its own, global, an add-on's, homeport's), and what each file variable is; never a value |
+| `homeport env set NAME=value… --secret` | a secret: its value is never shown again (`--plain`: a variable, its value shown in `env ls` and on the dashboard). Neither: a value keeps its kind, and a new one is a secret. `homeport env set NAME --secret` changes a variable to a secret, its value kept; a secret becomes a variable only with a new value |
+| `homeport env ls` | every variable an environment gets, who sees it (runtime, build + runtime, build only), which parts of the app get it (`all`, `release`, `all; own: worker`), which it is (secret, variable, file) and where it comes from (its own, global, an add-on's, homeport's), a variable's value, and what each file variable is; never a secret's value |
 | `homeport env rebuild` | builds the live commit again with the variables as they are now: a change the build sees needs one |
 | `homeport env pull [--env <name>]` | an environment's database and storage credentials into `.env.local`, never production's |
 | `homeport mcp` | an MCP server on stdio for your editor or agent |
@@ -130,6 +131,7 @@ homeport env set NEXT_PUBLIC_API_URL=https://api.example.com   # build and runti
 homeport env set NPM_TOKEN=… --build-only       # the build's alone
 homeport env set MIGRATION_DATABASE_URL=… --for release   # the release command's alone
 homeport env set DATABASE_POOL_MAX=4 --for worker         # the worker's own value
+homeport env set TZ=America/Jamaica LOG_LEVEL=info --plain  # variables: shown in env ls
 homeport env rebuild                            # put the change in the built app
 homeport env ls
 homeport env unset API_KEY

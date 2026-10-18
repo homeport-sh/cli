@@ -63,6 +63,9 @@ type fakeAPI struct {
 	available    map[string]string         // who sees each variable, by name, as the platform holds it
 	availSent    map[string]string         // the availability the last set sent
 	rolesSent    map[string]fakeRoleChange // the values for one role the last set sent
+	setSent      map[string]string         // the values the last set sent
+	secret       map[string]bool           // which values are secrets, by name, as the platform holds it (unsaid: a secret)
+	secretSent   map[string]bool           // the kinds the last set sent
 	roles        map[string][]string       // the roles with a value of their own, by name
 	rolesOnly    map[string]bool           // names with no value for all
 	homeport     map[string]string         // what homeport set, by name: why
@@ -80,8 +83,9 @@ type fakeAPI struct {
 }
 
 type fakeRoleChange struct {
-	Set   map[string]string
-	Unset []string
+	Set    map[string]string
+	Unset  []string
+	Secret map[string]bool
 }
 
 func newFakeAPI(t *testing.T) *fakeAPI {
@@ -248,7 +252,10 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 			if w, ok := f.homeport[n]; ok {
 				src, why = "homeport", w
 			}
-			v := map[string]any{"Name": n, "Available": a, "Source": src, "Why": why}
+			v := map[string]any{"Name": n, "Available": a, "Source": src, "Why": why, "Secret": true}
+			if s, ok := f.secret[n]; ok && !s {
+				v["Secret"], v["Value"] = false, f.env[n]
+			}
 			if r := f.roles[n]; len(r) > 0 {
 				v["Roles"] = r
 			}
@@ -274,9 +281,22 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 			Unset     []string
 			Available map[string]string
 			Roles     map[string]fakeRoleChange
+			Secret    map[string]bool
 		}
 		json.NewDecoder(r.Body).Decode(&in)
 		f.envPosts++
+		f.setSent, f.secretSent = in.Set, in.Secret
+		if f.secret == nil {
+			f.secret = map[string]bool{}
+		}
+		for k, s := range in.Secret {
+			was, known := f.secret[k]
+			if _, set := in.Set[k]; !set && !s && (!known || was) {
+				f.write(w, 400, map[string]any{"Error": k + " is a secret: its value is never shown. Rotate it to make it a variable."})
+				return
+			}
+			f.secret[k] = s
+		}
 		f.availSent = in.Available
 		f.rolesSent = in.Roles
 		if f.available == nil {
