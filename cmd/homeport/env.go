@@ -24,8 +24,9 @@ const localEnv = ".env.local"
 
 const envUsage = `usage: homeport env set NAME=value… [--build | --build-only | --runtime]
        homeport env set NAME… --build | --build-only | --runtime
+       homeport env set NAME=value… --for ROLE…
        homeport env set [NAME] --from-file <path>
-       homeport env unset NAME…
+       homeport env unset NAME… [--for ROLE…]
        homeport env ls
        homeport env rebuild
        homeport env pull
@@ -139,6 +140,97 @@ func readFileVar(dir, name, path string) (string, []byte, error) {
 	return name, b, envfile.CheckFile(name, b)
 }
 
+// roleFlags is --for, given once for each role: web, release or a
+// process's name.
+type roleFlags []string
+
+func (r *roleFlags) String() string { return strings.Join(*r, ",") }
+
+func (r *roleFlags) Set(v string) error {
+	if !validRole(v) {
+		return fmt.Errorf("%q isn't a part of the app: web, release or a process's name", v)
+	}
+	if !slices.Contains(*r, v) {
+		*r = append(*r, v)
+	}
+	return nil
+}
+
+const forUsage = "a value for one part of the app alone: web, release (the release command) or a process's name; once for each"
+
+// validRole is a role a value may be for, as the platform checks it: a
+// cron job gets the values for all.
+func validRole(r string) bool {
+	if r == "" || len(r) > 15 || r == "job" || r[0] < 'a' || r[0] > 'z' {
+		return false
+	}
+	for _, c := range r {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
+}
+
+// roleSays is a role, in a sentence.
+func roleSays(r string) string {
+	switch r {
+	case "web":
+		return "the web"
+	case "release":
+		return "the release command"
+	}
+	return r
+}
+
+// envSetFor is `homeport env set NAME=value… --for ROLE…`: values for those
+// roles alone, never in the value for all.
+func (a *app) envSetFor(ctx context.Context, f envFlags, pos []string, roles roleFlags) error {
+	if len(pos) == 0 {
+		return usageErr("%s", envUsage)
+	}
+	set := map[string]string{}
+	for _, arg := range pos {
+		name, value, ok := strings.Cut(arg, "=")
+		if !ok {
+			return usageErr("%s: with --for, NAME=value (a value for one part of the app is set as a whole)", arg)
+		}
+		if strings.ContainsAny(value, "\r\n") {
+			return fmt.Errorf("%s: a value is one line", name)
+		}
+		if _, err := envfile.Line(name, value); err != nil {
+			return err
+		}
+		set[name] = value
+	}
+	c, t, _, err := a.envTarget(ctx, f)
+	if err != nil {
+		return err
+	}
+	ch := cloud.EnvChange{Roles: map[string]cloud.RoleChange{}}
+	for _, r := range roles {
+		ch.Roles[r] = cloud.RoleChange{Set: set}
+	}
+	if _, err := c.ChangeEnv(ctx, t.link.Team, t.link.App, ch); err != nil {
+		return err
+	}
+	sorted := slices.Sorted(slices.Values(roles))
+	says := make([]string, len(sorted))
+	for i, r := range sorted {
+		says[i] = roleSays(r)
+	}
+	var next []string
+	if slices.Contains(sorted, "release") {
+		next = append(next, "the release command uses it at the next deploy")
+	}
+	if running := slices.DeleteFunc(slices.Clone(sorted), func(r string) bool { return r == "release" }); len(running) > 0 {
+		next = append(next, "the app restarts with it")
+	}
+	fmt.Fprintf(a.out, "Set %s for %s on %s: %s.\n", strings.Join(slices.Sorted(maps.Keys(set)), ", "),
+		strings.Join(says, ", "), envWhere(t), strings.Join(next, "; "))
+	return nil
+}
+
 // envSet is `homeport env set`: plain variables as NAME=value, or one file
 // variable from a file here - read here, its bytes sent as they are - and
 // who sees them: --build, --build-only or --runtime, else a new one its
@@ -151,9 +243,20 @@ func (a *app) envSet(ctx context.Context, args []string) error {
 	build := fs.Bool("build", false, "available to its build and its running app")
 	buildOnly := fs.Bool("build-only", false, "available to its build alone")
 	runtime := fs.Bool("runtime", false, "available to its running app alone, whatever its name")
+	var roles roleFlags
+	fs.Var(&roles, "for", forUsage)
 	pos, err := parseMixed(fs, args)
 	if err != nil {
 		return err
+	}
+	if len(roles) > 0 {
+		switch {
+		case *build || *buildOnly || *runtime:
+			return usageErr("a value for one part of the app is its running app's alone: --for takes none of --build, --build-only, --runtime")
+		case *fromFile != "":
+			return usageErr("a file variable is for every part of the app: --for takes no --from-file")
+		}
+		return a.envSetFor(ctx, f, pos, roles)
 	}
 	var chosen envfile.Availability
 	for _, c := range []struct {
@@ -315,9 +418,12 @@ func publicPrefix(name string) string {
 	return ""
 }
 
-// envUnset is `homeport env unset`: variables removed, plain or file.
+// envUnset is `homeport env unset`: variables removed, plain or file; with
+// --for, those roles' own values alone.
 func (a *app) envUnset(ctx context.Context, args []string) error {
 	fs, f := a.envFlagSet("env unset")
+	var roles roleFlags
+	fs.Var(&roles, "for", "remove one part of the app's own value alone (web, release or a process's name); once for each")
 	pos, err := parseMixed(fs, args)
 	if err != nil {
 		return err
@@ -333,6 +439,20 @@ func (a *app) envUnset(ctx context.Context, args []string) error {
 	c, t, _, err := a.envTarget(ctx, f)
 	if err != nil {
 		return err
+	}
+	if len(roles) > 0 {
+		ch := cloud.EnvChange{Roles: map[string]cloud.RoleChange{}}
+		var says []string
+		for _, r := range slices.Sorted(slices.Values(roles)) {
+			ch.Roles[r] = cloud.RoleChange{Unset: pos}
+			says = append(says, r)
+		}
+		if _, err := c.ChangeEnv(ctx, t.link.Team, t.link.App, ch); err != nil {
+			return err
+		}
+		fmt.Fprintf(a.out, "Removed %s's value of %s from %s: it gets the value for all, if any.\n",
+			strings.Join(says, ", "), strings.Join(pos, ", "), envWhere(t))
+		return nil
 	}
 	if _, err := c.SetEnv(ctx, t.link.Team, t.link.App, nil, nil, pos); err != nil {
 		return err
@@ -374,17 +494,17 @@ func (a *app) envLs(ctx context.Context, args []string) error {
 	}
 	var table strings.Builder
 	tw := tabwriter.NewWriter(&table, 0, 4, 2, ' ', 0)
-	fmt.Fprintf(tw, "NAME\tAVAILABLE TO\tKIND\tSOURCE\t\t\n")
+	fmt.Fprintf(tw, "NAME\tAVAILABLE TO\tFOR\tKIND\tSOURCE\t\t\n")
 	for _, v := range vars {
 		source := v.Source
 		if v.PerDeploy {
 			source += ", each deploy"
 		}
 		if m, ok := files[v.Name]; ok {
-			fmt.Fprintf(tw, "%s\t%s\tfile\t%s\t%s\t%s\n", v.Name, availableShort(v.Available), source, secretPath(v.Name), m.Summary())
+			fmt.Fprintf(tw, "%s\t%s\t%s\tfile\t%s\t%s\t%s\n", v.Name, availableShort(v.Available), forShort(v), source, secretPath(v.Name), m.Summary())
 			continue
 		}
-		fmt.Fprintf(tw, "%s\t%s\tplain\t%s\t\t\n", v.Name, availableShort(v.Available), source)
+		fmt.Fprintf(tw, "%s\t%s\t%s\tplain\t%s\t\t\n", v.Name, availableShort(v.Available), forShort(v), source)
 	}
 	if err := tw.Flush(); err != nil {
 		return err
@@ -396,6 +516,18 @@ func (a *app) envLs(ctx context.Context, args []string) error {
 		fmt.Fprintf(a.out, "\n%s needs a rebuild: its build sees a change since its live release was built. `homeport env rebuild`\n", envWhere(t))
 	}
 	return nil
+}
+
+// forShort is which parts of the app get a variable, in a column: all, the
+// roles with a value alone, or all with some role's own.
+func forShort(v cloud.EnvVar) string {
+	switch {
+	case len(v.Roles) == 0:
+		return "all"
+	case v.RolesOnly:
+		return strings.Join(v.Roles, ", ")
+	}
+	return "all; own: " + strings.Join(v.Roles, ", ")
 }
 
 // availableShort is who sees a variable, in a column.
