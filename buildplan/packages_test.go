@@ -23,15 +23,15 @@ var published = buildplan.Package{
 }
 
 // Lightpanda is the first package: published (homeport-sh/homeport
-// images/pkg-lightpanda, upstream's exact files), so an app can choose it,
-// but unlisted until its licence is confirmed.
-func TestLightpandaIsPublishedAndUnlisted(t *testing.T) {
+// images/pkg-lightpanda, upstream's exact files), and listed: the
+// dashboard's list offers it.
+func TestLightpandaIsPublishedAndListed(t *testing.T) {
 	i := slices.IndexFunc(buildplan.Packages(), func(p buildplan.Package) bool { return p.Name == "lightpanda" })
 	if i < 0 {
 		t.Fatalf("lightpanda isn't on the list: %+v", buildplan.Packages())
 	}
 	p := buildplan.Packages()[i]
-	if p.Version != "1.0.0" || !slices.Equal(p.Provides, []string{"lightpanda"}) || p.License != "AGPL-3.0" || p.Listed || !p.Published() {
+	if p.Version != "1.0.0" || !slices.Equal(p.Provides, []string{"lightpanda"}) || p.License != "AGPL-3.0" || !p.Listed || !p.Published() {
 		t.Fatalf("%+v", p)
 	}
 	want := map[string]string{
@@ -44,8 +44,8 @@ func TestLightpandaIsPublishedAndUnlisted(t *testing.T) {
 	if err := (buildplan.Settings{Packages: []string{"lightpanda"}}).Check(); err != nil {
 		t.Fatalf("lightpanda, by name: %v", err)
 	}
-	if slices.ContainsFunc(buildplan.Listed(), func(p buildplan.Package) bool { return p.Name == "lightpanda" }) {
-		t.Fatal("lightpanda is in the dashboard's list")
+	if !slices.ContainsFunc(buildplan.Listed(), func(p buildplan.Package) bool { return p.Name == "lightpanda" }) {
+		t.Fatal("lightpanda isn't in the dashboard's list")
 	}
 }
 
@@ -174,14 +174,9 @@ func samePkg(a, b buildplan.PlanPackage) bool {
 		a.Images[artifact.ArchAMD64] == b.Images[artifact.ArchAMD64] && a.Images[artifact.ArchARM64] == b.Images[artifact.ArchARM64]
 }
 
-// Lightpanda is unlisted until its licence is confirmed: an app can choose
-// it by name, but the dashboard's list doesn't show it. Listed is what the
-// dropdown shows: published and listed.
+// An unlisted package can be chosen by name, but the dashboard's list
+// doesn't show it. Listed is what the dropdown shows: published and listed.
 func TestAnUnlistedPackageIsChosenByNameOnly(t *testing.T) {
-	i := slices.IndexFunc(buildplan.Packages(), func(p buildplan.Package) bool { return p.Name == "lightpanda" })
-	if i < 0 || buildplan.Packages()[i].Listed {
-		t.Fatalf("lightpanda is listed: %+v", buildplan.Packages())
-	}
 	unlisted, listed := published, published
 	listed.Name, listed.Provides, listed.Listed = "ffmpeg", []string{"ffmpeg"}, true
 	listed.Images = map[string]string{

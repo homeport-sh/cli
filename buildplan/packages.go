@@ -67,10 +67,11 @@ type PlanPackage struct {
 // linked against glibc only (libc, libm, ld.so; at most GLIBC_2.38 on
 // arm64, 2.35 on x86-64), so the host's /lib is all they need. Its image
 // is upstream's exact files (homeport-sh/homeport images/pkg-lightpanda).
-// Unlisted until its licence (AGPL-3.0) is confirmed for redistribution.
+// Listed: its licence (AGPL-3.0) allows redistributing upstream's
+// unmodified binaries.
 var catalog = []Package{
 	{
-		Name: "lightpanda", Version: "1.0.0", License: "AGPL-3.0",
+		Name: "lightpanda", Version: "1.0.0", License: "AGPL-3.0", Listed: true,
 		About:    "Lightpanda, a headless browser for scraping and automation (Chrome DevTools Protocol)",
 		Provides: []string{"lightpanda"},
 		// published 2026-10-15 from images/pkg-lightpanda (homeport-sh/homeport)
