@@ -68,6 +68,8 @@ type fakeAPI struct {
 	secretSent   map[string]bool           // the kinds the last set sent
 	roles        map[string][]string       // the roles with a value of their own, by name
 	rolesOnly    map[string]bool           // names with no value for all
+	refs         map[string][]string       // the variables each value names, by name (a secret's too)
+	resolved     map[string]string         // each variable's value naming others, resolved, by name
 	homeport     map[string]string         // what homeport set, by name: why
 	rebuilds     int                       // env rebuilds asked for
 	builtChanged map[string]bool           // names whose change a build sees since the last rebuild
@@ -261,6 +263,12 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 			}
 			if f.rolesOnly[n] {
 				v["RolesOnly"] = true
+			}
+			if r := f.refs[n]; len(r) > 0 {
+				v["Refs"] = r
+			}
+			if r, ok := f.resolved[n]; ok {
+				v["Resolved"] = r
 			}
 			vars = append(vars, v)
 			needs = needs || f.builtChanged[n]

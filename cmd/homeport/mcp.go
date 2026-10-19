@@ -412,6 +412,9 @@ func (a *app) mcpServer() *mcp.Server {
 				if v.PerDeploy {
 					m["per_deploy"] = true
 				}
+				if len(v.Refs) > 0 {
+					m["refs"] = v.Refs
+				}
 				vars = append(vars, m)
 			}
 			return result(map[string]any{"environment": t.link.Environment, "names": env.Names, "files": files, "variables": vars, "needs_rebuild": env.NeedsRebuild})

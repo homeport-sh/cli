@@ -28,6 +28,7 @@ const envUsage = `usage: homeport env set NAME=value… [--build | --build-only 
        homeport env set [NAME] --from-file <path>
        homeport env unset NAME… [--for ROLE…]
        homeport env ls
+       homeport env get NAME [--resolved]
        homeport env rebuild
        homeport env pull
   each [--env <environment>] [--team <slug> --app <name>]`
@@ -47,6 +48,8 @@ func (a *app) env(ctx context.Context, args []string) error {
 		return a.envUnset(ctx, args[1:])
 	case "ls":
 		return a.envLs(ctx, args[1:])
+	case "get":
+		return a.envGet(ctx, args[1:])
 	case "rebuild":
 		return a.envRebuild(ctx, args[1:])
 	}
@@ -528,9 +531,10 @@ func (a *app) envUnset(ctx context.Context, args []string) error {
 }
 
 // envLs is `homeport env ls`: every variable an environment gets, by name,
-// with who sees it, which it is and where it comes from, a variable's value
-// (never a secret's), and of a file variable where the app reads it and
-// what it is; and whether it needs a rebuild.
+// with who sees it, which it is and where it comes from, the variables its
+// value names, a variable's value (never a secret's), and of a file
+// variable where the app reads it and what it is; and whether it needs a
+// rebuild.
 func (a *app) envLs(ctx context.Context, args []string) error {
 	fs, f := a.envFlagSet("env ls")
 	if err := parse(fs, args); err != nil {
@@ -560,21 +564,21 @@ func (a *app) envLs(ctx context.Context, args []string) error {
 	}
 	var table strings.Builder
 	tw := tabwriter.NewWriter(&table, 0, 4, 2, ' ', 0)
-	fmt.Fprintf(tw, "NAME\tAVAILABLE TO\tFOR\tKIND\tSOURCE\tVALUE\t\n")
+	fmt.Fprintf(tw, "NAME\tAVAILABLE TO\tFOR\tKIND\tSOURCE\tREF\tVALUE\t\n")
 	for _, v := range vars {
 		source := v.Source
 		if v.PerDeploy {
 			source += ", each deploy"
 		}
 		if m, ok := files[v.Name]; ok {
-			fmt.Fprintf(tw, "%s\t%s\t%s\tfile\t%s\t%s\t%s\n", v.Name, availableShort(v.Available), forShort(v), source, secretPath(v.Name), m.Summary())
+			fmt.Fprintf(tw, "%s\t%s\t%s\tfile\t%s\t-\t%s\t%s\n", v.Name, availableShort(v.Available), forShort(v), source, secretPath(v.Name), m.Summary())
 			continue
 		}
 		kind, value := "secret", ""
 		if !v.Secret {
 			kind, value = "variable", v.Value
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t\n", v.Name, availableShort(v.Available), forShort(v), kind, source, value)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t\n", v.Name, availableShort(v.Available), forShort(v), kind, source, refShort(v), value)
 	}
 	if err := tw.Flush(); err != nil {
 		return err
@@ -586,6 +590,58 @@ func (a *app) envLs(ctx context.Context, args []string) error {
 		fmt.Fprintf(a.out, "\n%s needs a rebuild: its build sees a change since its live release was built. `homeport env rebuild`\n", envWhere(t))
 	}
 	return nil
+}
+
+// refShort is the variables a value names, in a column.
+func refShort(v cloud.EnvVar) string {
+	if len(v.Refs) == 0 {
+		return "-"
+	}
+	return strings.Join(v.Refs, ",")
+}
+
+// envGet is `homeport env get NAME`: a variable's value as written, or
+// with --resolved as the app gets it, each ${{NAME}} replaced. A secret's
+// is never printed.
+func (a *app) envGet(ctx context.Context, args []string) error {
+	fs, f := a.envFlagSet("env get")
+	resolved := fs.Bool("resolved", false, "its value as the app gets it, each ${{NAME}} replaced")
+	pos, err := parseMixed(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return usageErr("%s", envUsage)
+	}
+	c, t, _, err := a.envTarget(ctx, f)
+	if err != nil {
+		return err
+	}
+	env, err := c.Env(ctx, t.link.Team, t.link.App)
+	if err != nil {
+		return err
+	}
+	name := pos[0]
+	for _, fv := range env.Files {
+		if fv.Name == name {
+			return fmt.Errorf("%s is a file variable: the app reads it at %s, never shown", name, secretPath(name))
+		}
+	}
+	for _, v := range env.Vars {
+		if v.Name != name {
+			continue
+		}
+		if v.Secret {
+			return fmt.Errorf("%s is a secret: its value is never shown", name)
+		}
+		value := v.Value
+		if *resolved && len(v.Refs) > 0 {
+			value = v.Resolved
+		}
+		fmt.Fprintln(a.out, value)
+		return nil
+	}
+	return fmt.Errorf("%s isn't set in %s", name, envWhere(t))
 }
 
 // forShort is which parts of the app get a variable, in a column: all, the
