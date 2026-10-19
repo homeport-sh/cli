@@ -25,7 +25,8 @@ homeport deploy     # upload the working tree, build it, follow it live
 | `homeport env set NAME=value… --build` | available to the build too (`--build-only`: the build alone; `--runtime`: the running app alone). Names with a public prefix (`NEXT_PUBLIC_`, `VITE_`, `PUBLIC_`, …) are build and runtime by default; `homeport env set NAME --build` changes who sees one, its value kept |
 | `homeport env set NAME=value… --for <role>` | a value for one part of the app alone: `release` (the release command), `web`, or a process by name; `--for` once for each. `homeport env unset NAME --for <role>` removes that part's own value alone. Needs homeportd 0.36.0 where the app runs |
 | `homeport env set NAME=value… --secret` | a secret: its value is never shown again (`--plain`: a variable, its value shown in `env ls` and on the dashboard). Neither: a value keeps its kind, and a new one is a secret. `homeport env set NAME --secret` changes a variable to a secret, its value kept; a secret becomes a variable only with a new value |
-| `homeport env ls` | every variable an environment gets, who sees it (runtime, build + runtime, build only), which parts of the app get it (`all`, `release`, `all; own: worker`), which it is (secret, variable, file) and where it comes from (its own, global, an add-on's, homeport's), a variable's value, and what each file variable is; never a secret's value |
+| `homeport env ls` | every variable an environment gets, who sees it (runtime, build + runtime, build only), which parts of the app get it (`all`, `release`, `all; own: worker`), which it is (secret, variable, file) and where it comes from (its own, global, an add-on's, homeport's), the variables its value names (REF), a variable's value, and what each file variable is; never a secret's value |
+| `homeport env get NAME [--resolved]` | a variable's value as written (`${{APP_URL}}/app`), or with `--resolved` as the app gets it (`https://example.com/app`); never a secret's |
 | `homeport env rebuild` | builds the live commit again with the variables as they are now: a change the build sees needs one |
 | `homeport env pull [--env <name>]` | an environment's database and storage credentials into `.env.local`, never production's |
 | `homeport mcp` | an MCP server on stdio for your editor or agent |
@@ -132,10 +133,18 @@ homeport env set NPM_TOKEN=… --build-only       # the build's alone
 homeport env set MIGRATION_DATABASE_URL=… --for release   # the release command's alone
 homeport env set DATABASE_POOL_MAX=4 --for worker         # the worker's own value
 homeport env set TZ=America/Jamaica LOG_LEVEL=info --plain  # variables: shown in env ls
+homeport env set 'VITE_APP_URL=${{APP_URL}}' --build --plain   # APP_URL's value, kept in step
 homeport env rebuild                            # put the change in the built app
 homeport env ls
+homeport env get VITE_APP_URL --resolved
 homeport env unset API_KEY
 ```
+
+A value can name another with `${{NAME}}` (single-quote it in the
+shell): the app gets the other's value in its place, and a change of
+that value reaches every value naming it. `$${{` is the text itself. A
+value naming a secret is a secret, and a build value names only build
+values; anything else is refused when it's set, never at deploy.
 
 A value is one line. Anything else - a CA certificate, a client
 certificate and key, a service account's JSON, a keystore - is a **file

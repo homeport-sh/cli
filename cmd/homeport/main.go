@@ -48,6 +48,7 @@ func (a *app) usage() {
                       [--env <name>] [--team <slug> --app <name>]
   homeport env unset  removes variables: NAME…
   homeport env ls     an environment's variables by name; never a value
+  homeport env get    a variable's value: NAME [--resolved]; never a secret's
   homeport env pull   an environment's database and storage credentials into
                       .env.local (0600), to develop against; never
                       production's, never your app's own variables

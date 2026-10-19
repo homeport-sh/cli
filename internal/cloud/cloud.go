@@ -391,6 +391,11 @@ type EnvVar struct {
 	// shown (design/secret-variables.md in homeport-sh/cloud)
 	Secret bool
 	Value  string
+	// Refs: the variables its value names (${{NAME}}), a secret's too;
+	// Resolved: a variable's value naming others as the app gets it
+	// (design/variable-references.md in homeport-sh/cloud)
+	Refs     []string
+	Resolved string
 }
 
 // FileVar is one file variable: its name and what may be shown of it.

@@ -100,7 +100,7 @@ func TestEnvLsShowsVariablesNotSecrets(t *testing.T) {
 			rows[fs[0]] = fs
 		}
 	}
-	if r := rows["TZ"]; !strings.Contains(strings.Join(r, " "), "variable own Pacific/Fiji") {
+	if r := rows["TZ"]; !strings.Contains(strings.Join(r, " "), "variable own - Pacific/Fiji") {
 		t.Fatalf("TZ: %v", r)
 	}
 	if r := rows["STRIPE_KEY"]; !strings.Contains(strings.Join(r, " "), "secret own") {
