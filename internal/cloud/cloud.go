@@ -351,10 +351,11 @@ type NewToken struct {
 	}
 }
 
-// CreateToken makes a named token for CI, as the signed-in person.
-func (c *Client) CreateToken(ctx context.Context, name string) (*NewToken, error) {
+// CreateToken makes a named token for CI, as the signed-in person, for one
+// environment (app, by id) of team (by id): it acts there alone.
+func (c *Client) CreateToken(ctx context.Context, name, team, app string) (*NewToken, error) {
 	var out NewToken
-	err := c.call(ctx, "POST", "/v1/cli/tokens", map[string]string{"name": name}, &out)
+	err := c.call(ctx, "POST", "/v1/cli/tokens", map[string]string{"name": name, "team": team, "app": app}, &out)
 	return &out, err
 }
 func appPath(team, app string) string {
