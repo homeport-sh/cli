@@ -1,6 +1,6 @@
 module github.com/homeport-sh/cli
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/modelcontextprotocol/go-sdk v1.8.0
