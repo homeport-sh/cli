@@ -54,7 +54,9 @@ func (a *app) usage() {
                       production's, never your app's own variables
                       [--env <name>]
   homeport token create --name <where>
-                      a token for CI (HOMEPORT_TOKEN), printed once
+                      a token for CI (HOMEPORT_TOKEN), printed once: for
+                      one environment, and it acts there alone
+                      [--team <slug>] [--app <name>] [--env <name>]
   homeport mcp        an MCP server on stdio, for your editor or agent:
                       claude mcp add homeport -- homeport mcp
                       every change is asked of you through the editor

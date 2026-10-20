@@ -17,7 +17,7 @@ homeport deploy     # upload the working tree, build it, follow it live
 | `homeport whoami` | who you're signed in as, and your teams |
 | `homeport link` | link this folder to an app's environment (`--team`, `--app`, `--env`) |
 | `homeport deploy` | upload the working tree, build and release it, follow it until it's live |
-| `homeport token create --name <where>` | a token for CI (`HOMEPORT_TOKEN`), printed once |
+| `homeport token create --name <where>` | a token for CI (`HOMEPORT_TOKEN`), printed once: for one environment - this folder's link's, or `--team`, `--app`, `--env` - and it acts there alone |
 | `homeport rollback [<deploy\|commit>]` | lists the earlier releases you can roll back to; with one, ships its build again without building (asks first; `--yes`, `--run-release`) |
 | `homeport env set NAME=value…` | sets an environment's variables; the app restarts to get them (`--env`, `--team`, `--app`) |
 | `homeport env set [NAME] --from-file <path>` | a file variable: a certificate, key or any multi-line or binary value, read at `/run/secrets/NAME` |
@@ -50,7 +50,11 @@ the token it receives is never printed.
 - `homeport whoami` says who you are signed in as, and in which teams.
 - In CI, set `HOMEPORT_TOKEN` to a token made for it: `homeport token create
   --name github-actions` prints one, once (or Account → CLI sessions →
-  Create a token for CI). It's listed and revoked like any session.
+  Create a token for CI). It's made for one environment - this folder's
+  link's, the one `--team`/`--app`/`--env` name, or the one you pick when
+  asked - and acts as you there alone: a token leaked from one repository
+  can't touch your other apps or teams. It's listed and revoked like any
+  session.
 - A sign-in is sent only to the API that gave it. Pointing `HOMEPORT_API`
   elsewhere counts as signed out there, and the API must be https (or
   http on this computer).

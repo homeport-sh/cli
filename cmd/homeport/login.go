@@ -148,15 +148,20 @@ func (a *app) whoami(ctx context.Context, args []string) error {
 	return nil
 }
 
-// token makes a token for CI: `homeport token create --name <where>`. It's
-// printed once, to stdout alone, for a CI secret; it's listed in Account →
-// CLI sessions by its name and revoked there.
+// token makes a token for CI: `homeport token create --name <where>`, for
+// one environment - the flags', else this folder's link's, else asked for
+// as deploy asks. It acts there alone. It's printed once, to stdout alone,
+// for a CI secret; it's listed in Account → CLI sessions by its name and
+// revoked there.
 func (a *app) token(ctx context.Context, args []string) error {
 	if len(args) == 0 || args[0] != "create" {
-		return usageErr("usage: homeport token create --name <where it's used>")
+		return usageErr("usage: homeport token create --name <where it's used> [--team <team>] [--app <app>] [--env <environment>]")
 	}
 	fs := a.flags("token create")
 	name := fs.String("name", "", "where it's used (github-actions, say): its name in Account → CLI sessions")
+	team := fs.String("team", "", "the team, by its address (slug)")
+	appName := fs.String("app", "", "the app it's for, by name (instead of the link)")
+	env := fs.String("env", "", "the environment (with --app; default production)")
 	if err := parse(fs, args[1:]); err != nil {
 		return err
 	}
@@ -167,11 +172,26 @@ func (a *app) token(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	made, err := c.CreateToken(ctx, *name)
+	// what it's for: the flags, or this folder's link, or asked
+	var t *target
+	if *appName != "" || *team != "" {
+		t, err = a.resolve(ctx, c, *team, *appName, *env, false)
+	} else if l, _, lerr := config.FindLink(a.wd); lerr == nil {
+		t, err = a.linked(ctx, c, *l, false)
+	} else if errors.Is(lerr, config.ErrNotLinked) {
+		t, err = a.resolve(ctx, c, "", "", *env, false)
+	} else {
+		return lerr
+	}
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(a.err, "A token for %s: set it as HOMEPORT_TOKEN in your CI's secrets now - it isn't shown again.\n", made.Session.Name)
+	made, err := c.CreateToken(ctx, *name, t.link.Team, t.link.App)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.err, "A token for %s, on %s alone: set it as HOMEPORT_TOKEN in your CI's secrets now - it isn't shown again.\n",
+		made.Session.Name, envWhere(t))
 	fmt.Fprintln(a.out, made.Token)
 	return nil
 }

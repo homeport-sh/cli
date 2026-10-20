@@ -56,6 +56,7 @@ type fakeAPI struct {
 	buildGet int
 
 	tokenNames   []string                  // tokens made for CI, by name
+	tokenFor     []string                  // and the team/app each is for, by id
 	env          map[string]string         // an environment's variables, as set
 	files        map[string][]byte         // its file variables, as set
 	envApp       string                    // the environment the last set was for
@@ -194,9 +195,10 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		f.write(w, 200, map[string]any{"Values": values, "Withheld": f.withheld})
 	case r.Method == "POST" && p == "/v1/cli/tokens":
-		var in struct{ Name string }
+		var in struct{ Name, Team, App string }
 		json.NewDecoder(r.Body).Decode(&in)
 		f.tokenNames = append(f.tokenNames, in.Name)
+		f.tokenFor = append(f.tokenFor, in.Team+"/"+in.App)
 		f.write(w, 200, map[string]any{"Token": "hpcli_ci-token", "Session": map[string]any{"ID": "c9", "Name": in.Name}})
 	case r.Method == "DELETE" && p == "/v1/cli/token":
 		f.revoked = append(f.revoked, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
@@ -773,19 +775,33 @@ func TestDeployingSaysWhatSecretsItLeftOut(t *testing.T) {
 }
 
 // `homeport token create`: a named token for CI, printed once to stdout and
-// nowhere else.
+// nowhere else - for one environment, picked as deploy picks one: the
+// flags, else this folder's link, else asked.
 func TestMakingATokenForCI(t *testing.T) {
 	f := newFakeAPI(t)
 	h := newHarness(t, f)
 	h.login(t)
-	if code := h.run("token", "create", "--name", "github-actions"); code != 0 {
+	if code := h.run("token", "create", "--name", "github-actions", "--team", "alice", "--app", "blog", "--env", "staging"); code != 0 {
 		t.Fatalf("%d %s", code, h.said())
 	}
-	if strings.TrimSpace(h.out.String()) != "hpcli_ci-token" || strings.Contains(h.err.String(), "hpcli_") {
+	if strings.TrimSpace(h.out.String()) != "hpcli_ci-token" || strings.Contains(h.err.String(), "hpcli_") || !strings.Contains(h.err.String(), "alice/blog (staging)") {
 		t.Fatalf("out %q err %q", h.out.String(), h.err.String())
 	}
-	if f.tokenNames[0] != "github-actions" {
-		t.Fatalf("%v", f.tokenNames)
+	if f.tokenNames[0] != "github-actions" || f.tokenFor[0] != team1+"/"+stageID {
+		t.Fatalf("%v %v", f.tokenNames, f.tokenFor)
+	}
+	// one its own CI deploys can have one too: its variables, its rollbacks
+	if code := h.run("token", "create", "--name", "gha", "--app", "api"); code != 0 || f.tokenFor[1] != team1+"/"+apiID {
+		t.Fatalf("its own CI's: %d %s %v", code, h.said(), f.tokenFor)
+	}
+	// no flags and no link, no terminal: which app, it says
+	if code := h.run("token", "create", "--name", "gha"); code != exitUsage || !strings.Contains(h.err.String(), "--app") || len(f.tokenFor) != 2 {
+		t.Fatalf("nothing picked: %d %s", code, h.said())
+	}
+	// this folder's link
+	project(t, h)
+	if code := h.run("token", "create", "--name", "gha"); code != 0 || f.tokenFor[2] != team1+"/"+blogID {
+		t.Fatalf("linked: %d %s %v", code, h.said(), f.tokenFor)
 	}
 	if code := h.run("token", "create"); code != exitUsage {
 		t.Fatalf("no name: %d", code)
