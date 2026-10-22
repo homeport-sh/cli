@@ -60,7 +60,7 @@ func TestFontsIsAPackageOfData(t *testing.T) {
 		t.Fatalf("fonts isn't on the list: %+v", buildplan.Packages())
 	}
 	p := buildplan.Packages()[i]
-	if p.Version != "2.37" || len(p.Provides) != 0 || !p.Data() || p.License != "Bitstream-Vera" || !p.Published() {
+	if p.Version != "2.37" || len(p.Provides) != 0 || !p.Data() || p.License != "Bitstream-Vera" || !p.Published() || !p.Listed {
 		t.Fatalf("%+v", p)
 	}
 	if err := (buildplan.Settings{Packages: []string{"fonts"}}).Check(); err != nil {
