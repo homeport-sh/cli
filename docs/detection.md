@@ -618,8 +618,19 @@ Nothing is installed on the server: the release carries them.
 | Package | Version | Provides | Licence |
 |---|---|---|---|
 | `lightpanda` | 1.0.0 | `lightpanda`, a headless browser (CDP) | AGPL-3.0 |
+| `fonts` | 2.37 | no executable: DejaVu Sans, Sans Mono and Serif, and a fontconfig config | Bitstream-Vera |
 
 Lightpanda is published (`ghcr.io/homeport-sh/pkg-lightpanda`). It's unlisted
 while its licence is confirmed: you can choose it by name, but the
 dashboard's list doesn't show it. homeport turns its telemetry off
 (`LIGHTPANDA_DISABLE_TELEMETRY=true`) wherever it ships.
+
+`fonts` is a package of data alone, for an app that draws text: sharp's
+text and SVG (libvips, librsvg, pango), or anything else on fontconfig. A
+server here has no fonts of its own, so without it text renders blank. It
+ships DejaVu's core faces (the set Debian calls `fonts-dejavu-core`) and a
+fontconfig config, at `.homeport/pkgs/fonts/share/`. homeport sets
+`FONTCONFIG_FILE` to that config wherever it ships, unless the app sets
+`FONTCONFIG_FILE` itself. `sans-serif`, `serif` and `monospace` are
+DejaVu's; any other family asked for (Arial, Helvetica) falls back to DejaVu
+Sans. It isn't published yet, so it can't be chosen until it is.
