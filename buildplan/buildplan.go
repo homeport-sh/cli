@@ -200,7 +200,7 @@ const PHPVersion = "8.5"
 // front-end assets. A Laravel bundle's php.ini has opcache skip timestamp
 // checks and keep what it compiles, in the release's storage/, across
 // wakes. Pinned by digest: a tag can be pushed again.
-const FrankenPHPImage = "ghcr.io/homeport-sh/frankenphp:" + PHPVersion + "-1.13.2-bun1.4.3@sha256:22cff33e90f11700602685e64877613e0e234fcaeab893607b93f8fd8df57b34"
+const FrankenPHPImage = "ghcr.io/homeport-sh/frankenphp:" + PHPVersion + "-1.13.2-bun1.4.3-2@sha256:456f0fff973f63e2d09c35b835fde81b9f1c5803b8051c5a917d96420a7f5ba8"
 
 // BundleDir is where a PHP app's build puts its bundle, in the app's folder.
 const BundleDir = ".homeport-bundle"
@@ -467,6 +467,9 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 		if err := reverbProcess(&p); err != nil {
 			return Plan{}, err
 		}
+	}
+	if php && p.laravelViews && s.Command == "" {
+		cacheConfigOnStart(&p) // its config cached as each starts (configcache.go)
 	}
 	if php {
 		p.OctaneAvailable = r.requires("laravel/octane")

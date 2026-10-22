@@ -210,7 +210,7 @@ func TestReverbRunsAsAProcess(t *testing.T) {
 		return &p.Processes[i]
 	}
 	p := detect(t, laravel([]string{"laravel/reverb"}), buildplan.Settings{})
-	if !p.Reverb || reverb(p) == nil || reverb(p).Run != buildplan.ReverbRun {
+	if !p.Reverb || reverb(p) == nil || reverb(p).Run != buildplan.StartRunner+" "+buildplan.ReverbRun {
 		t.Fatalf("reverb: %+v", p)
 	}
 	if !strings.Contains(buildplan.ReverbRun, "reverb:start") || !strings.Contains(buildplan.ReverbRun, "--port=$PORT") {
