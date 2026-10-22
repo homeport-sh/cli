@@ -53,13 +53,13 @@ var nodeLTS = map[string]string{"jod": "22", "krypton": "24"}
 // and the image carry the same bytes). A Bun version the project names
 // must be this one's (bunVersion): no other is run.
 const (
-	BunVersion = "1.4.3"
-	BunImage   = "oven/bun:1.4.3@sha256:ec06c3b6cea04192ae6770c434f668ca41d343ad19fa6472216c7b48be39c598"
+	BunVersion = "1.4.4"
+	BunImage   = "oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d"
 )
 
 var bunSum = map[string]string{
-	"x86_64":  "7ce7d6b654eddeec20afddf2396317fba6dc19ab52788a27e894e1806bf8f24b",
-	"aarch64": "029ece746ac9f970c76d8f48bdd1b1d0c52f3636b74d19f546f5e7c1165c0abe",
+	"x86_64":  "10702245766b225e70bbf6235fd6b47214fd94b4760d00ffaed8ab0df57ac235",
+	"aarch64": "354c2b049c716aca07b2e5cddb887928ac58950675d1258bb6312083917793b6",
 }
 
 // CorepackVersion installs pnpm and Yarn where the image has no corepack
@@ -1144,7 +1144,7 @@ func (r reader) bunVersion(pkg pkgJSON) error {
 			continue
 		}
 		if versionRe.MatchString(v) {
-			// a bare version is its line: 1, 1.4 and 1.4.x are 1.4.3's
+			// a bare version is its line: 1, 1.4 and 1.4.x are 1.4.4's
 			f := strings.Split(v, ".")
 			if f[0] == "1" && (len(f) == 1 || f[1] == strings.Split(BunVersion, ".")[1]) {
 				continue
