@@ -64,9 +64,12 @@ func planBuild(dir string, s buildplan.Settings) (buildplan.Plan, error) {
 	if err := checkSandboxedRelease(p.Release); err != nil {
 		return buildplan.Plan{}, err
 	}
+	if err := checkStopGrace(p.StopGrace); err != nil {
+		return buildplan.Plan{}, err
+	}
 	procs := map[string]processConfig{}
 	for _, pr := range p.Processes {
-		procs[pr.Name] = processConfig{Run: pr.Run, Memory: pr.Memory, CPU: pr.CPU}
+		procs[pr.Name] = processConfig{Run: pr.Run, Memory: pr.Memory, CPU: pr.CPU, StopGrace: pr.StopGrace}
 	}
 	if err := checkProcesses(procs); err != nil {
 		return buildplan.Plan{}, err

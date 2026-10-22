@@ -143,6 +143,12 @@ func TestThePlanSaysHowTheAppRuns(t *testing.T) {
 	if len(p.Processes) != 2 || p.Processes[0] != want[0] || p.Processes[1] != want[1] {
 		t.Fatalf("processes: %+v", p.Processes)
 	}
+	// how long each gets to finish after SIGTERM: the web's, a process's own
+	g := plan(t, map[string]string{"go.mod": "module x\n\ngo 1.24.2\n",
+		"homeport.yaml": "stop_grace: 60s\nprocesses:\n  worker:\n    run: work\n    stop_grace: 10m\n"})
+	if g.StopGrace != "60s" || len(g.Processes) != 1 || g.Processes[0].StopGrace != "10m" {
+		t.Fatalf("stop grace: %+v", g)
+	}
 	// nothing to run: the fields are left out
 	if q := plan(t, map[string]string{"go.mod": "module x\n\ngo 1.24.2\n"}); q.Run != "" || q.Release != "" || q.Processes != nil {
 		t.Fatalf("%+v", q)
@@ -153,6 +159,9 @@ func TestThePlanSaysHowTheAppRuns(t *testing.T) {
 		"bad run":       "run: serve; rm -rf /\n",
 		"bad process":   "processes:\n  worker: work $QUEUE\n",
 		"bad name":      "processes:\n  Worker: work\n",
+		"web grace":     "stop_grace: 16m\n",
+		"process grace": "processes:\n  worker:\n    run: work\n    stop_grace: 0s\n",
+		"grace no unit": "processes:\n  worker:\n    run: work\n    stop_grace: 90\n",
 	} {
 		if _, err := planBuild(repo(t, map[string]string{"go.mod": "module x\n\ngo 1.24.2\n", "homeport.yaml": yml}), buildplan.Settings{}); err == nil {
 			t.Errorf("%s: planned", name)

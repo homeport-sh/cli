@@ -11,6 +11,22 @@ and `homeport.yaml` wins over detection.
 Response headers (`headers:` in `homeport.yaml`) are in
 [headers.md](headers.md).
 
+A **stop grace** is how long the web or a process gets to finish after
+SIGTERM before it's killed: on a deploy, a restart, a scale-down or a move.
+`stop_grace:` at the top of `homeport.yaml` is the web's, and a process's
+own sits beside its `run:`. Whole seconds or minutes, `1s` to `15m`; unset
+is the platform's default. The build settings' (`stop_grace` on the
+settings and on each process) win, as everything else there does.
+
+```yaml
+run: serve --port $PORT
+stop_grace: 60s        # long requests get a minute
+processes:
+  worker:
+    run: queue:work
+    stop_grace: 10m    # finish the job it holds
+```
+
 | Files | Toolchain | Produces |
 |---|---|---|
 | `go.mod` | Go (`golang:<go.mod's version>`) | a binary |

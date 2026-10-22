@@ -101,6 +101,9 @@ func CheckProcesses(procs []Process) error {
 		case p.CPU != "" && !cpuOK(p.CPU):
 			return fmt.Errorf("process %q: cpu must be 1%% to %d%%, like 50%%", p.Name, MaxProcessCPUPct)
 		}
+		if err := CheckStopGrace("process "+strconv.Quote(p.Name), p.StopGrace); err != nil {
+			return err
+		}
 		seen[p.Name] = true
 	}
 	return nil
@@ -139,6 +142,49 @@ func checkText(name, v string) error {
 		if r < 0x20 || r == 0x7f {
 			return fmt.Errorf("%s: no control characters (tabs, newlines, DEL, …)", name)
 		}
+	}
+	return nil
+}
+
+// A stop grace is how long the web or a process gets to finish after
+// SIGTERM before it's killed (homeportd renders it into the unit's stop:
+// TimeoutStopSec, and a sandbox's sandbox-stop). Unset is homeportd's
+// default. At least 1s: systemd reads a 0 timeout as none at all. At most
+// 15m: a queue job or a request that needs longer should checkpoint, and
+// every deploy, restart and move waits up to the grace for each unit it
+// stops in turn, so the control plane's step limits grow with it.
+const (
+	MinStopGraceSecs = 1
+	MaxStopGraceSecs = 15 * 60
+)
+
+var stopGraceRe = regexp.MustCompile(`^([0-9]{1,4})([sm])$`)
+
+// StopGraceSeconds is a stop grace ("90s", "10m") in seconds, or why it
+// isn't one.
+func StopGraceSeconds(v string) (int, error) {
+	g := stopGraceRe.FindStringSubmatch(v)
+	if g == nil {
+		return 0, errors.New("stop_grace must be whole seconds or minutes, 1s to 15m, like 90s or 10m")
+	}
+	n, _ := strconv.Atoi(g[1]) // at most 4 digits: no overflow
+	if g[2] == "m" {
+		n *= 60
+	}
+	if n < MinStopGraceSecs || n > MaxStopGraceSecs {
+		return 0, fmt.Errorf("stop_grace %s: 1s to 15m, like 90s or 10m", v)
+	}
+	return n, nil
+}
+
+// CheckStopGrace says whether v, who's (the web's, or a process's by
+// name), is a stop grace; "" is none, the default.
+func CheckStopGrace(who, v string) error {
+	if v == "" {
+		return nil
+	}
+	if _, err := StopGraceSeconds(v); err != nil {
+		return fmt.Errorf("%s's %w", who, err)
 	}
 	return nil
 }
