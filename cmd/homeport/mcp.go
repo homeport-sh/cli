@@ -20,6 +20,7 @@ import (
 	"github.com/homeport-sh/cli/envfile"
 	"github.com/homeport-sh/cli/internal/cloud"
 	"github.com/homeport-sh/cli/internal/config"
+	"github.com/homeport-sh/cli/internal/source"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -341,6 +342,58 @@ func (a *app) mcpServer() *mcp.Server {
 		Team  string `json:"team" jsonschema:"the team's address (slug)"`
 		Build string `json:"build" jsonschema:"the build's id, as deploy answered it"`
 	}
+	type createIn struct {
+		Team string `json:"team" jsonschema:"the team's address (slug)"`
+		Name string `json:"name" jsonschema:"the app's name: lowercase letters, digits and dashes, up to 40"`
+	}
+	mcp.AddTool(s, &mcp.Tool{Name: "create_app", Annotations: changes("Create an app"),
+		Description: "Creates an app in a team with no repository - deployed from this computer, its production environment on an address of its own - and links the folder this server runs in to it when nothing links that folder yet, so deploy deploys there. It counts toward the team's plan's apps." + asks},
+		func(ctx context.Context, req *mcp.CallToolRequest, in createIn) (*mcp.CallToolResult, any, error) {
+			c, err := a.client()
+			if err != nil {
+				return refused(err)
+			}
+			who, err := c.WhoAmI(ctx)
+			if err != nil {
+				return refused(err)
+			}
+			i := slices.IndexFunc(who.Teams, func(t cloud.Team) bool { return t.Slug == in.Team || t.ID == in.Team })
+			if i < 0 {
+				return refused(fmt.Errorf("you aren't in a team %q", in.Team))
+			}
+			team := who.Teams[i]
+			// the folder is linked to it only when nothing links it yet
+			_, _, err = config.FindLink(a.wd)
+			link := errors.Is(err, config.ErrNotLinked)
+			what := fmt.Sprintf("Create an app %q in %s, deployed from your computer (no repository; it counts toward the plan's apps)?", in.Name, team.Slug)
+			if link {
+				what = fmt.Sprintf("Create an app %q in %s, deployed from your computer (no repository; it counts toward the plan's apps), and link %q to it?", in.Name, team.Slug, a.wd)
+			}
+			if ask, err := approve(req, what); err != nil {
+				return refused(err)
+			} else if ask != nil {
+				return ask, nil, nil
+			}
+			n := cloud.NewApp{Name: in.Name}
+			if link {
+				n.Root = source.Folder(a.wd)
+			}
+			made, err := c.CreateApp(ctx, team.ID, n)
+			if err != nil {
+				return refused(err)
+			}
+			if link {
+				l := config.Link{Team: team.ID, TeamSlug: team.Slug, App: made.ID, Project: made.ProjectName, Environment: made.Environment}
+				if err := config.SaveLink(a.wd, l); err != nil {
+					return refused(err)
+				}
+			}
+			return result(struct {
+				Team, App, Environment, Address string
+				Linked                          bool
+			}{team.Slug, made.ProjectName, made.Environment, "https://" + made.Domain, link})
+		})
+
 	mcp.AddTool(s, &mcp.Tool{Name: "deploy_status", Annotations: readOnly,
 		Description: "Says where a deploy got to: its build's status and the end of its log, then its release's status and detail. Changes nothing."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in statusIn) (*mcp.CallToolResult, any, error) {

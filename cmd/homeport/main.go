@@ -26,16 +26,19 @@ func (a *app) usage() {
                       [--name <device>] [--no-browser]
   homeport whoami     who you're signed in as, and your teams
   homeport logout     sign out: this device's session is revoked
-  homeport link       link this folder to an app's environment
-                      [--team <slug>] [--app <name>] [--env <name>]
+  homeport link       link this folder to an app's environment; an --app
+                      the team hasn't is created, asked first
+                      [--team <slug>] [--app <name>] [--env <name>] [--yes]
   homeport deploy     upload this folder's working tree (what git would
                       commit, uncommitted changes included) and have
                       homeport build and release it; follows it until
-                      it's live, then prints its address
+                      it's live, then prints its address. In a folder
+                      nothing links, its app (named after the folder, or
+                      --app) is created, asked first, and linked
                       [--run <cmd>] [--release <cmd>] [--process name=cmd]…
                       [--save] [--unset run|release|processes|octane]…
                       [--team <slug> --app <name> [--env <name>]]
-                      [--detach] [--timeout 30m]
+                      [--yes] [--detach] [--timeout 30m]
   homeport rollback   lists the earlier releases you can roll back to;
                       rollback <deploy|commit> ships that build again, no
                       build, as the dashboard's Roll back to this; asks
@@ -69,6 +72,8 @@ func (a *app) usage() {
 
 --run, --release and --process change this deploy alone, as the dashboard's
 "Redeploy with changes" does; --save keeps them for every deploy after it.
+--yes creates an app the team hasn't without asking: needed in CI, where
+there's no terminal to ask in.
 
 In CI, set HOMEPORT_TOKEN to a token from homeport token create. Exit codes:
 0 live, 1 error, 2 usage, 3 not signed in, 4 build failed, 5 release

@@ -87,6 +87,17 @@ func Collect(dir string) (*Tree, error) {
 	return collectDir(dir)
 }
 
+// Folder is dir's place in what Collect uploads: its path from the top of
+// its git checkout ("" at the top, or outside git, where dir is the top).
+// An app's root folder is this.
+func Folder(dir string) string {
+	prefix, err := gitOut(dir, "rev-parse", "--show-prefix")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(strings.TrimSpace(prefix), "/")
+}
+
 func gitOut(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	cmd.Stderr = io.Discard

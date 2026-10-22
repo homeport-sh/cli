@@ -47,6 +47,7 @@ func (a *app) deploy(ctx context.Context, args []string) error {
 	save := fs.Bool("save", false, "save these changes as the app's settings, for every deploy after this one")
 	detach := fs.Bool("detach", false, "start the deploy and don't wait for it")
 	timeout := fs.Duration("timeout", 30*time.Minute, "how long to wait for it to go live")
+	yes := fs.Bool("yes", false, "create the app if the team hasn't it, without asking (needed without a terminal)")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
@@ -66,23 +67,41 @@ func (a *app) deploy(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	// what to deploy: the flags, or this folder's link
+	// what to deploy: the flags, or this folder's link - or, in a folder
+	// nothing links, the app named after it, made if the team hasn't it
 	var t *target
 	dir := a.wd
-	if *appName != "" || *team != "" {
-		if t, err = a.resolve(ctx, c, *team, *appName, *env, true); err != nil {
-			return err
+	linkedTo, at, err := config.FindLink(a.wd)
+	unlinked := errors.Is(err, config.ErrNotLinked)
+	if err != nil && !unlinked {
+		return err
+	}
+	if *appName != "" || *team != "" || unlinked {
+		o := &offer{yes: *yes, root: source.Folder(a.wd)}
+		name := *appName
+		if name == "" && unlinked {
+			if name, err = a.folderApp(); err != nil {
+				return err
+			}
+			o.fromFolder = true
 		}
-	} else {
-		l, at, err := config.FindLink(a.wd)
-		if errors.Is(err, config.ErrNotLinked) {
-			return withCode(exitUsage, err)
+		t, err = a.resolveOr(ctx, c, *team, name, *env, true, o)
+		if errors.Is(err, errNotCreated) {
+			return nil
 		}
 		if err != nil {
 			return err
 		}
+		// a folder deployed for the first time is linked to what it deployed
+		if unlinked {
+			if err := config.SaveLink(a.wd, t.link); err != nil {
+				return err
+			}
+			fmt.Fprintf(a.out, "Linked this folder to %s/%s (%s).\n", t.link.TeamSlug, t.link.Project, t.link.Environment)
+		}
+	} else {
 		dir = at
-		if t, err = a.linked(ctx, c, *l, true); err != nil {
+		if t, err = a.linked(ctx, c, *linkedTo, true); err != nil {
 			return err
 		}
 	}
