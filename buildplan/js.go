@@ -472,7 +472,7 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 	}
 
 	// the project's own build compiles its server: that binary is what runs
-	build := pkg.Scripts["build"]
+	build := pkg.Scripts[r.buildScript()]
 	if c := r.compiled(pkg, deps, pr, build); c.kind != "" && cfg.Build.Artifact == "" && cfg.Static == "" {
 		if c.err != nil {
 			return c.err
@@ -500,7 +500,7 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		}
 		p.Runtime, p.RuntimeVersion, p.RuntimeReason = "bun", BunVersion, c.reason
 		if p.Command == "" {
-			p.Command = cmpOr(c.build, m.run+" build")
+			p.Command = cmpOr(c.build, m.run+" "+r.buildScript())
 		}
 		p.Artifact = c.artifact
 		return nil
@@ -635,8 +635,8 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 
 	// the build, then the bundle made from what it left
 	build = cfg.Build.Command
-	if build == "" && pkg.Scripts["build"] != "" {
-		build = m.run + " build"
+	if build == "" && pkg.Scripts[r.buildScript()] != "" {
+		build = m.run + " " + r.buildScript()
 		if pr != nil && pr.build != "" {
 			build = pr.build
 		}
@@ -768,7 +768,7 @@ func (r reader) siteToolchain(p *Plan, pkg pkgJSON, pmName string) error {
 		m := r.pmFor(pmName, pkg, true)
 		p.Toolchain, p.Image, p.Install = "bun", BunImage, m.install
 		if p.Command == "" {
-			p.Command = m.run + " build"
+			p.Command = m.run + " " + r.buildScript()
 		}
 	} else {
 		v, _, err := r.nodeVersion(pkg)
@@ -779,7 +779,7 @@ func (r reader) siteToolchain(p *Plan, pkg pkgJSON, pmName string) error {
 		p.Toolchain, p.Image, p.setup = "node", nodeImage(v), m.setup
 		p.Install = join(p.setup, m.install)
 		if p.Command == "" {
-			p.Command = m.run + " build"
+			p.Command = m.run + " " + r.buildScript()
 		}
 	}
 	if p.Framework == "" {

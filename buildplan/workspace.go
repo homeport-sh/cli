@@ -2,9 +2,12 @@ package buildplan
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -190,4 +193,154 @@ func bunLinker(m pm) string {
 		return " --linker=hoisted"
 	}
 	return ""
+}
+
+// A workspace's root - the repository's, with nothing said about how it
+// builds - isn't an app: its apps are its members. The app is the member
+// its build script builds (bun or pnpm --filter, npm --workspace, yarn
+// workspace, turbo --filter), else the one member that's an app; it's
+// planned as if its folder had been set, so the build runs there.
+
+// rootApp is the member a workspace's root builds, and how it was told.
+type rootApp struct {
+	dir    string // the member's folder
+	script string // the script the root runs in it, when not build
+	why    string
+}
+
+// frameworks are packages that make a member an app.
+var frameworks = append(slices.Clone(servers), "astro", "vite", "@sveltejs/kit", "nuxt", "@react-router/dev", "@remix-run/dev")
+
+// workspaceApp: the app a workspace's root (r, the repository's root)
+// builds; nil when r isn't one, or is an app itself.
+func (r reader) workspaceApp() (*rootApp, error) {
+	if !r.exists("package.json") || !r.hasLockfile() {
+		return nil, nil
+	}
+	pm := ""
+	for _, l := range lockfiles {
+		if pm == "" && r.exists(l.file) {
+			pm = l.pm
+		}
+	}
+	patterns, _ := r.workspacePatterns(pm)
+	pkg, deps := r.pkg(), r.deps()
+	if len(patterns) == 0 || pkg.Scripts["start"] != "" || slices.ContainsFunc(frameworks, func(f string) bool { return deps[f] }) {
+		return nil, nil
+	}
+	members := r.members(patterns)
+	if name, script, said := builtMember(pkg.Scripts["build"]); name != "" {
+		for _, m := range members {
+			mr := reader{fsys: r.fsys, root: m}
+			if name == m || strings.TrimPrefix(name, "./") == m || mr.pkgName() == name {
+				a := &rootApp{dir: m, why: "the repository's root is a workspace, and its build script (" + said + ") builds " + m}
+				if script != "build" && mr.pkg().Scripts[script] != "" {
+					a.script = script
+				}
+				return a, nil
+			}
+		}
+		return nil, fmt.Errorf("the repository's root is a workspace, and its build script (%s) builds %q, which isn't one of its packages - set the root directory to the app's folder", said, name)
+	}
+	var apps []string
+	for _, m := range members {
+		mr := reader{fsys: r.fsys, root: m}
+		d, s := mr.deps(), mr.pkg().Scripts
+		if (s["build"] != "" || s["start"] != "") && slices.ContainsFunc(frameworks, func(f string) bool { return d[f] }) {
+			apps = append(apps, m)
+		}
+	}
+	switch len(apps) {
+	case 0:
+		return nil, errors.New("the repository's root is a workspace, and none of its packages is an app homeport recognises - set the root directory to the app's folder")
+	case 1:
+		return &rootApp{dir: apps[0], why: "the repository's root is a workspace, and " + apps[0] + " is its one app"}, nil
+	}
+	return nil, fmt.Errorf("the repository's root is a workspace with more than one app (%s): set the root directory to the one this app is", strings.Join(apps, ", "))
+}
+
+// members: the workspace's folders with a package.json, sorted - not in
+// node_modules or a dot-folder, at most four deep.
+func (r reader) members(patterns []string) []string {
+	var out []string
+	_ = fs.WalkDir(r.fsys, r.root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() || p == r.root {
+			return nil
+		}
+		rel := strings.TrimPrefix(p, r.root+"/")
+		if r.root == "." {
+			rel = p
+		}
+		if strings.HasPrefix(d.Name(), ".") || d.Name() == "node_modules" || strings.Count(rel, "/") >= 4 {
+			return fs.SkipDir
+		}
+		if memberOf(rel, patterns) && (reader{fsys: r.fsys, root: p}).exists("package.json") {
+			out = append(out, p)
+		}
+		return nil
+	})
+	slices.Sort(out)
+	return out
+}
+
+// builtMember: the one package a root's build script builds by name, the
+// script it runs there, and the command that said so; "" when it builds
+// none, or several.
+func builtMember(build string) (name, script, said string) {
+	for _, cmd := range strings.Split(build, "&&") {
+		f := strings.Fields(strings.TrimSpace(cmd))
+		if len(f) > 0 && (f[0] == "npx" || f[0] == "bunx") {
+			f = f[1:]
+		}
+		if len(f) == 0 {
+			continue
+		}
+		var n, s string
+		var rest []string
+		flag := func(i int, names ...string) (string, int) {
+			for _, fl := range names {
+				if f[i] == fl && i+1 < len(f) {
+					return f[i+1], 2
+				}
+				if v, ok := strings.CutPrefix(f[i], fl+"="); ok {
+					return v, 1
+				}
+			}
+			return "", 0
+		}
+		switch f[0] {
+		case "bun", "pnpm", "turbo", "npm":
+			names := map[string][]string{"bun": {"--filter", "-F"}, "pnpm": {"--filter", "-F"}, "turbo": {"--filter", "-F"}, "npm": {"--workspace", "-w"}}[f[0]]
+			for i := 1; i < len(f); {
+				if v, k := flag(i, names...); k > 0 {
+					if n != "" {
+						return "", "", ""
+					}
+					n, i = v, i+k
+					continue
+				}
+				if !strings.HasPrefix(f[i], "-") && f[i] != "run" && f[i] != "run-script" {
+					rest = append(rest, f[i])
+				}
+				i++
+			}
+		case "yarn":
+			if len(f) > 3 && f[1] == "workspace" {
+				n, rest = f[2], slices.DeleteFunc(f[3:], func(x string) bool { return x == "run" })
+			}
+		}
+		n = strings.Trim(n, `'"`)
+		if f[0] == "turbo" {
+			n = strings.Trim(strings.TrimPrefix(strings.TrimSuffix(strings.TrimPrefix(n, "..."), "..."), "^"), "{}")
+		}
+		if n == "" || len(rest) == 0 {
+			continue
+		}
+		s = rest[0]
+		if n == "*" || strings.ContainsAny(n, "*?[!") || name != "" {
+			return "", "", ""
+		}
+		name, script, said = n, s, strings.TrimSpace(cmd)
+	}
+	return name, script, said
 }

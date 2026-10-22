@@ -338,6 +338,23 @@ them, and workspace packages are copied in as files. A Next.js member's
 standalone server is at `.next/standalone/<member>/server.js`, since Next.js
 traces from the workspace's root.
 
+**The repository's root of a workspace.** With no root directory set, no
+`homeport.yaml` at the root, and no build command, output or kind in the
+build settings, a root whose `package.json` lists workspaces (or that has
+`pnpm-workspace.yaml`) and isn't an app itself (no start script, no
+framework) is planned as the app it builds:
+
+1. The member its build script names: `bun --filter web build`,
+   `bun run --filter web compile`, `pnpm --filter ./apps/web build`,
+   `npm run build --workspace=apps/web`, `yarn workspace web build` or
+   `turbo run build --filter=web`, by package name or folder. A script
+   other than `build` that it runs there (`compile`) is the member's build.
+2. Else the one member that's an app: a framework or server package, and a
+   build or start script. With more than one, it's refused, naming them.
+
+The plan's `root` is that member's folder, and its `warnings` say why it
+was chosen. Set the root directory to build another.
+
 Not handled yet: Yarn Plug'n'Play at runtime, and Deno.
 
 ## PHP and Laravel apps
