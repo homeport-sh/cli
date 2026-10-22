@@ -93,6 +93,8 @@ func ManagedVars(fsys fs.FS, s Settings) []ManagedVar {
 	r := reader{fsys: fsys, root: "."}
 	if s.Root != "" {
 		r.root = clean(s.Root)
+	} else if a, _ := r.workspaceApp(); a != nil && !r.exists(ConfigFile) {
+		r.root = a.dir // a workspace's root: its app's (workspace.go)
 	}
 	deps := r.deps()
 	if deps == nil {

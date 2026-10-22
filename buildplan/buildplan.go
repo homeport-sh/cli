@@ -358,6 +358,17 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 			return Plan{}, fmt.Errorf("root directory %q isn't a folder in the repository", s.Root)
 		}
 	}
+	// a workspace's root, with nothing said about how it builds: its app
+	var member *rootApp
+	if s.Root == "" && s.Command == "" && s.Output == "" && s.Kind == "" && !r.exists(ConfigFile) {
+		a, err := r.workspaceApp()
+		if err != nil {
+			return Plan{}, err
+		}
+		if a != nil {
+			member, r.root, r.script = a, a.dir, a.script
+		}
+	}
 	var cfg fileConfig
 	if b, err := r.read(ConfigFile); err == nil {
 		if err := yaml.Unmarshal(b, &cfg); err != nil {
@@ -380,8 +391,11 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	if s.Root != "" {
+	if s.Root != "" || member != nil {
 		p.Root = r.root
+	}
+	if member != nil {
+		p.Warnings = append(p.Warnings, member.why+": set the root directory to build another")
 	}
 	if cfg.Run != "" {
 		p.Run = cfg.Run
@@ -670,7 +684,13 @@ type reader struct {
 	fsys fs.FS
 	root string
 	ws   *workspace // the app's workspace, when it's a member (workspace.go)
+	// script is the app's build script, when its workspace's root runs
+	// another (workspace.go): "" is build
+	script string
 }
+
+// buildScript is the package.json script that builds the app.
+func (r reader) buildScript() string { return cmpOr(r.script, "build") }
 
 func (r reader) name(n string) string { return path.Join(r.root, n) }
 

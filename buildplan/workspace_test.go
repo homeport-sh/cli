@@ -1,9 +1,11 @@
 package buildplan_test
 
 import (
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -200,5 +202,159 @@ func TestAWorkspaceMembersBundleHasItsWorkspaceDependencies(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "apps/web", buildplan.BundleDir, "node_modules/web")); err == nil {
 		t.Errorf("the member is in its own bundle's node_modules")
+	}
+}
+
+// rscKitApp is cloudtrain's and remorva's web app: rsc-kit, compiled to
+// dist/app by its compile script.
+func rscKitApp(name string) string {
+	return `{"name":"` + name + `","type":"module","scripts":{"dev":"bun --bun vite","build":"bun --bun vite build","start":"bun .output/server/index.mjs",` +
+		`"compile":"bun --bun vite build && bun build --compile --splitting --bytecode --format=esm --sourcemap .output/server/compile.mjs --outfile dist/app && rm -f dist/*.map"},` +
+		`"dependencies":{"@rsc-kit/core":"^0.30.25","@repo/database":"*","react":"^19"},"devDependencies":{"vite":"^8","nitro":"3.0.260903-beta"}}`
+}
+
+// The repository's root of a workspace isn't an app: its apps are its
+// members. With nothing said, the app is the member the root's build script
+// builds, else the one member that's an app - planned as if its folder had
+// been set, so the build runs there (cloudtrain, remorva).
+func TestAWorkspacesRootBuildsItsApp(t *testing.T) {
+	database := `{"name":"@repo/database","scripts":{"db:migrate":"bunx --bun drizzle-kit migrate"},"dependencies":{"drizzle-orm":"1","pg-boss":"12"}}`
+	cases := map[string]struct {
+		files                map[string]string
+		root, framework, cmd string
+		kind, artifact       string
+	}{
+		// cloudtrain today: the root's build names the member
+		"cloudtrain": {map[string]string{
+			"package.json": `{"name":"cloudtrain","packageManager":"bun@1.4.3","private":true,"scripts":{"dev":"bun --filter web-rsc-kit dev",` +
+				`"build":"bun --filter web-rsc-kit compile","lint":"bun --filter web-rsc-kit lint:check"},"workspaces":["apps/*","packages/*"]}`,
+			"bun.lock": bunLock, "apps/web-rsc-kit/package.json": rscKitApp("web-rsc-kit"), "packages/database/package.json": database,
+			"packages/logger/package.json": `{"name":"@repo/logger","dependencies":{"pino":"9"}}`,
+		}, "apps/web-rsc-kit", "rsc-kit", "bun run build", buildplan.Binary, "dist/app"},
+		// remorva on homeport: the same, by bun run --filter
+		"remorva": {map[string]string{
+			"package.json": `{"name":"remorva","engines":{"bun":">=1.4"},"packageManager":"bun@1.4.3","private":true,` +
+				`"scripts":{"dev":"bun --filter web-app dev","build":"bun run --filter web-app compile"},"workspaces":["apps/*","packages/*"]}`,
+			"bun.lock": bunLock, "apps/web-app/package.json": rscKitApp("web-app"), "packages/database/package.json": database,
+		}, "apps/web-app", "rsc-kit", "bun run build", buildplan.Binary, "dist/app"},
+		// cloudtrain before rsc-kit: turbo builds every member, and one is
+		// an app - the worker and the gateway have no framework and no build
+		"turbo": {map[string]string{
+			"package.json": `{"name":"cloudtrain","devDependencies":{"turbo":"^2.10.13"},"engines":{"node":">=18"},"packageManager":"bun@1.4.3",` +
+				`"private":true,"scripts":{"build":"turbo run build","dev":"turbo run dev"},"workspaces":["apps/*","packages/*"]}`,
+			"bun.lock": bunLock,
+			"apps/web/package.json": `{"name":"web","type":"module","private":true,"scripts":{"dev":"next dev --port 3000","build":"next build","start":"next start"},` +
+				`"dependencies":{"next":"16.1.0","@repo/database":"*"},"devDependencies":{"next-bun-compile":"^2"}}`,
+			"apps/web/next.config.js":             "const nextConfig = { adapterPath: \"next-bun-compile\" };\nexport default nextConfig;\n",
+			"apps/worker/package.json":            `{"name":"worker","scripts":{"dev":"bun --watch src/index.ts","start":"bun src/index.ts"},"dependencies":{"pg-boss":"12"}}`,
+			"apps/discord-gateway/package.json":   `{"name":"discord-gateway","scripts":{"start":"bun src/index.ts"},"dependencies":{"@repo/logger":"*"}}`,
+			"packages/database/package.json":      database,
+			"packages/eslint-config/package.json": `{"name":"@repo/eslint-config"}`,
+		}, "apps/web", "Next.js", "bun run build", buildplan.Binary, "server"},
+		// a pnpm workspace, filtered by path
+		"pnpm": {map[string]string{
+			"package.json": `{"name":"root","scripts":{"build":"pnpm --filter ./apps/site build"}}`, "pnpm-lock.yaml": "x",
+			"pnpm-workspace.yaml":    "packages:\n  - 'apps/*'\n",
+			"apps/site/package.json": `{"name":"site","scripts":{"build":"vite build"},"devDependencies":{"vite":"^7"}}`,
+			"apps/api/package.json":  expressApp,
+		}, "apps/site", "Vite", "pnpm run build", buildplan.Static, "dist"},
+		// npm, by its --workspace
+		"npm": {map[string]string{
+			"package.json": `{"name":"root","workspaces":["apps/*"],"scripts":{"build":"npm run build --workspace=apps/api"}}`, "package-lock.json": npmLock,
+			"apps/api/package.json":  `{"name":"api","scripts":{"build":"tsc","start":"node server.js"},"dependencies":{"express":"^5"}}`,
+			"apps/site/package.json": `{"name":"site","scripts":{"build":"vite build"},"devDependencies":{"vite":"^7"}}`,
+		}, "apps/api", "Express", "npm run build", buildplan.Bundle, buildplan.BundleDir},
+	}
+	for name, c := range cases {
+		p, err := buildplan.Detect(repo(c.files), buildplan.Settings{})
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if p.Root != c.root || p.Framework != c.framework || p.Kind != c.kind || p.Artifact != c.artifact || !strings.HasPrefix(p.Build, c.cmd) ||
+			!strings.Contains(p.Install, "(cd ../..") {
+			t.Errorf("%s: %+v", name, p)
+		}
+		if !slices.ContainsFunc(p.Warnings, func(w string) bool { return strings.Contains(w, c.root) }) {
+			t.Errorf("%s: the plan doesn't say it chose %s: %q", name, c.root, p.Warnings)
+		}
+	}
+}
+
+// A script other than build that the root runs in the member is the
+// member's build.
+func TestAWorkspacesRootRunsTheMembersScript(t *testing.T) {
+	files := map[string]string{
+		"package.json": `{"workspaces":["apps/*"],"scripts":{"build":"bun --filter api compile"}}`, "bun.lock": bunLock,
+		"apps/api/package.json": `{"name":"api","scripts":{"build":"tsc","compile":"bun build --compile src/index.ts --outfile dist/api"}}`,
+	}
+	p := detect(t, files, buildplan.Settings{})
+	if p.Root != "apps/api" || p.Kind != buildplan.Binary || p.Artifact != "dist/api" || p.Command != "bun run compile" {
+		t.Errorf("%+v", p)
+	}
+}
+
+// When nothing says which member, and more than one is an app, it's
+// refused naming them; none, and it says there's no app.
+func TestAWorkspacesRootWithManyAppsIsRefused(t *testing.T) {
+	root := map[string]string{"package.json": `{"workspaces":["apps/*","packages/*"],"scripts":{"build":"turbo run build"}}`, "bun.lock": bunLock}
+	many := maps.Clone(root)
+	many["apps/web/package.json"] = `{"name":"web","scripts":{"build":"next build","start":"next start"},"dependencies":{"next":"16"}}`
+	many["apps/admin/package.json"] = `{"name":"admin","scripts":{"build":"vite build"},"devDependencies":{"vite":"^7"}}`
+	many["packages/ui/package.json"] = `{"name":"ui"}`
+	_, err := buildplan.Detect(repo(many), buildplan.Settings{})
+	if err == nil || !strings.Contains(err.Error(), "apps/admin, apps/web") || !strings.Contains(err.Error(), "root directory") {
+		t.Errorf("%v", err)
+	}
+	none := maps.Clone(root)
+	none["packages/ui/package.json"] = `{"name":"ui"}`
+	_, err = buildplan.Detect(repo(none), buildplan.Settings{})
+	if err == nil || !strings.Contains(err.Error(), "workspace") || !strings.Contains(err.Error(), "root directory") {
+		t.Errorf("%v", err)
+	}
+	// a member the root names that isn't there
+	gone := maps.Clone(root)
+	gone["package.json"] = `{"workspaces":["apps/*"],"scripts":{"build":"bun --filter web build"}}`
+	_, err = buildplan.Detect(repo(gone), buildplan.Settings{})
+	if err == nil || !strings.Contains(err.Error(), `"web"`) {
+		t.Errorf("%v", err)
+	}
+}
+
+// A root that's an app itself, or that the person (or homeport.yaml) said
+// how to build, is planned as it was.
+func TestAWorkspacesRootThatsSaidIsItsOwnApp(t *testing.T) {
+	ws := `"workspaces":["apps/*"]`
+	web := `{"name":"web","scripts":{"build":"next build","start":"next start"},"dependencies":{"next":"16"}}`
+	app := detect(t, map[string]string{"package.json": `{` + ws + `,"scripts":{"build":"next build","start":"next start"},"dependencies":{"next":"16"}}`,
+		"bun.lock": bunLock, "apps/web/package.json": web}, buildplan.Settings{})
+	if app.Root != "" || app.Framework != "Next.js" {
+		t.Errorf("an app at the root: %+v", app)
+	}
+	root := map[string]string{"package.json": `{` + ws + `,"scripts":{"build":"turbo run build"}}`, "bun.lock": bunLock, "apps/web/package.json": web}
+	said := detect(t, root, buildplan.Settings{Command: "cd apps/web && bun run build", Output: "apps/web/server"})
+	if said.Root != "" || said.Artifact != "apps/web/server" {
+		t.Errorf("settings: %+v", said)
+	}
+	yaml := maps.Clone(root)
+	yaml["homeport.yaml"] = "build:\n  command: cd apps/web && bun run build\n  artifact: apps/web/server\n"
+	if p := detect(t, yaml, buildplan.Settings{}); p.Root != "" || p.Artifact != "apps/web/server" {
+		t.Errorf("homeport.yaml: %+v", p)
+	}
+}
+
+// The variables homeport sets are the app's: the member's, at a workspace's
+// root.
+func TestAWorkspacesRootsManagedVarsAreItsApps(t *testing.T) {
+	files := map[string]string{
+		"package.json": `{"workspaces":["apps/*"],"scripts":{"build":"bun --filter web-app compile"}}`, "bun.lock": bunLock,
+		"apps/web-app/package.json": rscKitApp("web-app"),
+	}
+	var names []string
+	for _, m := range buildplan.ManagedVars(repo(files), buildplan.Settings{}) {
+		names = append(names, m.Name)
+	}
+	if !slices.Contains(names, "RSC_SIGNING_SECRET") {
+		t.Errorf("%q", names)
 	}
 }
