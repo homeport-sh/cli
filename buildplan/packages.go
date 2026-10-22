@@ -22,8 +22,10 @@ import (
 // An image's root is the package's folder: bin/ with its executables (the
 // ones in Provides) and whatever else they read, beside them or under it -
 // libraries found through RPATH=$ORIGIN, never through LD_LIBRARY_PATH,
-// which the app's own executables would read too. No symlinks: a release
-// is files.
+// which the app's own executables would read too. A package of data alone
+// (fonts) has no bin/ and provides nothing: its share/ is what the app's
+// own libraries read, found through an environment homeportd sets for it.
+// No symlinks: a release is files.
 
 // PackagesDir is where a release's packages are, in its folder.
 const PackagesDir = ".homeport/pkgs"
@@ -36,7 +38,7 @@ type Package struct {
 	Name     string   `json:"name"`     // what a person chooses: lightpanda
 	Version  string   `json:"version"`  // upstream's
 	About    string   `json:"about"`    // one line, for the list in build settings
-	Provides []string `json:"provides"` // its executables, in its bin/
+	Provides []string `json:"provides"` // its executables, in its bin/; none for data
 	License  string   `json:"license"`  // SPDX, of what ships
 	// Listed: shown in the dashboard's list (Listed). An unlisted package
 	// can still be chosen by name, in build settings or homeport.yaml.
@@ -52,6 +54,11 @@ type Package struct {
 // Published says whether it can be chosen: its image is there for every
 // architecture homeport runs.
 func (p Package) Published() bool { return len(p.Images) == 2 }
+
+// Data says it's a package of data alone: no executables, nothing on PATH
+// (fonts). A builder and host need a newer homeportd for one (the control
+// plane gates it).
+func (p Package) Data() bool { return len(p.Provides) == 0 }
 
 // PlanPackage is a package as a plan names it: what the builder unpacks.
 type PlanPackage struct {
@@ -80,6 +87,18 @@ var catalog = []Package{
 			artifact.ArchARM64: "ghcr.io/homeport-sh/pkg-lightpanda:1.0.0-arm64@sha256:3d156a0bd32766646073018af3efefdf563b5780e26cd4ebb3783a3cfdfca579",
 		},
 		Size: map[string]int64{artifact.ArchAMD64: 188303266, artifact.ArchARM64: 192792091},
+	},
+	// fonts: DejaVu 2.37's core faces (Sans, Sans Mono and Serif, each
+	// regular and bold: Debian's fonts-dejavu-core) and a fontconfig config
+	// naming them (share/fonts.conf), so libvips, librsvg and pango - sharp's
+	// text and SVG - draw text in a sandbox that has no fonts. homeportd sets
+	// FONTCONFIG_FILE to the config. Upstream's exact files, out of its
+	// release archive by sha256 (homeport-sh/homeport images/pkg-fonts).
+	// Unpublished until its image is; unlisted until its licence
+	// (Bitstream Vera's, DejaVu's changes public domain) is confirmed.
+	{
+		Name: "fonts", Version: "2.37", License: "Bitstream-Vera",
+		About: "Fonts (DejaVu Sans, Sans Mono and Serif) and fontconfig, for drawing text: sharp, libvips, librsvg",
 	},
 }
 

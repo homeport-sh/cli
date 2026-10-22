@@ -49,6 +49,28 @@ func TestLightpandaIsPublishedAndListed(t *testing.T) {
 	}
 }
 
+// fonts is a package of data alone (DejaVu's core faces and a fontconfig
+// config, for libvips, librsvg and pango to draw text): it provides no
+// executable, and homeportd points FONTCONFIG_FILE at its config. It's on
+// the list, unpublished until its image is (homeport-sh/homeport
+// images/pkg-fonts), so it can't be chosen yet.
+func TestFontsIsAPackageOfData(t *testing.T) {
+	i := slices.IndexFunc(buildplan.Packages(), func(p buildplan.Package) bool { return p.Name == "fonts" })
+	if i < 0 {
+		t.Fatalf("fonts isn't on the list: %+v", buildplan.Packages())
+	}
+	p := buildplan.Packages()[i]
+	if p.Version != "2.37" || len(p.Provides) != 0 || !p.Data() || p.License != "Bitstream-Vera" || p.Published() {
+		t.Fatalf("%+v", p)
+	}
+	if err := (buildplan.Settings{Packages: []string{"fonts"}}).Check(); err == nil || !strings.Contains(err.Error(), "isn't published yet") {
+		t.Fatalf("fonts, unpublished: %v", err)
+	}
+	if lp := buildplan.Packages()[slices.IndexFunc(buildplan.Packages(), func(p buildplan.Package) bool { return p.Name == "lightpanda" })]; lp.Data() {
+		t.Fatal("lightpanda isn't data")
+	}
+}
+
 // Only a package on homeport's list can be chosen: never any name, never
 // one twice, never more than a few.
 func TestOnlyCuratedPackagesAreAccepted(t *testing.T) {
@@ -136,12 +158,13 @@ var (
 )
 
 // The list itself: plain names, a version, what each puts on PATH (no two
-// the same), and images only from homeport's own registry, pinned by
-// digest, for both architectures or neither.
+// the same; nothing for a package of data), and images only from
+// homeport's own registry, pinned by digest, for both architectures or
+// neither.
 func TestTheCatalogIsWellFormed(t *testing.T) {
 	seen, provided := map[string]bool{}, map[string]string{}
 	for _, p := range buildplan.Packages() {
-		if !pkgNameRe.MatchString(p.Name) || seen[p.Name] || p.Version == "" || p.About == "" || p.License == "" || len(p.Provides) == 0 {
+		if !pkgNameRe.MatchString(p.Name) || seen[p.Name] || p.Version == "" || p.About == "" || p.License == "" {
 			t.Errorf("%+v", p)
 		}
 		seen[p.Name] = true
