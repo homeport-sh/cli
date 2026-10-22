@@ -32,6 +32,7 @@ processes:
 | `go.mod` | Go (`golang:<go.mod's version>`) | a binary |
 | `composer.json` + `composer.lock` | PHP on homeport's FrankenPHP base | a bundle, FrankenPHP as `bin` |
 | `package.json` + a lockfile | Node or Bun (see below) | a bundle, a static site, or a binary when the build compiles one |
+| `pyproject.toml` + `uv.lock`, or `requirements.txt` | Python, installed with uv | a bundle, the interpreter as `bin` |
 | `index.html` alone | none | the folder, as a static site |
 
 ## JavaScript apps
@@ -598,6 +599,45 @@ out.
 
 Each process has a port of its own. Like the start command, a process
 may name `$PORT` and `$HOST`, and no other variable.
+
+## Python apps
+
+Django, FastAPI and Flask apps ship as a **bundle whose `bin` is the
+interpreter**: python-build-standalone's CPython, pinned by sha256, with the
+standard library and the app's dependencies in `lib/python3.X/` beside it.
+There's no virtualenv: the release is a whole Python wherever it runs. The
+start command, the release command and each process are args to it. The
+design, and what's still open, is in
+[design/python.md](../design/python.md).
+
+| Files | Installed with |
+|---|---|
+| `pyproject.toml` + `uv.lock` | `uv export --frozen --no-dev`, then `uv pip install` of exactly that |
+| `requirements.txt` | `uv pip install -r requirements.txt` |
+| `pyproject.toml` alone, `poetry.lock`, `Pipfile` | refused, with how to move to `uv.lock` or `requirements.txt` |
+
+A Python app beside a `package.json` is Python only when a Python framework
+is recognised. Its front-end assets aren't built yet.
+
+| Framework | Recognised by | Start command | Release command |
+|---|---|---|---|
+| Django | `manage.py` and `django` | `-m gunicorn --bind 0.0.0.0:$PORT <project>.wsgi`; with uvicorn and no gunicorn, `-m uvicorn ... <project>.asgi:application` | `manage.py migrate --noinput` |
+| FastAPI | `fastapi`, and `app = FastAPI(` at the top of `main.py`, `app.py`, `app/main.py`, ... | `-m uvicorn --host 0.0.0.0 --port $PORT main:app` | `-m alembic upgrade head`, with `alembic.ini` and `alembic` |
+| Flask | `flask`, and `app = Flask(` in the same files or `wsgi.py` | `-m gunicorn --bind 0.0.0.0:$PORT app:app` | the same, for Alembic (Flask-Migrate) |
+| anything else | `pyproject.toml` or `requirements.txt` | set it: args to python, like `-m myapp` | none |
+
+When the app's dependencies have no gunicorn or uvicorn, the build installs
+a pinned one. A Django build runs `manage.py collectstatic --noinput`, and
+goes on without it, saying so, if it fails. Serving `/static/` is the app's
+job: add WhiteNoise.
+
+**Python version**: `.python-version`, else `runtime.txt`, else the
+default (3.14) if `requires-python` allows it, else the newest it allows.
+Offered: 3.12, 3.13, 3.14 and 3.15, each at homeport's pinned patch.
+
+The release is read-only, so everything is compiled at build. Data goes to
+a database or object storage, never into the app's folder. An app with a
+top-level `bin/` folder is refused, because `bin` is the interpreter.
 
 ## System packages
 

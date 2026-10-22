@@ -36,6 +36,8 @@ func (r reader) detectRelease(p *Plan) (release, why, warning string) {
 	switch {
 	case p.Toolchain == "php" && p.Kind == Bundle && r.requires("laravel/framework"):
 		return "php-cli artisan migrate --force", "a Laravel app: its migrations (php artisan migrate --force)", ""
+	case p.Toolchain == "python" && p.Kind == Bundle:
+		return r.pyRelease(p)
 	case p.RSCKit:
 		for _, f := range rscKitMigrate {
 			if r.exists(f) {
