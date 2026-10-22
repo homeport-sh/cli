@@ -12,6 +12,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -81,7 +82,9 @@ type fakeAPI struct {
 	pulled       []string // the apps whose add-on credentials were pulled
 	pullValues   map[string]string
 	withheld     []string
-	created      []fakeCreate // apps made (POST /v1/cli/teams/{team}/apps)
+	created      []fakeCreate   // apps made (POST /v1/cli/teams/{team}/apps)
+	domains      []cloud.Domain // an app's platform domains, by name
+	domainCalls  []string       // each Domains API call: method, app and what follows /domains
 	rollbacks    []struct {
 		Deploy     string `json:"deploy"`
 		RunRelease bool   `json:"run_release"`
@@ -383,6 +386,8 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 		f.write(w, 200, names)
 	case strings.HasSuffix(p, "/logs"):
 		f.write(w, 200, map[string]any{"Cursor": "c2", "Lines": []map[string]any{{"Time": "2026-10-08T12:00:00Z", "Level": "error", "Message": "panic: boom", "Process": "web"}}})
+	case strings.Contains(p, "/domains"):
+		f.serveDomains(w, r)
 	case strings.Contains(p, "/database"):
 		f.dbCalls = append(f.dbCalls, r.Method+" "+p[strings.Index(p, "/database"):])
 		f.write(w, 200, map[string]any{"Available": true, "Database": nil,
@@ -406,6 +411,55 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		f.t.Errorf("unexpected %s %s", r.Method, p)
 		w.WriteHeader(404)
+	}
+}
+
+// serveDomains is the Domains API: two to a page, by name.
+func (f *fakeAPI) serveDomains(w http.ResponseWriter, r *http.Request) {
+	app, rest, _ := strings.Cut(strings.TrimPrefix(r.URL.EscapedPath(), "/v1/cli/teams/"+team1+"/apps/"), "/domains")
+	f.domainCalls = append(f.domainCalls, r.Method+" "+app+" "+rest+r.URL.Query().Get("after"))
+	name, _ := url.PathUnescape(strings.TrimPrefix(rest, "/"))
+	i := slices.IndexFunc(f.domains, func(d cloud.Domain) bool { return d.Domain == name })
+	switch {
+	case r.Method == "GET" && rest == "":
+		after := r.URL.Query().Get("after")
+		page := cloud.Domains{Domains: []cloud.Domain{}, Total: len(f.domains), Included: 100}
+		for _, d := range f.domains {
+			if d.Status == "live" {
+				page.Live++
+			}
+			if d.Domain <= after {
+				continue
+			}
+			if len(page.Domains) == 2 {
+				page.Next = page.Domains[1].Domain
+				break
+			}
+			page.Domains = append(page.Domains, d)
+		}
+		f.write(w, 200, page)
+	case r.Method == "POST" && rest == "":
+		var in struct {
+			Domain string `json:"domain"`
+		}
+		json.NewDecoder(r.Body).Decode(&in)
+		if !strings.Contains(in.Domain, ".") {
+			f.write(w, 400, map[string]string{"error": "that isn't a domain", "field": "domain"})
+			return
+		}
+		d := cloud.Domain{Domain: in.Domain, Status: "pending", Why: "waiting for its DNS records", CreatedAt: "2026-10-22T12:00:00Z", DropsAt: "2026-10-29T12:00:00Z",
+			Records: []cloud.DNSRecord{{Type: "CNAME", Name: "shop", FullName: in.Domain, Value: "blog.homeport.app"},
+				{Type: "TXT", Name: "_homeport.shop", FullName: "_homeport." + in.Domain, Value: "homeport-verify=abc123"}}}
+		f.domains = append(f.domains, d)
+		slices.SortFunc(f.domains, func(a, b cloud.Domain) int { return strings.Compare(a.Domain, b.Domain) })
+		f.write(w, 201, d)
+	case i < 0:
+		f.write(w, 404, map[string]string{"error": "no such domain"})
+	case r.Method == "GET":
+		f.write(w, 200, f.domains[i])
+	case r.Method == "DELETE":
+		f.domains = slices.Delete(f.domains, i, i+1)
+		w.WriteHeader(204)
 	}
 }
 

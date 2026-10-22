@@ -567,6 +567,77 @@ func (c *Client) Usage(ctx context.Context, team string) (json.RawMessage, error
 	return c.raw(ctx, "GET", "/v1/cli/teams/"+url.PathEscape(team)+"/usage", nil)
 }
 
+// Domain is one of an app's platform domains: a tenant's domain on the
+// Domains API (design/platforms.md in homeport cloud), which an app's own
+// code adds as its tenants sign up.
+type Domain struct {
+	Domain string `json:"domain"`
+	// Status: pending, verifying, live or failed
+	Status string `json:"status"`
+	// Why it isn't live ("" when it is)
+	Why string `json:"why,omitempty"`
+	// Wildcard: the app's wildcard it's under, which needs no records
+	Wildcard string `json:"wildcard,omitempty"`
+	// Records: what to set at the domain's DNS provider
+	Records   []DNSRecord `json:"records"`
+	CreatedAt string      `json:"created_at"`
+	CheckedAt string      `json:"checked_at,omitempty"`
+	// DropsAt: a pending one is dropped then, unless it's proved
+	DropsAt string `json:"drops_at,omitempty"`
+}
+
+// DNSRecord is a record to set: Name relative to the root domain, as DNS
+// providers' forms ask, FullName the whole name.
+type DNSRecord struct {
+	Type     string `json:"type"`
+	Name     string `json:"name"`
+	FullName string `json:"full_name"`
+	Value    string `json:"value"`
+}
+
+// Domains is a page of an app's platform domains, and the after for the
+// next ("" for none). Live is what the bill counts, Total every one,
+// Included how many the plan includes.
+type Domains struct {
+	Domains  []Domain `json:"domains"`
+	Next     string   `json:"next,omitempty"`
+	Live     int      `json:"live"`
+	Total    int      `json:"total"`
+	Included int64    `json:"included"`
+}
+
+// Domains is a page of an app's platform domains: the first, or those
+// after a page's Next.
+func (c *Client) Domains(ctx context.Context, team, app, after string) (*Domains, error) {
+	p := appPath(team, app) + "/domains"
+	if after != "" {
+		p += "?after=" + url.QueryEscape(after)
+	}
+	var out Domains
+	err := c.call(ctx, "GET", p, nil, &out)
+	return &out, err
+}
+
+// AddDomain adds an app a platform domain; the same one again is the one
+// it has.
+func (c *Client) AddDomain(ctx context.Context, team, app, domain string) (*Domain, error) {
+	var out Domain
+	err := c.call(ctx, "POST", appPath(team, app)+"/domains", map[string]string{"domain": domain}, &out)
+	return &out, err
+}
+
+// Domain is one of an app's platform domains.
+func (c *Client) Domain(ctx context.Context, team, app, domain string) (*Domain, error) {
+	var out Domain
+	err := c.call(ctx, "GET", appPath(team, app)+"/domains/"+url.PathEscape(domain), nil, &out)
+	return &out, err
+}
+
+// RemoveDomain removes one of an app's platform domains.
+func (c *Client) RemoveDomain(ctx context.Context, team, app, domain string) error {
+	return c.call(ctx, "DELETE", appPath(team, app)+"/domains/"+url.PathEscape(domain), nil, nil)
+}
+
 // PullEnv is an environment's add-on credentials (its database's and
 // storage's variables), by name: never production's, never its own
 // variables.

@@ -56,6 +56,16 @@ func (a *app) usage() {
                       .env.local (0600), to develop against; never
                       production's, never your app's own variables
                       [--env <name>]
+  homeport domains ls an app's platform domains (its tenants' own, which
+                      the app adds through the Domains API): each one's
+                      status, and why it isn't live
+  homeport domains add <domain>
+                      adds one, and says the DNS records to set
+  homeport domains get <domain>
+                      one's status and DNS records
+  homeport domains remove <domain>
+                      removes one: it stops being served; asks first [--yes]
+                      each [--env <name>] [--team <slug> --app <name>]
   homeport token create --name <where>
                       a token for CI (HOMEPORT_TOKEN), printed once: for
                       one environment, and it acts there alone

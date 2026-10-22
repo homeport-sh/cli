@@ -29,6 +29,10 @@ homeport deploy     # upload the working tree, build it, follow it live
 | `homeport env get NAME [--resolved]` | a variable's value as written (`${{APP_URL}}/app`), or with `--resolved` as the app gets it (`https://example.com/app`); never a secret's |
 | `homeport env rebuild` | builds the live commit again with the variables as they are now: a change the build sees needs one |
 | `homeport env pull [--env <name>]` | an environment's database and storage credentials into `.env.local`, never production's |
+| `homeport domains ls` | an app's platform domains (its tenants' own, which the app adds through the Domains API): each one's status and why it isn't live, how many are live, and how many the plan includes |
+| `homeport domains add <domain>` | adds one, and says the DNS records to set at its provider (the same one again is the one there) |
+| `homeport domains get <domain>` | one's status, why it isn't live, and its DNS records |
+| `homeport domains remove <domain>` | removes one: it's no longer served (asks first; `--yes`) |
 | `homeport mcp` | an MCP server on stdio for your editor or agent |
 | `homeport build-plan` | what a hosted build runs for this repository (JSON) |
 | `homeport version` | this CLI's version |
@@ -240,6 +244,8 @@ Cursor (`~/.cursor/mcp.json`, or `.cursor/mcp.json` in a project):
 | `get_database` | an environment's database, never its password (reads) |
 | `create_database`, `attach_database`, `detach_database` | its database (**change it**) |
 | `usage` | a team's month so far and its estimate (reads) |
+| `list_domains`, `get_domain` | an app's platform domains, their status and DNS records (reads) |
+| `add_domain` | adds a platform domain to an app (**changes it**) |
 
 An agent can be talked into things by what it reads, such as a log line or
 a file. So **a change is never the agent's to approve: you are asked**,
