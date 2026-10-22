@@ -60,11 +60,11 @@ func TestFontsIsAPackageOfData(t *testing.T) {
 		t.Fatalf("fonts isn't on the list: %+v", buildplan.Packages())
 	}
 	p := buildplan.Packages()[i]
-	if p.Version != "2.37" || len(p.Provides) != 0 || !p.Data() || p.License != "Bitstream-Vera" || p.Published() {
+	if p.Version != "2.37" || len(p.Provides) != 0 || !p.Data() || p.License != "Bitstream-Vera" || !p.Published() {
 		t.Fatalf("%+v", p)
 	}
-	if err := (buildplan.Settings{Packages: []string{"fonts"}}).Check(); err == nil || !strings.Contains(err.Error(), "isn't published yet") {
-		t.Fatalf("fonts, unpublished: %v", err)
+	if err := (buildplan.Settings{Packages: []string{"fonts"}}).Check(); err != nil {
+		t.Fatalf("fonts, published: %v", err)
 	}
 	if lp := buildplan.Packages()[slices.IndexFunc(buildplan.Packages(), func(p buildplan.Package) bool { return p.Name == "lightpanda" })]; lp.Data() {
 		t.Fatal("lightpanda isn't data")
