@@ -468,6 +468,9 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 			return Plan{}, err
 		}
 	}
+	if php && p.laravelViews && s.Command == "" {
+		cacheConfigOnStart(&p) // its config cached as each starts (configcache.go)
+	}
 	if php {
 		p.OctaneAvailable = r.requires("laravel/octane")
 		// a start command a person set wins; else their Octane switch, over

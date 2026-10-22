@@ -370,7 +370,30 @@ FrankenPHP as `bin`. Nothing is compiled per app. It's served with
 A Laravel app (one that requires `laravel/framework`) is built with
 `php artisan event:cache` and `route:cache`. If artisan can't boot without
 the app's environment, the build goes on without them and the log says so.
-Config isn't cached, because it holds the environment.
+
+Its config is cached as the app starts, not at build: it holds the
+environment, and a change to the environment restarts the app without a
+build. The web and each process start through the bundle's
+`.homeport/start.php`, which runs `php artisan config:cache` with the
+environment it was started with, then the command. The web goes through it by
+the bundle's `.homeport/wrap`; a process's command shows it:
+
+```
+php-cli .homeport/start.php ./bin php-cli artisan queue:work
+```
+
+Set only your own command, for example `php-cli artisan queue:work`.
+homeport adds the runner itself.
+
+Each environment's cache is a file of its own,
+`bootstrap/cache/homeport-config-<hash>.php`, which Laravel reads through
+`APP_CONFIG_CACHE`. So a restart with a changed environment caches the new
+one at once, and one cached already (a wake, another copy) isn't cached
+again. If `config:cache` fails, for example on a closure in your config, the
+app runs with its config uncached and its log says why. Set
+`HOMEPORT_CONFIG_CACHE=off` to switch it off. Cron jobs and the release
+command run with the config uncached. As with any cached config, `env()`
+returns only the real environment outside your config files, not `.env`.
 
 Its Blade views are compiled once per deploy, by the release command, not
 at build and not as the app starts. Blade names a compiled view by its

@@ -373,7 +373,7 @@ func ssrAssemble(b string, x ssr) string {
 	steps = append(steps,
 		"printf '%s' '"+base64.StdEncoding.EncodeToString([]byte(besidePHP))+"' | base64 -d > "+b+"/"+besidePHPF,
 		"printf '%s\\n' '"+beside+"' > "+b+"/"+besideFile,
-		"printf '%s\\n' '"+wrapArgs+"' > "+b+"/"+wrapFile)
+		ssrWrap(b))
 	return join(steps...)
 }
 
