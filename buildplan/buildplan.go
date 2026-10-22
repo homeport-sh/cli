@@ -137,6 +137,9 @@ type Plan struct {
 	Run       string    `json:"run,omitempty"`
 	Release   string    `json:"release,omitempty"`
 	Processes []Process `json:"processes,omitempty"`
+	// ReleaseReason: why the release command is the one detection chose
+	// (release.go); "" when one was said, or there's none
+	ReleaseReason string `json:"release_reason,omitempty"`
 	// Octane: a PHP app served through Laravel Octane (PHPOctaneRun);
 	// OctaneAvailable: it requires laravel/octane, so it could be
 	Octane          bool `json:"octane,omitempty"`
@@ -239,7 +242,7 @@ var SiteFolders = []string{"build", "dist", "out"}
 func Files() []string {
 	return slices.Concat([]string{ConfigFile, "go.mod", "composer.json", "composer.lock", "package.json", "bun.lock", "bun.lockb",
 		"package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", ".nvmrc", ".node-version", ".bun-version", "index.html",
-		"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"}, svelteConfigs, nextConfigs, nuxtConfigs, nitroConfigs)
+		"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"}, svelteConfigs, nextConfigs, nuxtConfigs, nitroConfigs, releaseFiles())
 }
 
 var (
@@ -261,7 +264,7 @@ type fileConfig struct {
 	Static    string                   `yaml:"static"`
 	Runtime   string                   `yaml:"runtime"`
 	Run       string                   `yaml:"run"`
-	Release   string                   `yaml:"release"`
+	Release   *string                  `yaml:"release"` // "" says there's none: not detected
 	Processes map[string]processConfig `yaml:"processes"`
 	Packages  []string                 `yaml:"packages"`
 	Headers   []HeaderRule             `yaml:"headers"`
@@ -400,7 +403,9 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	if cfg.Run != "" {
 		p.Run = cfg.Run
 	}
-	p.Release = cfg.Release
+	if cfg.Release != nil {
+		p.Release = *cfg.Release
+	}
 	for _, name := range slices.Sorted(maps.Keys(cfg.Processes)) {
 		pc := cfg.Processes[name]
 		p.Processes = append(p.Processes, Process{Name: name, Run: pc.Run, Memory: pc.Memory, CPU: pc.CPU})
@@ -443,6 +448,13 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	}
 	if s.Release != "" {
 		p.Release = s.Release
+	}
+	if p.Release == "" && cfg.Release == nil {
+		var warning string
+		p.Release, p.ReleaseReason, warning = r.detectRelease(&p)
+		if warning != "" {
+			p.Warnings = append(p.Warnings, warning)
+		}
 	}
 	p.Headers = cfg.Headers
 	if len(s.Headers) > 0 {
@@ -513,7 +525,7 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 		p.Build = p.Command
 	}
 	if p.Kind == Static {
-		p.Run, p.Release, p.Processes = "", "", nil // nothing runs
+		p.Run, p.Release, p.ReleaseReason, p.Processes = "", "", "", nil // nothing runs
 		p.Runtime, p.RuntimeVersion, p.RuntimeReason, p.Health = "", "", "", ""
 		p.SSR, p.Reverb = "", false
 	}

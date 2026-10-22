@@ -306,6 +306,27 @@ A command from a dependency is run by its file under `node_modules`, since
 `Module.runMain`. On Bun, `Bun.main` is set to the command before it's
 required.
 
+### The release command, detected
+
+The release command runs before each release goes live, as args to the
+app's `bin`, and its failure stops the deploy. When neither the build
+settings nor `homeport.yaml` set one, it's the framework's obvious
+migration, and the plan's `release_reason` says why:
+
+| The app | Release command |
+|---|---|
+| Laravel (requires `laravel/framework`) | `php-cli artisan migrate --force` |
+| rsc-kit with `src/commands/migrate.ts` (or `.tsx`, `.js`, `.mjs`, `.mts`) | `migrate` (`./app migrate`) |
+| A bundle with a `migrate` or `db:migrate` script that runs a file | that file and its args (`node scripts/migrate.js` is `scripts/migrate.js`) |
+| A bundle whose `migrate` or `db:migrate` script runs `prisma` or `drizzle-kit` (also through `bunx` or `npx`) | `node_modules/prisma/build/index.js …` or `node_modules/drizzle-kit/bin.cjs …` |
+| A bundle with Prisma's migrations (`prisma/migrations/migration_lock.toml`) | `node_modules/prisma/build/index.js migrate deploy` |
+
+A bundle ships `dependencies` only, so a tool in `devDependencies` isn't
+there to run: the plan's `warnings` say to move it, or to set the release
+command. So does a script that needs a shell, or runs another tool. A
+binary other than rsc-kit's, a Go app and a static site get none. To have
+no release command at all, set `release: ""` in `homeport.yaml`.
+
 ### Overriding
 
 - **Build command**: replaces the build. The bundle is still made from what
@@ -407,9 +428,10 @@ command first (your migrations), then `php artisan view:cache` into
 php-cli .homeport/release.php ./bin php-cli artisan migrate --force
 ```
 
-Set only your own command as the release command, for example
-`php-cli artisan migrate --force`. Never set the wrapped line above: homeport
-adds the wrapper itself. A release command the sandbox can't run, such as one
+With no release command set, yours is `php-cli artisan migrate --force`
+(see *The release command, detected*). Set only your own command as the
+release command. Never set the wrapped line above: homeport adds the
+wrapper itself. A release command the sandbox can't run, such as one
 starting with `./bin`, is refused at build, saying what to write.
 
 If your release command fails, the deploy stops, as before. If
