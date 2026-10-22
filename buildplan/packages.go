@@ -99,6 +99,17 @@ var catalog = []Package{
 	{
 		Name: "fonts", Version: "2.37", License: "Bitstream-Vera",
 		About: "Fonts (DejaVu Sans, Sans Mono and Serif) and fontconfig, for drawing text: sharp, libvips, librsvg",
+		// TO BE PUBLISHED: once images/pkg-fonts's images are pushed (and a
+		// homeportd that sets FONTCONFIG_FILE for a package of data is
+		// released), pin them here by the digests the push prints. These are
+		// the digests its reproducible build gave locally, unpushed - check
+		// the pushed ones match before uncommenting:
+		//
+		// Images: map[string]string{
+		// 	artifact.ArchAMD64: "ghcr.io/homeport-sh/pkg-fonts:2.37-x86-64@sha256:abdcd27505de7ce30de8ec000980886e1fa66525458046a3c782040cdebf7f1d",
+		// 	artifact.ArchARM64: "ghcr.io/homeport-sh/pkg-fonts:2.37-arm64@sha256:35c515bcda6846ebfdbff0987544b5e2166efcb474e2e33acdb0000e69c7fc21",
+		// },
+		// Size: map[string]int64{artifact.ArchAMD64: 2881840, artifact.ArchARM64: 2881840},
 	},
 }
 
