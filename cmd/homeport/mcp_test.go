@@ -63,8 +63,8 @@ func callTool(t *testing.T, cs *mcp.ClientSession, name string, args map[string]
 }
 
 var (
-	readTools  = []string{"list_apps", "deploy_status", "runtime_logs", "list_variables", "get_database", "usage"}
-	writeTools = []string{"deploy", "create_app", "set_variables", "unset_variables", "create_database", "attach_database", "detach_database"}
+	readTools  = []string{"list_apps", "deploy_status", "runtime_logs", "list_variables", "get_database", "usage", "list_domains", "get_domain"}
+	writeTools = []string{"deploy", "create_app", "set_variables", "unset_variables", "create_database", "attach_database", "detach_database", "add_domain"}
 )
 
 func TestTheMCPToolsSayWhatTheyChange(t *testing.T) {
@@ -381,5 +381,30 @@ func TestTheQuestionQuotesWhatTheAgentWrote(t *testing.T) {
 	}
 	if text, isErr := callTool(t, cs, "attach_database", with(map[string]any{"database": "db-nope"})); !isErr || !strings.Contains(text, "isn't one") {
 		t.Fatalf("an unknown database: %v %s", isErr, text)
+	}
+}
+
+// An agent lists and reads an app's platform domains, and adds one with
+// the person's approval; removing one is the person's own to do.
+func TestMCPDomains(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	yes := &person{approve: true}
+	cs := mcpSession(t, h, yes)
+	if text, isErr := callTool(t, cs, "add_domain", with(map[string]any{"domain": "Shop.Acme.com"})); isErr || !strings.Contains(text, "homeport-verify=abc123") {
+		t.Fatalf("add: %v %s", isErr, text)
+	}
+	if len(yes.asked) != 1 || !strings.Contains(yes.asked[0], `"shop.acme.com"`) || !strings.Contains(yes.asked[0], "alice/blog (production)") {
+		t.Fatalf("asked %q", yes.asked)
+	}
+	if text, isErr := callTool(t, cs, "list_domains", blog); isErr || !strings.Contains(text, "shop.acme.com") || !strings.Contains(text, `"total": 1`) {
+		t.Fatalf("list: %v %s", isErr, text)
+	}
+	if text, isErr := callTool(t, cs, "get_domain", with(map[string]any{"domain": "shop.acme.com"})); isErr || !strings.Contains(text, "pending") {
+		t.Fatalf("get: %v %s", isErr, text)
+	}
+	if text, isErr := callTool(t, cs, "add_domain", with(map[string]any{"domain": "https://x.example.com"})); !isErr || len(yes.asked) != 1 {
+		t.Fatalf("not a domain, asked anyway: %v %s %q", isErr, text, yes.asked)
 	}
 }

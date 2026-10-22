@@ -92,6 +92,8 @@ func (a *app) run(args []string) int {
 		err = a.env(ctx, rest)
 	case "rollback":
 		err = a.rollback(ctx, rest)
+	case "domains":
+		err = a.domains(ctx, rest)
 	case "build-plan":
 		err = cmdBuildPlan(rest)
 	case "mcp":

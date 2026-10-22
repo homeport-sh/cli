@@ -724,6 +724,74 @@ func (a *app) mcpServer() *mcp.Server {
 			return result(out)
 		})
 
+	mcp.AddTool(s, &mcp.Tool{Name: "list_domains", Annotations: readOnly,
+		Description: "Lists an app's platform domains - its tenants' own, which the app adds through the Domains API: each one's status (pending, verifying, live, failed), why it isn't live, and the DNS records to set; how many are live, and how many the plan includes. Changes nothing."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in where) (*mcp.CallToolResult, any, error) {
+			c, t, err := at(ctx, in)
+			if err != nil {
+				return refused(err)
+			}
+			all := &cloud.Domains{}
+			for after := ""; ; {
+				page, err := c.Domains(ctx, t.link.Team, t.link.App, after)
+				if err != nil {
+					return refused(err)
+				}
+				all.Domains = append(all.Domains, page.Domains...)
+				all.Live, all.Total, all.Included = page.Live, page.Total, page.Included
+				if page.Next == "" || page.Next == after {
+					break
+				}
+				after = page.Next
+			}
+			return result(all)
+		})
+
+	type domainIn struct {
+		where
+		Domain string `json:"domain" jsonschema:"the domain, the name alone: shop.example.com"`
+	}
+	mcp.AddTool(s, &mcp.Tool{Name: "get_domain", Annotations: readOnly,
+		Description: "Shows one of an app's platform domains: its status, why it isn't live, and the DNS records to set. Changes nothing."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in domainIn) (*mcp.CallToolResult, any, error) {
+			name, err := domainArg([]string{in.Domain})
+			if err != nil {
+				return refused(err)
+			}
+			c, t, err := at(ctx, in.where)
+			if err != nil {
+				return refused(err)
+			}
+			d, err := c.Domain(ctx, t.link.Team, t.link.App, name)
+			if err != nil {
+				return refused(err)
+			}
+			return result(d)
+		})
+
+	mcp.AddTool(s, &mcp.Tool{Name: "add_domain", Annotations: changes("Add a domain"),
+		Description: "Adds a platform domain - a tenant's own - to an app, production unless another environment is named: once its DNS records are set, the app serves it, and the plan may bill for it. Answers its status and the DNS records to set. Removing one isn't a tool: the person does that." + asks},
+		func(ctx context.Context, req *mcp.CallToolRequest, in domainIn) (*mcp.CallToolResult, any, error) {
+			name, err := domainArg([]string{in.Domain})
+			if err != nil {
+				return refused(err)
+			}
+			c, t, err := at(ctx, in.where)
+			if err != nil {
+				return refused(err)
+			}
+			if ask, err := approve(req, fmt.Sprintf("Add the domain %q to %s? Once its DNS records are set the app serves it, and your plan may bill for it.", name, envName(t))); err != nil {
+				return refused(err)
+			} else if ask != nil {
+				return ask, nil, nil
+			}
+			d, err := c.AddDomain(ctx, t.link.Team, t.link.App, name)
+			if err != nil {
+				return refused(err)
+			}
+			return result(d)
+		})
+
 	type teamIn struct {
 		Team string `json:"team" jsonschema:"the team's address (slug)"`
 	}
