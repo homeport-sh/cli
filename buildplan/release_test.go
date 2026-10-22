@@ -145,8 +145,8 @@ func TestNoReleaseCommandIsSaid(t *testing.T) {
 				t.Errorf("%s, %s: warnings %q", name, how, p.Warnings)
 			}
 		}
-		// detected: not none, and nothing besides it
-		if p := detect(t, c.files, buildplan.Settings{}); p.NoRelease || p.ReleaseDetected != "" || !strings.HasSuffix(p.Release, c.detected) {
+		// detected: not none, and the command as a person would set it
+		if p := detect(t, c.files, buildplan.Settings{}); p.NoRelease || p.ReleaseDetected != c.detected || !strings.HasSuffix(p.Release, c.detected) {
 			t.Errorf("%s, detected: %q, none %v, detected %q", name, p.Release, p.NoRelease, p.ReleaseDetected)
 		}
 		// a command said over the file's none is that command

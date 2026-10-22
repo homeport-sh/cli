@@ -155,8 +155,9 @@ type Plan struct {
 	// homeport.yaml said so (ReleaseReason says which). A Laravel app's
 	// Release is then its views' caching alone.
 	NoRelease bool `json:"no_release,omitempty"`
-	// ReleaseDetected: when the release command was said (a command, or
-	// none), the one detection would have chosen instead; it doesn't run
+	// ReleaseDetected: the release command detection chose, as a person
+	// would set it (a Laravel app's without the views' caching around it);
+	// when one was said instead (a command, or none), it doesn't run
 	ReleaseDetected string `json:"release_detected,omitempty"`
 	// Octane: a PHP app served through Laravel Octane (PHPOctaneRun);
 	// OctaneAvailable: it requires laravel/octane, so it could be
@@ -481,6 +482,7 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	if p.Release == "" && !p.NoRelease {
 		var warning string
 		p.Release, p.ReleaseReason, warning = r.detectRelease(&p)
+		p.ReleaseDetected = p.Release
 		if warning != "" {
 			p.Warnings = append(p.Warnings, warning)
 		}

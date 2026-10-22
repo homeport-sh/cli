@@ -311,7 +311,8 @@ required.
 The release command runs before each release goes live, as args to the
 app's `bin`, and its failure stops the deploy. When neither the build
 settings nor `homeport.yaml` set one, it's the framework's obvious
-migration, and the plan's `release_reason` says why:
+migration: the plan's `release_detected` has it as you would set it, and
+its `release_reason` says why:
 
 | The app | Release command |
 |---|---|
@@ -331,8 +332,8 @@ dashboard's build settings, deploy with `homeport deploy --no-release
 --save`, or set `release: none` (or `release: ""`) in `homeport.yaml`. That
 is apart from setting nothing, which detects one: the build settings keep
 it as `"no_release": true`. The plan then has `"no_release": true`, a
-`release_reason` saying who set it, and in `release_detected` the command
-detection found, which doesn't run. A command set in the build settings
+`release_reason` saying who set it, and still the command detection found
+in `release_detected`, which doesn't run. A command set in the build settings
 wins over `homeport.yaml`'s none, and the build settings' none wins over
 `homeport.yaml`'s command. A Laravel app still has its views cached on
 release (below), with no command of its own after it.
