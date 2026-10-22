@@ -324,8 +324,18 @@ migration, and the plan's `release_reason` says why:
 A bundle ships `dependencies` only, so a tool in `devDependencies` isn't
 there to run: the plan's `warnings` say to move it, or to set the release
 command. So does a script that needs a shell, or runs another tool. A
-binary other than rsc-kit's, a Go app and a static site get none. To have
-no release command at all, set `release: ""` in `homeport.yaml`.
+binary other than rsc-kit's, a Go app and a static site get none.
+
+To have no release command at all, choose **None** for it in the
+dashboard's build settings, deploy with `homeport deploy --no-release
+--save`, or set `release: none` (or `release: ""`) in `homeport.yaml`. That
+is apart from setting nothing, which detects one: the build settings keep
+it as `"no_release": true`. The plan then has `"no_release": true`, a
+`release_reason` saying who set it, and in `release_detected` the command
+detection found, which doesn't run. A command set in the build settings
+wins over `homeport.yaml`'s none, and the build settings' none wins over
+`homeport.yaml`'s command. A Laravel app still has its views cached on
+release (below), with no command of its own after it.
 
 ### Overriding
 

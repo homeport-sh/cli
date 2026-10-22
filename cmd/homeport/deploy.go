@@ -41,6 +41,7 @@ func (a *app) deploy(ctx context.Context, args []string) error {
 	env := fs.String("env", "", "the environment (with --app; default production)")
 	run := fs.String("run", "", "how the app starts, for this deploy (its start command's args)")
 	release := fs.String("release", "", "the release command, run before it goes live (migrations)")
+	noRelease := fs.Bool("no-release", false, "no release command: none detected, homeport.yaml's not run (--unset release detects it again)")
 	var procs, unset stringList
 	fs.Var(&procs, "process", "a process beside the web, name=command (repeatable; replaces the app's processes)")
 	fs.Var(&unset, "unset", "empty a saved setting: run, release, processes or octane (repeatable; with --save)")
@@ -51,7 +52,10 @@ func (a *app) deploy(ctx context.Context, args []string) error {
 	if err := parse(fs, args); err != nil {
 		return err
 	}
-	settings := buildplan.Settings{Run: strings.TrimSpace(*run), Release: strings.TrimSpace(*release)}
+	settings := buildplan.Settings{Run: strings.TrimSpace(*run), Release: strings.TrimSpace(*release), NoRelease: *noRelease}
+	if settings.NoRelease && settings.Release != "" {
+		return usageErr("--release and --no-release: one or the other")
+	}
 	for _, p := range procs {
 		name, cmd, ok := strings.Cut(p, "=")
 		if !ok || strings.TrimSpace(name) == "" || strings.TrimSpace(cmd) == "" {

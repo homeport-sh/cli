@@ -263,6 +263,7 @@ func (a *app) mcpServer() *mcp.Server {
 	type deployIn struct {
 		Run       string            `json:"run,omitempty" jsonschema:"how the app starts, for this deploy (its start command's args)"`
 		Release   string            `json:"release,omitempty" jsonschema:"the release command, run before it goes live (migrations)"`
+		NoRelease bool              `json:"no_release,omitempty" jsonschema:"no release command: none detected, homeport.yaml's not run (not with release)"`
 		Processes map[string]string `json:"processes,omitempty" jsonschema:"processes beside the web, name to command; replaces the app's"`
 		Save      bool              `json:"save,omitempty" jsonschema:"keep these changes as the app's settings for every later deploy"`
 		Wait      *bool             `json:"wait,omitempty" jsonschema:"wait until it's live (default true)"`
@@ -291,6 +292,10 @@ func (a *app) mcpServer() *mcp.Server {
 					args = append(args, f.flag, f.value)
 					what += fmt.Sprintf("\n%s %q", f.flag, f.value)
 				}
+			}
+			if in.NoRelease {
+				args = append(args, "--no-release")
+				what += "\n--no-release"
 			}
 			for _, name := range slices.Sorted(maps.Keys(in.Processes)) {
 				args = append(args, "--process", name+"="+in.Processes[name])

@@ -108,6 +108,7 @@ and otherwise after a digest of what was uploaded.
 homeport deploy --run "./server --debug"          # this deploy alone
 homeport deploy --release "./migrate" --save      # and every deploy after
 homeport deploy --process worker="./work --queue" # replaces the processes
+homeport deploy --no-release --save               # no release command, not even a detected one
 homeport deploy --save --unset processes          # back to homeport.yaml's
 homeport deploy --team acme --app web --env staging   # without a link
 homeport deploy --team acme --app web --yes      # creates web if acme hasn't it

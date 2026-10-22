@@ -716,6 +716,25 @@ func TestDeployingSavesWhenAsked(t *testing.T) {
 	}
 }
 
+// --no-release: no release command, apart from none said (detect it);
+// saved, it's the app's from now on, and --unset release detects it again.
+func TestDeployingWithNoRelease(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	project(t, h)
+	if code := h.run("deploy", "--no-release", "--save"); code != 0 {
+		t.Fatalf("%d %s", code, h.said())
+	}
+	if d := f.deploys[0]; !d.Save || !d.Settings.NoRelease || d.Settings.Release != "" {
+		t.Fatalf("%+v", d)
+	}
+	// a command and none: one or the other
+	if code := h.run("deploy", "--no-release", "--release", "./migrate"); code != exitUsage {
+		t.Fatalf("both: %d", code)
+	}
+}
+
 // Exit codes CI can tell apart.
 func TestDeployExitCodes(t *testing.T) {
 	cases := []struct {
