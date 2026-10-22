@@ -192,6 +192,16 @@ func sayDomain(out io.Writer, d *cloud.Domain) {
 	if d.Wildcard != "" {
 		fmt.Fprintf(out, "Under the app's wildcard %s: no DNS records to set.\n", d.Wildcard)
 	}
+	switch d.Certificate {
+	case "wildcard":
+		fmt.Fprintln(out, "Every name under it is served one wildcard certificate.")
+	case "per-name":
+		fmt.Fprint(out, "Each name under it gets its own certificate on its first visit")
+		if d.CertificateWhy != "" {
+			fmt.Fprintf(out, " (%s)", d.CertificateWhy)
+		}
+		fmt.Fprintln(out, ": its _acme-challenge record below gives them one, at once.")
+	}
 	if len(d.Records) > 0 {
 		fmt.Fprintln(out, "Set these at its DNS provider:")
 		tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)

@@ -584,6 +584,11 @@ type Domain struct {
 	CheckedAt string      `json:"checked_at,omitempty"`
 	// DropsAt: a pending one is dropped then, unless it's proved
 	DropsAt string `json:"drops_at,omitempty"`
+	// Certificate: a wildcard's tenants are served its one certificate
+	// ("wildcard") or each their own ("per-name"; CertificateWhy says why);
+	// "" for anything else
+	Certificate    string `json:"certificate,omitempty"`
+	CertificateWhy string `json:"certificate_why,omitempty"`
 }
 
 // DNSRecord is a record to set: Name relative to the root domain, as DNS

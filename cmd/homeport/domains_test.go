@@ -90,3 +90,28 @@ func TestDomainsSaysWhyItWasRefused(t *testing.T) {
 		t.Fatalf("%d %s", code, h.said())
 	}
 }
+
+// A live wildcard says whether its tenants share its one certificate, and
+// when they don't, the record that would and why it isn't there yet.
+func TestADomainSaysItsCertificate(t *testing.T) {
+	f, h := linkedHarness(t)
+	f.domains = []cloud.Domain{
+		{Domain: "*.saas.example", Status: "live", Certificate: "per-name", CertificateWhy: "no CNAME at _acme-challenge.saas.example",
+			Records:   []cloud.DNSRecord{{Type: "CNAME", Name: "_acme-challenge.saas", FullName: "_acme-challenge.saas.example", Value: "abc.acme.homeport.test"}},
+			CreatedAt: "2026-10-01T12:00:00Z"},
+		{Domain: "*.one.example", Status: "live", Certificate: "wildcard", Records: []cloud.DNSRecord{}, CreatedAt: "2026-10-01T12:00:00Z"},
+	}
+	if code := h.run("domains", "get", "*.saas.example"); code != 0 {
+		t.Fatalf("get: %d %s", code, h.said())
+	}
+	said := h.said()
+	for _, want := range []string{"Each name under it gets its own certificate", "no CNAME at _acme-challenge.saas.example", "_acme-challenge.saas", "abc.acme.homeport.test"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("get didn't say %q: %s", want, said)
+		}
+	}
+	h.out.Reset()
+	if code := h.run("domains", "get", "*.one.example"); code != 0 || !strings.Contains(h.said(), "Every name under it is served one wildcard certificate") {
+		t.Fatalf("get: %d %s", code, h.said())
+	}
+}
