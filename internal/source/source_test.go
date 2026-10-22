@@ -266,3 +266,17 @@ func TestSecretsAreLeftOut(t *testing.T) {
 		t.Fatalf("%+v", tree)
 	}
 }
+
+// An app's folder is its place in the checkout Collect uploads from the
+// top; outside git, the folder is the top.
+func TestAFoldersPlaceInItsCheckout(t *testing.T) {
+	dir := repo(t, map[string]string{"apps/web/main.go": "package main\n"})
+	for at, want := range map[string]string{dir: "", filepath.Join(dir, "apps"): "apps", filepath.Join(dir, "apps", "web"): "apps/web"} {
+		if got := Folder(at); got != want {
+			t.Errorf("Folder(%s) = %q, want %q", at, got, want)
+		}
+	}
+	if got := Folder(t.TempDir()); got != "" {
+		t.Errorf("outside git: %q", got)
+	}
+}

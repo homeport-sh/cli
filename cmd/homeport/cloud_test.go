@@ -3,9 +3,11 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"maps"
 	"net/http"
@@ -79,10 +81,18 @@ type fakeAPI struct {
 	pulled       []string // the apps whose add-on credentials were pulled
 	pullValues   map[string]string
 	withheld     []string
+	created      []fakeCreate // apps made (POST /v1/cli/teams/{team}/apps)
 	rollbacks    []struct {
 		Deploy     string `json:"deploy"`
 		RunRelease bool   `json:"run_release"`
 	}
+}
+
+// fakeCreate is what an app was made with.
+type fakeCreate struct {
+	Name        string `json:"name"`
+	Environment string `json:"environment"`
+	Root        string `json:"root"`
 }
 
 type fakeRoleChange struct {
@@ -205,6 +215,23 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(204)
 	case r.Method == "GET" && p == "/v1/cli/teams/"+team1+"/apps":
 		f.write(w, 200, f.apps)
+	case r.Method == "POST" && p == "/v1/cli/teams/"+team1+"/apps":
+		var in fakeCreate
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			f.write(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+		for _, a := range f.apps {
+			if a.ProjectName == in.Name {
+				f.write(w, 400, map[string]string{"error": "the team already has an app called " + in.Name, "field": "name"})
+				return
+			}
+		}
+		f.created = append(f.created, in)
+		made := cloud.App{ID: fmt.Sprintf("a0000000-0000-4000-8000-1%011d", len(f.created)), Name: in.Name, ProjectName: in.Name,
+			Environment: cmp.Or(in.Environment, "production"), Builds: "hosted", Domain: in.Name + ".homeport.app", Status: "no deploys yet"}
+		f.apps = append(f.apps, made)
+		f.write(w, 201, made)
 	case r.Method == "GET" && strings.HasPrefix(p, "/v1/cli/teams/"+team1+"/apps/") && !strings.Contains(strings.TrimPrefix(p, "/v1/cli/teams/"+team1+"/apps/"), "/"):
 		for _, a := range f.apps {
 			if a.ID == strings.TrimPrefix(p, "/v1/cli/teams/"+team1+"/apps/") {

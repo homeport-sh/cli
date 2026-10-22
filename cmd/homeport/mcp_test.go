@@ -64,7 +64,7 @@ func callTool(t *testing.T, cs *mcp.ClientSession, name string, args map[string]
 
 var (
 	readTools  = []string{"list_apps", "deploy_status", "runtime_logs", "list_variables", "get_database", "usage"}
-	writeTools = []string{"deploy", "set_variables", "unset_variables", "create_database", "attach_database", "detach_database"}
+	writeTools = []string{"deploy", "create_app", "set_variables", "unset_variables", "create_database", "attach_database", "detach_database"}
 )
 
 func TestTheMCPToolsSayWhatTheyChange(t *testing.T) {

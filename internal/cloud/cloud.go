@@ -242,10 +242,13 @@ type App struct {
 	Environment string
 	Branch      string
 	Repo        string
-	Domain      string
-	Builds      string // hosted, ci or upload
-	Status      string
-	LastDeploy  *Deploy
+	// Provider is where its code comes from: github, gitlab, …, upload,
+	// or cli (no repository: deployed from the CLI)
+	Provider   string
+	Domain     string
+	Builds     string // hosted, ci or upload
+	Status     string
+	LastDeploy *Deploy
 	// Deploys: its latest, newest first (App alone answers them)
 	Deploys []Deploy
 }
@@ -255,6 +258,26 @@ func (c *Client) Apps(ctx context.Context, team string) ([]App, error) {
 	var out []App
 	err := c.call(ctx, "GET", "/v1/cli/teams/"+url.PathEscape(team)+"/apps", nil, &out)
 	return out, err
+}
+
+// NewApp is an app made from the CLI: no repository, its code what
+// `homeport deploy` uploads.
+type NewApp struct {
+	Name string `json:"name"`
+	// Environment is the one it starts with ("": production)
+	Environment string `json:"environment,omitempty"`
+	// Root is the app's folder in what deploy uploads ("": its top)
+	Root string `json:"root,omitempty"`
+}
+
+// CreateApp makes a team an app deployed from the CLI, and answers its
+// environment, as Apps lists it.
+func (c *Client) CreateApp(ctx context.Context, team string, in NewApp) (*App, error) {
+	var out App
+	if err := c.call(ctx, "POST", "/v1/cli/teams/"+url.PathEscape(team)+"/apps", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // App is one of them.

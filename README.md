@@ -6,8 +6,8 @@ platform for single-binary and static apps.
 ```sh
 curl -fsSL https://homeport.sh/install | sh   # or, on macOS: brew install homeport-sh/tap/homeport
 homeport login      # approve this device on the dashboard
-homeport link       # pick the team, app and environment for this folder
 homeport deploy     # upload the working tree, build it, follow it live
+                    # (a new folder: asks to create its app, then links it)
 ```
 
 | Command | What it does |
@@ -15,8 +15,8 @@ homeport deploy     # upload the working tree, build it, follow it live
 | `homeport login` | sign in: approve this device at `app.homeport.sh/cli` (`--name`, `--no-browser`) |
 | `homeport logout` | sign out: this device's session is revoked |
 | `homeport whoami` | who you're signed in as, and your teams |
-| `homeport link` | link this folder to an app's environment (`--team`, `--app`, `--env`) |
-| `homeport deploy` | upload the working tree, build and release it, follow it until it's live |
+| `homeport link` | link this folder to an app's environment (`--team`, `--app`, `--env`); an `--app` the team hasn't is created, asked first (`--yes`) |
+| `homeport deploy` | upload the working tree, build and release it, follow it until it's live; in a folder nothing links, its app is created first, asked first (`--yes`) |
 | `homeport token create --name <where>` | a token for CI (`HOMEPORT_TOKEN`), printed once: for one environment - this folder's link's, or `--team`, `--app`, `--env` - and it acts there alone |
 | `homeport rollback [<deploy\|commit>]` | lists the earlier releases you can roll back to; with one, ships its build again without building (asks first; `--yes`, `--run-release`) |
 | `homeport env set NAME=value…` | sets an environment's variables; the app restarts to get them (`--env`, `--team`, `--app`) |
@@ -70,6 +70,23 @@ and environment, or takes `--team`, `--app` and `--env`. Only environments
 homeport builds are offered. One that your own CI deploys is deployed from
 your CI.
 
+No app yet? `homeport deploy` in a folder nothing links creates one, named
+after the folder (`--app` to name it), in the team `--team` names (asked,
+when you're in several). It asks first:
+
+```
+No app "rsc-sharp" on team "acme". Create it? [y/N]
+```
+
+`--yes` creates it without asking, and is needed with no terminal to ask
+in (CI); without it, nothing is created. The app has no repository: it's
+deployed from your computer with `homeport deploy`, its production
+environment on its own address, held to your plan's apps like any other.
+The folder is then linked to it. `homeport link --app <name>` and
+`homeport deploy --app <name>` create an app the team hasn't the same way.
+A folder named after an app the team already has isn't deployed to it
+until you link it.
+
 `homeport deploy` uploads the **working tree**: what git would commit,
 meaning tracked files plus untracked ones that aren't ignored, as they are
 on disk now, uncommitted changes included. homeport builds and releases it
@@ -89,6 +106,7 @@ homeport deploy --release "./migrate" --save      # and every deploy after
 homeport deploy --process worker="./work --queue" # replaces the processes
 homeport deploy --save --unset processes          # back to homeport.yaml's
 homeport deploy --team acme --app web --env staging   # without a link
+homeport deploy --team acme --app web --yes      # creates web if acme hasn't it
 homeport deploy --detach                          # don't wait
 ```
 
@@ -213,6 +231,7 @@ Cursor (`~/.cursor/mcp.json`, or `.cursor/mcp.json` in a project):
 | --- | --- |
 | `list_apps` | your teams, their apps and environments (reads) |
 | `deploy` | deploys **the folder `homeport mcp` runs in**, as `homeport link` linked it, like `homeport deploy`, and answers the address (**changes it**) |
+| `create_app` | creates an app in a team (its name), deployed from your computer, and links the folder `homeport mcp` runs in to it when nothing links it yet (**changes it**) |
 | `deploy_status` | a build's status and log, then its release's (reads) |
 | `runtime_logs` | an environment's runtime logs (reads) |
 | `list_variables` | an environment's variables, **names only**, and what each file variable is (reads) |

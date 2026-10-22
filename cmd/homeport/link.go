@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
 	"github.com/homeport-sh/cli/internal/cloud"
 	"github.com/homeport-sh/cli/internal/config"
+	"github.com/homeport-sh/cli/internal/source"
 )
 
 // link ties this folder to one of your apps' environments - the one
@@ -19,6 +21,7 @@ func (a *app) link(ctx context.Context, args []string) error {
 	team := fs.String("team", "", "the team, by its address (slug)")
 	appName := fs.String("app", "", "the app, by name")
 	env := fs.String("env", "", "the environment (default: production)")
+	yes := fs.Bool("yes", false, "create the app --app names if the team hasn't one, without asking (needed without a terminal)")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
@@ -26,7 +29,10 @@ func (a *app) link(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	target, err := a.resolve(ctx, c, *team, *appName, *env, true)
+	target, err := a.resolveOr(ctx, c, *team, *appName, *env, true, &offer{yes: *yes, root: source.Folder(a.wd)})
+	if errors.Is(err, errNotCreated) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -50,6 +56,12 @@ type target struct {
 // homeport builds (to link or deploy); reading, variables and add-ons are
 // any environment's.
 func (a *app) resolve(ctx context.Context, c *cloud.Client, teamSlug, appName, envName string, hostedOnly bool) (*target, error) {
+	return a.resolveOr(ctx, c, teamSlug, appName, envName, hostedOnly, nil)
+}
+
+// resolveOr is resolve, and for an app the team doesn't have, o (nil:
+// none) - making it, as `homeport deploy` and `homeport link` offer to.
+func (a *app) resolveOr(ctx context.Context, c *cloud.Client, teamSlug, appName, envName string, hostedOnly bool, o *offer) (*target, error) {
 	who, err := c.WhoAmI(ctx)
 	if err != nil {
 		return nil, err
@@ -97,7 +109,7 @@ func (a *app) resolve(ctx context.Context, c *cloud.Client, teamSlug, appName, e
 	slices.Sort(names)
 	if appName == "" {
 		if len(names) == 0 {
-			return nil, fmt.Errorf("%s has no app homeport builds from a repository: create one at %s", team.Slug, orDefault(who.Dashboard))
+			return nil, fmt.Errorf("%s has no app homeport builds: `homeport link --app <name>` or `homeport deploy` creates one, or create one at %s", team.Slug, orDefault(who.Dashboard))
 		}
 		i, err := a.choose("app", "--app", names, -1)
 		if err != nil {
@@ -106,13 +118,23 @@ func (a *app) resolve(ctx context.Context, c *cloud.Client, teamSlug, appName, e
 		appName = names[i]
 	}
 	envs, ok := byApp[appName]
+	if ok && o != nil && o.fromFolder {
+		return nil, usageErr("this folder isn't linked to an app: `homeport link` links it to %s/%s, or name it with --app", team.Slug, appName)
+	}
 	if !ok {
 		for _, e := range apps {
 			if e.ProjectName == appName {
 				return nil, usageErr("%s is deployed by %s, not built by homeport: deploy it from there", appName, sourceName(e.Builds))
 			}
 		}
-		return nil, usageErr("%s has no app %q", team.Slug, appName)
+		if o == nil {
+			return nil, usageErr("%s has no app %q", team.Slug, appName)
+		}
+		made, err := a.create(ctx, c, team, appName, envName, o)
+		if err != nil {
+			return nil, err
+		}
+		envs = []cloud.App{*made}
 	}
 	slices.SortFunc(envs, func(x, y cloud.App) int {
 		switch {
