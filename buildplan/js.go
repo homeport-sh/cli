@@ -1271,20 +1271,7 @@ func assemble(layout string, m pm, rt, bin string, sums map[string]string, binNa
 	if w != nil {
 		inside = "r=$(cd " + w.up + " && pwd -P)"
 	}
-	// a tree's files into the bundle: links followed, hard links copied
-	put := func(src, dst string, exclude ...string) string {
-		ex := ""
-		for _, e := range exclude {
-			ex += " --exclude=" + e
-		}
-		// links: dangling ones dropped, and none out of the app's folder
-		// (tar -h would copy what it points at: / or the repository)
-		// - every link, whatever its name (find -exec, not a read loop);
-		// the copy through a file, not a pipe, so a failed tar -c fails
-		return "find " + src + " -xtype l -delete && " +
-			inside + ` && find ` + src + ` -type l -exec sh -c 'r=$1; shift; for l; do t=$(readlink -f -- "$l"); case "$t" in "$r"|"$r"/*) ;; *) printf "homeport: %s links outside the app (%s)\n" "$l" "$t" >&2; exit 1 ;; esac; done' sh "$r" {} + && ` +
-			"(cd " + src + " && tar -chf \"$r/.homeport-copy.tar\" --hard-dereference --exclude=./.homeport-copy.tar" + ex + " .) && tar -xf \"$r/.homeport-copy.tar\" -C " + dst + " && rm -f \"$r/.homeport-copy.tar\""
-	}
+	put := func(src, dst string, exclude ...string) string { return copyTree(inside, src, dst, exclude...) }
 	steps := []string{"rm -rf " + b + " && mkdir -p " + b + "/.homeport"}
 	switch layout {
 	case "standalone":
@@ -1342,6 +1329,23 @@ func assemble(layout string, m pm, rt, bin string, sums map[string]string, binNa
 		steps = append(steps, "mkdir -p "+b+"/"+CacheDir+" && echo "+CacheDir+" > "+b+"/.homeport/writable")
 	}
 	return join(steps...)
+}
+
+// copyTree copies a tree's files into a bundle: links followed, hard links
+// copied. inside sets $r to what links may point into (the app's folder, or
+// its workspace).
+func copyTree(inside, src, dst string, exclude ...string) string {
+	ex := ""
+	for _, e := range exclude {
+		ex += " --exclude=" + e
+	}
+	// links: dangling ones dropped, and none out of the app's folder
+	// (tar -h would copy what it points at: / or the repository)
+	// - every link, whatever its name (find -exec, not a read loop);
+	// the copy through a file, not a pipe, so a failed tar -c fails
+	return "find " + src + " -xtype l -delete && " +
+		inside + ` && find ` + src + ` -type l -exec sh -c 'r=$1; shift; for l; do t=$(readlink -f -- "$l"); case "$t" in "$r"|"$r"/*) ;; *) printf "homeport: %s links outside the app (%s)\n" "$l" "$t" >&2; exit 1 ;; esac; done' sh "$r" {} + && ` +
+		"(cd " + src + " && tar -chf \"$r/.homeport-copy.tar\" --hard-dereference --exclude=./.homeport-copy.tar" + ex + " .) && tar -xf \"$r/.homeport-copy.tar\" -C " + dst + " && rm -f \"$r/.homeport-copy.tar\""
 }
 
 // nodeSum: the pinned release's binaries, by machine.

@@ -270,7 +270,7 @@ var SiteFolders = []string{"build", "dist", "out"}
 func Files() []string {
 	return slices.Concat([]string{ConfigFile, "go.mod", "composer.json", "composer.lock", "package.json", "bun.lock", "bun.lockb",
 		"package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", ".nvmrc", ".node-version", ".bun-version", "index.html",
-		"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"}, svelteConfigs, nextConfigs, nuxtConfigs, nitroConfigs, releaseFiles())
+		"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"}, svelteConfigs, nextConfigs, nuxtConfigs, nitroConfigs, releaseFiles(), pythonFiles())
 }
 
 var (
@@ -606,7 +606,7 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 	}
 
 	// a workspace member: its lockfile is its workspace's, above it
-	if cfg.Build.Image == "" && !r.exists("composer.json") && !r.exists("go.mod") && r.exists("package.json") && !r.hasLockfile() {
+	if cfg.Build.Image == "" && !r.exists("composer.json") && !r.exists("go.mod") && r.exists("package.json") && !r.hasLockfile() && !r.python() {
 		w, err := r.findWorkspace()
 		if err != nil {
 			return Plan{}, err
@@ -672,6 +672,11 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 		if p.Command == "" {
 			p.Command = `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ` + p.Artifact + " ."
 		}
+	case r.python():
+		// Python: its interpreter in the bundle, as bin (python.go)
+		if err := r.py(&p, cfg, cmpOr(s.Run, cfg.Run)); err != nil {
+			return Plan{}, err
+		}
 	case r.exists("package.json") && (r.hasLockfile() || r.ws != nil):
 		runtime, from := s.Runtime, "the build settings"
 		if runtime == "" && cfg.Runtime != "" {
@@ -689,7 +694,7 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 			p.Artifact = clean(cfg.Static)
 		}
 	default:
-		return Plan{}, errors.New("can't tell how to build this app: no go.mod, composer.json, bun or npm lockfile, or index.html in its folder - " +
+		return Plan{}, errors.New("can't tell how to build this app: no go.mod, composer.json, bun or npm lockfile, pyproject.toml, requirements.txt or index.html in its folder - " +
 			"set the build and output in the app's build settings")
 	}
 	return p, nil

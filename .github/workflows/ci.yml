@@ -68,3 +68,8 @@ jobs:
 
       - name: build and run the examples
         run: e2e/js-examples.sh "$RUNNER_TEMP/homeport" examples
+
+      # Django, FastAPI and Flask: built in the plan's image, run from the
+      # bundle - the interpreter as bin - read-only in a bare Ubuntu 24.04
+      - name: build and run the Python examples
+        run: e2e/python-examples.sh "$RUNNER_TEMP/homeport" e2e/python
