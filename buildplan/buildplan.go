@@ -195,12 +195,12 @@ type Process struct {
 const PHPVersion = "8.5"
 
 // FrankenPHPImage is homeport's FrankenPHP base (images/frankenphp): a
-// static FrankenPHP 1.13.1 with PHP 8.5 (PHPVersion) and the standard extensions, built
+// static FrankenPHP 1.13.2 with PHP 8.5 (PHPVersion) and the standard extensions, built
 // once, that bundles ship (frankenphp-bundle); composer, and Bun 1.4.3 for
 // front-end assets. A Laravel bundle's php.ini has opcache skip timestamp
 // checks and keep what it compiles, in the release's storage/, across
 // wakes. Pinned by digest: a tag can be pushed again.
-const FrankenPHPImage = "ghcr.io/homeport-sh/frankenphp:" + PHPVersion + "-1.13.1-bun1.4.3@sha256:3364499ca7e72d47d2e816240163429b2f4f7e7b4dfaf1acebbe2d0f5ca3cec4"
+const FrankenPHPImage = "ghcr.io/homeport-sh/frankenphp:" + PHPVersion + "-1.13.2-bun1.4.3@sha256:22cff33e90f11700602685e64877613e0e234fcaeab893607b93f8fd8df57b34"
 
 // BundleDir is where a PHP app's build puts its bundle, in the app's folder.
 const BundleDir = ".homeport-bundle"
