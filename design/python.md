@@ -1,8 +1,10 @@
 # Python apps (Django, FastAPI, Flask)
 
-- **Status:** proposed. A draft of the detection is written and unit-tested on
-  branch `python-apps` (homeport-sh/cli); the e2e example builds run in CI on
-  that branch. Nothing is released, and the engine is not changed.
+- **Status:** proposed. The detection is written and unit-tested on branch
+  `python-apps` (homeport-sh/cli#48, draft). The e2e passes in CI on x86-64:
+  Django, FastAPI and Flask are built in the plan's image and run read-only
+  from the bundle in ubuntu:24.04, with migrate, static files and SIGTERM
+  checked. Nothing is released, and the engine is not changed.
 - **Date:** 2026-10-22
 - **Why:** a Python web app (Django, FastAPI, Flask) can't be deployed today.
   `build-plan` finds no `go.mod`, `composer.json` or lockfile and stops. There
@@ -166,8 +168,8 @@ fails less clearly. An app's own `lib/` folder merges harmlessly unless it has a
 `lib/python3.X/`.
 
 Size, x86-64: interpreter 31 MB and trimmed stdlib with bytecode about 30 MB,
-so **about 60 MB before the app's deps** (Django adds about 40 MB, FastAPI
-about 15 MB). A Node bundle is about 120 MB.
+so **about 60 MB before the app's deps**. Measured in CI (x86-64, unpacked):
+Flask 66 MB, FastAPI 74 MB, Django 112 MB. A Node bundle is about 120 MB.
 
 ## Running
 
@@ -244,8 +246,8 @@ about 15 MB). A Node bundle is about 120 MB.
 
 ## Effort
 
-- Done on the branch: detection, plan, unit tests, examples, e2e script and this
-  note. About 1.5 days of work.
+- Done on the branch: detection, plan, unit tests, examples, an e2e that is
+  green in CI, and this note.
 - To ship: owner decisions 1-4 (each a constant or one line), the e2e run
   green on CI, then a box test on both archs (half a day). Then the
   dashboard's build settings: a Python framework shows no Octane or Bun/Node
