@@ -94,10 +94,8 @@ var catalog = []Package{
 	// text and SVG - draw text in a sandbox that has no fonts. homeportd sets
 	// FONTCONFIG_FILE to the config. Upstream's exact files, out of its
 	// release archive by sha256 (homeport-sh/homeport images/pkg-fonts).
-	// Unlisted until its licence (Bitstream Vera's, DejaVu's changes public
-	// domain) is confirmed.
 	{
-		Name: "fonts", Version: "2.37", License: "Bitstream-Vera",
+		Name: "fonts", Version: "2.37", License: "Bitstream-Vera", Listed: true,
 		About: "Fonts (DejaVu Sans, Sans Mono and Serif) and fontconfig, for drawing text: sharp, libvips, librsvg",
 		Images: map[string]string{
 			artifact.ArchAMD64: "ghcr.io/homeport-sh/pkg-fonts:2.37-x86-64@sha256:abdcd27505de7ce30de8ec000980886e1fa66525458046a3c782040cdebf7f1d",
