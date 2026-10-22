@@ -25,7 +25,7 @@ jobs:
           coverage: none
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.3
+          bun-version: 1.4.4
 
       - name: go vet
         run: go vet ./...
