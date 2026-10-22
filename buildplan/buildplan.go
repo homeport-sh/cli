@@ -60,6 +60,10 @@ type Settings struct {
 	// NoRelease: the app has no release command - none is detected, and
 	// homeport.yaml's is not run - where an empty Release is "detect it"
 	NoRelease bool `json:"no_release,omitempty"`
+	// StopGrace: how long the web gets to finish after SIGTERM before it's
+	// killed, like 90s or 10m (CheckStopGrace); empty is homeport.yaml's,
+	// else homeportd's default
+	StopGrace string `json:"stop_grace,omitempty"`
 	// Processes: the app's processes beside the web, replacing
 	// homeport.yaml's when there are any
 	Processes []Process `json:"processes,omitempty"`
@@ -80,7 +84,7 @@ type Settings struct {
 // IsZero says whether nothing is set.
 func (s Settings) IsZero() bool {
 	return s.Root == "" && s.Kind == "" && s.Install == "" && s.Command == "" && s.Output == "" &&
-		s.Run == "" && s.Release == "" && !s.NoRelease && len(s.Processes) == 0 && s.Octane == nil && s.Runtime == "" &&
+		s.Run == "" && s.Release == "" && !s.NoRelease && s.StopGrace == "" && len(s.Processes) == 0 && s.Octane == nil && s.Runtime == "" &&
 		len(s.Packages) == 0 && len(s.Headers) == 0
 }
 
@@ -96,7 +100,8 @@ func (s Settings) With(o Settings) Settings {
 	}
 	out := Settings{Root: pick(s.Root, o.Root), Kind: pick(s.Kind, o.Kind), Install: pick(s.Install, o.Install),
 		Command: pick(s.Command, o.Command), Output: pick(s.Output, o.Output), Run: pick(s.Run, o.Run),
-		Release: pick(s.Release, o.Release), NoRelease: s.NoRelease, Processes: slices.Clone(s.Processes), Octane: s.Octane,
+		Release: pick(s.Release, o.Release), NoRelease: s.NoRelease, StopGrace: pick(s.StopGrace, o.StopGrace),
+		Processes: slices.Clone(s.Processes), Octane: s.Octane,
 		Runtime: pick(s.Runtime, o.Runtime), Packages: slices.Clone(s.Packages), Headers: slices.Clone(s.Headers)}
 	// a release command and none are one setting: o's, when it says either
 	if o.NoRelease {
@@ -146,6 +151,7 @@ type Plan struct {
 	// runs it (the CLI, the control plane), not here
 	Run       string    `json:"run,omitempty"`
 	Release   string    `json:"release,omitempty"`
+	StopGrace string    `json:"stop_grace,omitempty"` // the web's (Settings.StopGrace)
 	Processes []Process `json:"processes,omitempty"`
 	// ReleaseReason: why the release command is the one detection chose
 	// (release.go), or who said there's none; "" when a command was said,
@@ -204,12 +210,15 @@ type Plan struct {
 	laravelViews bool
 }
 
-// Process is one of the app's processes beside the web.
+// Process is one of the app's processes beside the web. StopGrace is how
+// long it gets to finish after SIGTERM before it's killed (CheckStopGrace),
+// empty homeportd's default.
 type Process struct {
-	Name   string `json:"name"`
-	Run    string `json:"run"`
-	Memory string `json:"memory,omitempty"`
-	CPU    string `json:"cpu,omitempty"`
+	Name      string `json:"name"`
+	Run       string `json:"run"`
+	Memory    string `json:"memory,omitempty"`
+	CPU       string `json:"cpu,omitempty"`
+	StopGrace string `json:"stop_grace,omitempty"`
 }
 
 // PHPVersion is the PHP homeport runs: its FrankenPHP base's. composer.json's
@@ -284,15 +293,17 @@ type fileConfig struct {
 	Runtime   string                   `yaml:"runtime"`
 	Run       string                   `yaml:"run"`
 	Release   *string                  `yaml:"release"` // "" or none says there's none: not detected
+	StopGrace string                   `yaml:"stop_grace"`
 	Processes map[string]processConfig `yaml:"processes"`
 	Packages  []string                 `yaml:"packages"`
 	Headers   []HeaderRule             `yaml:"headers"`
 }
 
 type processConfig struct {
-	Run    string `yaml:"run"`
-	Memory string `yaml:"memory"`
-	CPU    string `yaml:"cpu"`
+	Run       string `yaml:"run"`
+	Memory    string `yaml:"memory"`
+	CPU       string `yaml:"cpu"`
+	StopGrace string `yaml:"stop_grace"`
 }
 
 // UnmarshalYAML: a process is its args ("worker: queue:work") or run + limits.
@@ -307,13 +318,14 @@ func (p *processConfig) UnmarshalYAML(n *yaml.Node) error {
 // Check says whether settings are well-formed, before anything reads them.
 func (s Settings) Check() error {
 	for name, v := range map[string]string{"root directory": s.Root, "kind": s.Kind, "runtime": s.Runtime, "install command": s.Install,
-		"build command": s.Command, "output": s.Output, "start command": s.Run, "release command": s.Release} {
+		"build command": s.Command, "output": s.Output, "start command": s.Run, "release command": s.Release, "stop grace": s.StopGrace} {
 		if err := checkText(name, v); err != nil {
 			return err
 		}
 	}
 	for _, p := range s.Processes {
-		for name, v := range map[string]string{"process name": p.Name, "process command": p.Run, "process memory": p.Memory, "process cpu": p.CPU} {
+		for name, v := range map[string]string{"process name": p.Name, "process command": p.Run, "process memory": p.Memory, "process cpu": p.CPU,
+			"process stop grace": p.StopGrace} {
 			if err := checkText(name, v); err != nil {
 				return err
 			}
@@ -347,6 +359,9 @@ func (s Settings) Check() error {
 		return err
 	}
 	if err := CheckRelease(s.Release); err != nil {
+		return err
+	}
+	if err := CheckStopGrace("the web", s.StopGrace); err != nil {
 		return err
 	}
 	if err := CheckPackages(s.Packages); err != nil {
@@ -432,8 +447,9 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	}
 	for _, name := range slices.Sorted(maps.Keys(cfg.Processes)) {
 		pc := cfg.Processes[name]
-		p.Processes = append(p.Processes, Process{Name: name, Run: pc.Run, Memory: pc.Memory, CPU: pc.CPU})
+		p.Processes = append(p.Processes, Process{Name: name, Run: pc.Run, Memory: pc.Memory, CPU: pc.CPU, StopGrace: pc.StopGrace})
 	}
+	p.StopGrace = cfg.StopGrace
 
 	// the person's say, last
 	if p.assemble != "" && (s.Kind != "" && s.Kind != p.Kind || s.Output != "") {
@@ -490,6 +506,9 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 		// said instead: what detection would have run, for a person to see
 		// what they turned off; it isn't run, so its warnings don't apply
 		p.ReleaseDetected, _, _ = r.detectRelease(&p)
+	}
+	if s.StopGrace != "" {
+		p.StopGrace = s.StopGrace
 	}
 	p.Headers = cfg.Headers
 	if len(s.Headers) > 0 {
@@ -560,7 +579,7 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 		p.Build = p.Command
 	}
 	if p.Kind == Static {
-		p.Run, p.Release, p.ReleaseReason, p.Processes = "", "", "", nil // nothing runs
+		p.Run, p.Release, p.ReleaseReason, p.StopGrace, p.Processes = "", "", "", "", nil // nothing runs
 		p.NoRelease, p.ReleaseDetected = false, ""
 		p.Runtime, p.RuntimeVersion, p.RuntimeReason, p.Health = "", "", "", ""
 		p.SSR, p.Reverb = "", false

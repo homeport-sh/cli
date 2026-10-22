@@ -18,9 +18,10 @@ const configFile = "homeport.yaml"
 
 // processConfig is one long-running command beside the web.
 type processConfig struct {
-	Run    string
-	Memory string
-	CPU    string
+	Run       string
+	Memory    string
+	CPU       string
+	StopGrace string
 }
 
 func inConfig(err error) error {
@@ -37,12 +38,15 @@ func checkSandboxedRelease(release string) error { return inConfig(buildplan.Che
 // checkRun: run is args to ./bin that may name only $PORT and $HOST.
 func checkRun(run string) error { return inConfig(buildplan.CheckRun(run)) }
 
+// checkStopGrace: the web's stop grace, 1s to 15m when set.
+func checkStopGrace(v string) error { return inConfig(buildplan.CheckStopGrace("the web", v)) }
+
 // checkProcesses: each process is args to ./bin with sane limits.
 func checkProcesses(procs map[string]processConfig) error {
 	list := make([]buildplan.Process, 0, len(procs))
 	for _, name := range slices.Sorted(maps.Keys(procs)) {
 		p := procs[name]
-		list = append(list, buildplan.Process{Name: name, Run: p.Run, Memory: p.Memory, CPU: p.CPU})
+		list = append(list, buildplan.Process{Name: name, Run: p.Run, Memory: p.Memory, CPU: p.CPU, StopGrace: p.StopGrace})
 	}
 	return inConfig(buildplan.CheckProcesses(list))
 }
