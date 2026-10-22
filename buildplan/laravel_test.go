@@ -313,8 +313,9 @@ func TestAProcessMayNameItsPort(t *testing.T) {
 // first, and its failure is the deploy's; the views' isn't.
 func TestALaravelAppsViewsAreCachedAsItsReleaseRuns(t *testing.T) {
 	const runner = "php-cli .homeport/release.php ./bin"
+	// none said: Laravel's migrations (release.go)
 	p := detect(t, laravel(nil), buildplan.Settings{})
-	if p.Release != runner {
+	if p.Release != runner+" php-cli artisan migrate --force" {
 		t.Fatalf("release: %q", p.Release)
 	}
 	if !strings.Contains(p.Command, "/.homeport/release.php") || strings.Contains(p.Command, "view:cache") {
@@ -332,7 +333,7 @@ func TestALaravelAppsViewsAreCachedAsItsReleaseRuns(t *testing.T) {
 		t.Errorf("homeport.yaml: %q", p.Release)
 	}
 	// Octane, and SSR beside the web, too
-	if p := detect(t, laravel([]string{"laravel/octane"}), buildplan.Settings{}); p.Release != runner {
+	if p := detect(t, laravel([]string{"laravel/octane"}), buildplan.Settings{}); p.Release != runner+" php-cli artisan migrate --force" {
 		t.Errorf("octane: %q", p.Release)
 	}
 	// one too long to run through it runs as it is, and the plan says so

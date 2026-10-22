@@ -35,7 +35,8 @@ func (a *app) usage() {
                       it's live, then prints its address. In a folder
                       nothing links, its app (named after the folder, or
                       --app) is created, asked first, and linked
-                      [--run <cmd>] [--release <cmd>] [--process name=cmd]…
+                      [--run <cmd>] [--release <cmd> | --no-release]
+                      [--process name=cmd]…
                       [--save] [--unset run|release|processes|octane]…
                       [--team <slug> --app <name> [--env <name>]]
                       [--yes] [--detach] [--timeout 30m]

@@ -320,6 +320,23 @@ func TestAQuestionIsTheSameEachTime(t *testing.T) {
 	}
 }
 
+// no_release deploys with no release command, and the question says so.
+func TestDeployingWithNoReleaseByMCP(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	project(t, h)
+	p := &person{approve: true}
+	cs := mcpSession(t, h, p)
+	f.steps = []string{"uploaded", "deploying", "live"}
+	if text, isErr := callTool(t, cs, "deploy", map[string]any{"no_release": true}); isErr {
+		t.Fatalf("%s", text)
+	}
+	if len(f.deploys) != 1 || !f.deploys[0].Settings.NoRelease || len(p.asked) != 1 || !strings.Contains(p.asked[0], "--no-release") {
+		t.Fatalf("deploys %+v, asked %q", f.deploys, p.asked)
+	}
+}
+
 // Reading, variables and add-ons are any environment's - one its own CI
 // deploys too.
 func TestReadingAnEnvironmentHomeportDoesntBuild(t *testing.T) {
