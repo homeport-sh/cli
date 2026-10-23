@@ -33,6 +33,11 @@ jobs:
       - name: go test
         run: go test ./...
 
+      # @homeport/queue, against a stand-in for pg-boss
+      - name: "@homeport/queue"
+        run: bun test
+        working-directory: npm/queue
+
       # the release builds what a tag would, so a broken config fails here,
       # not at the tag
       - name: the release builds (GoReleaser snapshot)
