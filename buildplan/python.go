@@ -266,7 +266,7 @@ func (r reader) py(p *Plan, cfg fileConfig, run, python string) error {
 		if deps["uvicorn"] && !deps["gunicorn"] {
 			server, web = "uvicorn", "-m uvicorn --host 0.0.0.0 --port $PORT "+mod+".asgi:application"
 		} else {
-			server, web = "gunicorn", "-m gunicorn --bind 0.0.0.0:$PORT "+r.gunicornWorkers()+mod+".wsgi"
+			server, web = "gunicorn", "-m gunicorn --bind 0.0.0.0:$PORT "+r.gunicornConfig()+mod+".wsgi"
 		}
 		if !deps["whitenoise"] {
 			p.Warnings = append(p.Warnings, "a Django app serves its static files (/static/) only through something like WhiteNoise: "+
@@ -280,7 +280,7 @@ func (r reader) py(p *Plan, cfg fileConfig, run, python string) error {
 		case err == nil && framework == "FastAPI":
 			server, web = "uvicorn", "-m uvicorn --host 0.0.0.0 --port $PORT "+entry
 		case err == nil:
-			server, web = "gunicorn", "-m gunicorn --bind 0.0.0.0:$PORT "+r.gunicornWorkers()+entry
+			server, web = "gunicorn", "-m gunicorn --bind 0.0.0.0:$PORT "+r.gunicornConfig()+entry
 		}
 	default:
 		if run == "" {
@@ -311,19 +311,39 @@ func (r reader) py(p *Plan, cfg fileConfig, run, python string) error {
 	if cfg.Build.Artifact == "" {
 		p.Artifact, p.StaticFallback = BundleDir, false
 	}
-	p.assemble = pyAssemble(p.Artifact, rel)
+	p.assemble = pyAssemble(p.Artifact, rel, server == "gunicorn" && r.gunicornConfig() != "")
 	p.Command = join(p.build, p.assemble)
 	return nil
 }
 
-// gunicornWorkers is gunicorn's workers when the app sets none (a
-// gunicorn.conf.py may): 2 processes of 4 threads (gthread), as a sync
-// worker alone serves one request at a time. With a trailing space.
-func (r reader) gunicornWorkers() string {
+// gunicornConf is homeport's gunicorn config, in the bundle, when the app
+// has none of its own: 2 workers (the app's WEB_CONCURRENCY, if it's a
+// number) of 4 threads each (gthread), as a sync worker alone serves one
+// request at a time. A config file, not flags, so the app's variables win:
+// gunicorn puts GUNICORN_CMD_ARGS above it. No single quotes: it's written
+// in some.
+var gunicornConf = []string{
+	"# written by homeport: the app has no gunicorn.conf.py",
+	"import os",
+	"try:",
+	`    workers = int(os.environ.get("WEB_CONCURRENCY", "2"))`,
+	"except ValueError:",
+	"    workers = 2",
+	"if workers < 1:",
+	"    workers = 2",
+	"threads = 4",
+}
+
+const gunicornConfPath = ".homeport/gunicorn.conf.py"
+
+// gunicornConfig is the -c that runs gunicorn with homeport's config, when
+// the app has no gunicorn.conf.py (which gunicorn reads itself), with a
+// trailing space; "" when it has one.
+func (r reader) gunicornConfig() string {
 	if r.exists("gunicorn.conf.py") {
 		return ""
 	}
-	return "--workers 2 --threads 4 "
+	return "-c " + gunicornConfPath + " "
 }
 
 // pyInstall is how the app's dependencies are installed into the
@@ -557,9 +577,15 @@ func pyServer(py, server string) string {
 // runs (IDLE, Tk, ensurepip, pip); the interpreter as bin; and everything
 // compiled, since a release is read-only and Python could write no
 // __pycache__ of its own (unchecked-hash: no source stat on import either).
-func pyAssemble(b string, rel pythonRelease) string {
+// conf: with homeport's gunicorn config (gunicornConf), compiled with the
+// rest.
+func pyAssemble(b string, rel pythonRelease, conf bool) string {
 	line := pythonLine(rel.Version)
 	lib := b + "/lib/python" + line
+	writeConf := ""
+	if conf {
+		writeConf = "printf '%s\\n' '" + strings.Join(gunicornConf, "' '") + "' > " + b + "/" + gunicornConfPath
+	}
 	return join(
 		"{ [ ! -d bin ] || { echo 'homeport: the app has a bin/ folder, and a Python bundle'\"'\"'s bin is its interpreter: rename the folder' >&2; exit 1; }; }",
 		"rm -rf "+b+" && mkdir -p "+b+"/.homeport",
@@ -571,6 +597,7 @@ func pyAssemble(b string, rel pythonRelease) string {
 		"rm -rf "+path.Join(lib, "idlelib")+" "+path.Join(lib, "tkinter")+" "+path.Join(lib, "turtledemo")+" "+path.Join(lib, "ensurepip")+" "+
 			lib+"/site-packages/pip "+lib+"/site-packages/pip-*.dist-info",
 		"cp "+pyBuild+"/python/bin/python"+line+" "+b+"/bin",
+		writeConf,
 		"{ "+b+"/bin -m compileall -q -j 0 --invalidation-mode unchecked-hash "+b+" || echo 'homeport: the files above don'\"'\"'t compile: Python says so if they'\"'\"'re imported' >&2; }")
 }
 
