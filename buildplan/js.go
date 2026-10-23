@@ -1244,7 +1244,37 @@ func nodeMajor(major string, bad error) (string, error) {
 	return "", bad
 }
 
-// fetchBun puts the pinned Bun on PATH in a Node image, by its checksum.
+// frontEnd is how a PHP or Python app's front-end assets are built, with
+// Bun, after its own dependencies are installed: its package.json's build
+// script, and its SSR build when it renders on the server (Inertia's). ""
+// when it builds none.
+func (r reader) frontEnd(ssr bool) string {
+	if !r.exists("package.json") {
+		return ""
+	}
+	build := ""
+	if r.hasScript("build") {
+		build = "bun run build"
+	}
+	if ssr {
+		if r.hasScript("build:ssr") {
+			build = "bun run build:ssr" // the client's build and the SSR one
+		} else {
+			build = join(build, "bun run vite build --ssr")
+		}
+	}
+	if build == "" {
+		return ""
+	}
+	install := "bun install"
+	if r.exists("bun.lock") || r.exists("bun.lockb") {
+		install += " --frozen-lockfile"
+	}
+	return install + " && " + build
+}
+
+// fetchBun puts the pinned Bun on PATH in an image without it (Node's,
+// Python's), by its checksum.
 var fetchBun = "mkdir -p /tmp/homeport/bin && export PATH=/tmp/homeport/bin:$PATH && " +
 	"case $(uname -m) in x86_64) a=x64 s=" + bunSum["x86_64"] + " ;; aarch64) a=aarch64 s=" + bunSum["aarch64"] + " ;; *) echo \"homeport: no Bun for $(uname -m)\" >&2; exit 1 ;; esac && " +
 	"curl -fsSL https://registry.npmjs.org/@oven/bun-linux-$a/-/bun-linux-$a-" + BunVersion + ".tgz | tar -xzO package/bin/bun > /tmp/homeport/bin/bun && " +

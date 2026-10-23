@@ -49,7 +49,7 @@ func TestAPythonAppShipsAsABundleWithItsInterpreter(t *testing.T) {
 	if p.Runtime != "python" || p.RuntimeVersion != buildplan.DefaultPython || p.PackageManager != "uv" {
 		t.Errorf("runtime: %s %s %s", p.Runtime, p.RuntimeVersion, p.PackageManager)
 	}
-	if p.Run != "-m gunicorn --bind 0.0.0.0:$PORT app:app" {
+	if p.Run != "-m gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 app:app" {
 		t.Errorf("run: %s", p.Run)
 	}
 	if err := buildplan.CheckRun(p.Run); err != nil {
@@ -58,7 +58,7 @@ func TestAPythonAppShipsAsABundleWithItsInterpreter(t *testing.T) {
 	// uv and CPython by their pinned sums, cached in the build's home; the
 	// lock's exact versions, installed into that CPython
 	for _, want := range []string{"sha256sum -c", "$HOME/.cache/homeport", "python-build-standalone/releases/download/",
-		"install_only_stripped.tar.gz", "uv export --frozen --no-dev --no-editable", "uv pip install", "--no-deps"} {
+		"install_only_stripped.tar.gz", "uv export --locked --no-dev --no-editable", "run uv lock", "uv pip install", "--no-deps"} {
 		if !strings.Contains(p.Install, want) {
 			t.Errorf("install has no %q: %s", want, p.Install)
 		}
@@ -107,7 +107,7 @@ func TestPythonFrameworks(t *testing.T) {
 		release, releaseOf string
 	}{
 		{"django on gunicorn", pyproject([]string{"Django>=5.2", "gunicorn"}, "manage.py", managePy),
-			"Django", "-m gunicorn --bind 0.0.0.0:$PORT mysite.wsgi", "manage.py migrate --noinput", "Django"},
+			"Django", "-m gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 mysite.wsgi", "manage.py migrate --noinput", "Django"},
 		// uvicorn and no gunicorn: the ASGI app
 		{"django on uvicorn", pyproject([]string{"django", "uvicorn[standard]"}, "manage.py", managePy),
 			"Django", "-m uvicorn --host 0.0.0.0 --port $PORT mysite.asgi:application", "manage.py migrate --noinput", "Django"},
@@ -116,7 +116,7 @@ func TestPythonFrameworks(t *testing.T) {
 		{"fastapi with alembic", pyproject([]string{"fastapi", "alembic", "sqlalchemy"}, "main.py", "app = FastAPI()\n", "alembic.ini", "[alembic]\n"),
 			"FastAPI", "-m uvicorn --host 0.0.0.0 --port $PORT main:app", "-m alembic upgrade head", "Alembic"},
 		{"flask in wsgi.py", map[string]string{"requirements.txt": "Flask==3.1.2\n", "wsgi.py": "from myapp import create_app\napplication = create_app()\nserver = Flask('x')\n"},
-			"Flask", "-m gunicorn --bind 0.0.0.0:$PORT wsgi:server", "", ""},
+			"Flask", "-m gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 wsgi:server", "", ""},
 	} {
 		p := detect(t, tc.files, buildplan.Settings{})
 		if p.Framework != tc.framework || p.Run != tc.run || p.Release != tc.release {
@@ -245,9 +245,81 @@ func TestPythonOrJavaScript(t *testing.T) {
 		t.Errorf("js: %+v", p)
 	}
 	dj := pyproject([]string{"django", "gunicorn"}, "manage.py", managePy, "package.json", `{"devDependencies":{"tailwindcss":"^4"}}`, "bun.lock", bunLock)
-	p := detect(t, dj, buildplan.Settings{})
-	if p.Toolchain != "python" || !slices.ContainsFunc(p.Warnings, func(w string) bool { return strings.Contains(w, "package.json") }) {
+	if p := detect(t, dj, buildplan.Settings{}); p.Toolchain != "python" {
 		t.Errorf("django: %+v", p)
+	}
+}
+
+// A Python app's front-end assets: a package.json with a build script is
+// built with the pinned Bun (fetched by its checksum, as a Node app's build
+// fetches it), before collectstatic picks up what it built; node_modules
+// never ships. A package.json with no build script builds nothing.
+func TestAPythonAppsFrontEndIsBuilt(t *testing.T) {
+	pkg := `{"scripts":{"build":"vite build"},"devDependencies":{"vite":"^8","tailwindcss":"^4"}}`
+	p := detect(t, pyproject([]string{"django", "gunicorn", "whitenoise"}, "manage.py", managePy, "package.json", pkg, "bun.lock", bunLock), buildplan.Settings{})
+	if p.Toolchain != "python" || p.Framework != "Django" {
+		t.Fatalf("plan: %+v", p)
+	}
+	for _, want := range []string{"registry.npmjs.org/@oven/bun-linux-$a/-/bun-linux-$a-" + buildplan.BunVersion + ".tgz", "sha256sum -c",
+		"bun install --frozen-lockfile && bun run build"} {
+		if !strings.Contains(p.Install, want) {
+			t.Errorf("install has no %q: %s", want, p.Install)
+		}
+	}
+	all := p.Install + " && " + p.Command
+	if b, c := strings.Index(all, "bun run build"), strings.Index(all, "collectstatic"); b < 0 || c < 0 || b > c {
+		t.Errorf("the assets are built after collectstatic: %s", all)
+	}
+	if !strings.Contains(p.Command, "--exclude=./node_modules") {
+		t.Errorf("node_modules ships: %s", p.Command)
+	}
+	if slices.ContainsFunc(p.Warnings, func(w string) bool { return strings.Contains(w, "package.json") || strings.Contains(w, "front-end") }) {
+		t.Errorf("warnings: %q", p.Warnings)
+	}
+
+	// Flask's too, with npm's lockfile: still Bun's install, as a PHP app's
+	p = detect(t, map[string]string{"requirements.txt": "flask\n", "app.py": "app = Flask(__name__)\n",
+		"package.json": pkg, "package-lock.json": "{}"}, buildplan.Settings{})
+	if !strings.Contains(p.Install, "bun install && bun run build") {
+		t.Errorf("flask: %s", p.Install)
+	}
+
+	// no build script: no Bun
+	p = detect(t, pyproject([]string{"django"}, "manage.py", managePy, "package.json", `{"devDependencies":{"prettier":"^3"}}`), buildplan.Settings{})
+	if strings.Contains(p.Install, "bun") {
+		t.Errorf("no build script: %s", p.Install)
+	}
+}
+
+// gunicorn runs 2 workers of 4 threads each (gthread): a sync worker on its
+// own serves one request at a time. An app that sets its workers - a
+// gunicorn.conf.py, or its own start command - keeps its own.
+func TestGunicornsWorkers(t *testing.T) {
+	files := pyproject([]string{"flask", "gunicorn"}, "app.py", "app = Flask(__name__)\n")
+	if p := detect(t, files, buildplan.Settings{}); !strings.Contains(p.Run, "--workers 2 --threads 4") {
+		t.Errorf("run: %s", p.Run)
+	}
+	files["gunicorn.conf.py"] = "workers = 8\n"
+	if p := detect(t, files, buildplan.Settings{}); p.Run != "-m gunicorn --bind 0.0.0.0:$PORT app:app" {
+		t.Errorf("gunicorn.conf.py: %s", p.Run)
+	}
+	delete(files, "gunicorn.conf.py")
+	if p := detect(t, files, buildplan.Settings{Run: "-m gunicorn --bind 0.0.0.0:$PORT -w 3 app:app"}); p.Run != "-m gunicorn --bind 0.0.0.0:$PORT -w 3 app:app" {
+		t.Errorf("start command: %s", p.Run)
+	}
+	// uvicorn: one process, as before
+	if p := detect(t, pyproject([]string{"fastapi"}, "main.py", "app = FastAPI()\n"), buildplan.Settings{}); strings.Contains(p.Run, "--workers") {
+		t.Errorf("uvicorn: %s", p.Run)
+	}
+}
+
+// A uv.lock that doesn't match pyproject.toml fails the build, saying to
+// run uv lock: the build installs what was locked, or nothing.
+func TestAStaleUVLockFailsTheBuild(t *testing.T) {
+	p := detect(t, pyproject([]string{"flask"}, "app.py", "app = Flask(__name__)\n"), buildplan.Settings{})
+	if !strings.Contains(p.Install, "uv export --locked") || strings.Contains(p.Install, "--frozen") ||
+		!strings.Contains(p.Install, "uv.lock is out of date") || !strings.Contains(p.Install, "run uv lock") {
+		t.Errorf("install: %s", p.Install)
 	}
 }
 
@@ -280,5 +352,31 @@ func TestPythonsArePinned(t *testing.T) {
 		if !strings.Contains(p.Install, arch+")") {
 			t.Errorf("no %s: %s", arch, p.Install)
 		}
+	}
+}
+
+// The build settings' Python, one of the lines homeport runs, over what the
+// project says; a deploy's over the app's.
+func TestThePythonSet(t *testing.T) {
+	files := pyproject([]string{"flask"}, "app.py", "app = Flask(__name__)\n", ".python-version", "3.13\n")
+	p := detect(t, files, buildplan.Settings{Python: "3.12"})
+	if !strings.HasPrefix(p.RuntimeVersion, "3.12.") || !strings.Contains(p.RuntimeReason, "the build settings") || !strings.Contains(p.Command, "lib/python3.12") {
+		t.Errorf("set: %s (%s)", p.RuntimeVersion, p.RuntimeReason)
+	}
+	if s := (buildplan.Settings{Python: "3.12"}).With(buildplan.Settings{Python: "3.15"}); s.Python != "3.15" || s.IsZero() {
+		t.Errorf("with: %+v", s)
+	}
+	for _, bad := range []string{"3.11", "3", "3.14.9", "python3.14", "2.7"} {
+		if err := (buildplan.Settings{Python: bad}).Check(); err == nil || !strings.Contains(err.Error(), "3.12, 3.13, 3.14, 3.15") {
+			t.Errorf("%q: %v", bad, err)
+		}
+	}
+	if err := (buildplan.Settings{Python: "3.15"}).Check(); err != nil {
+		t.Error(err)
+	}
+	// a JavaScript app with a Python set: it isn't Python's to say
+	if _, err := buildplan.Detect(repo(map[string]string{"package.json": `{"scripts":{"build":"vite build"}}`, "bun.lock": bunLock}),
+		buildplan.Settings{Python: "3.13"}); err == nil || !strings.Contains(err.Error(), "Python") {
+		t.Errorf("js: %v", err)
 	}
 }

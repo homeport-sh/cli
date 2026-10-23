@@ -612,26 +612,37 @@ design, and what's still open, is in
 
 | Files | Installed with |
 |---|---|
-| `pyproject.toml` + `uv.lock` | `uv export --frozen --no-dev`, then `uv pip install` of exactly that |
+| `pyproject.toml` + `uv.lock` | `uv export --locked --no-dev`, then `uv pip install` of exactly that. A `uv.lock` that `pyproject.toml` has moved past fails the build: run `uv lock` and commit it |
 | `requirements.txt` | `uv pip install -r requirements.txt` |
 | `pyproject.toml` alone, `poetry.lock`, `Pipfile` | refused, with how to move to `uv.lock` or `requirements.txt` |
 
 A Python app beside a `package.json` is Python only when a Python framework
-is recognised. Its front-end assets aren't built yet.
+is recognised. When that `package.json` has a `build` script, its front-end
+is built with homeport's pinned Bun (1.4.4, fetched by its sha256, as a
+Laravel app's is): `bun install` (`--frozen-lockfile` with a `bun.lock`),
+then `bun run build`, after the Python dependencies and before
+`collectstatic`, so Django collects what it built. `node_modules` never
+ships.
 
 | Framework | Recognised by | Start command | Release command |
 |---|---|---|---|
-| Django | `manage.py` and `django` | `-m gunicorn --bind 0.0.0.0:$PORT <project>.wsgi`; with uvicorn and no gunicorn, `-m uvicorn ... <project>.asgi:application` | `manage.py migrate --noinput` |
+| Django | `manage.py` and `django` | `-m gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 <project>.wsgi`; with uvicorn and no gunicorn, `-m uvicorn ... <project>.asgi:application` | `manage.py migrate --noinput` |
 | FastAPI | `fastapi`, and `app = FastAPI(` at the top of `main.py`, `app.py`, `app/main.py`, ... | `-m uvicorn --host 0.0.0.0 --port $PORT main:app` | `-m alembic upgrade head`, with `alembic.ini` and `alembic` |
-| Flask | `flask`, and `app = Flask(` in the same files or `wsgi.py` | `-m gunicorn --bind 0.0.0.0:$PORT app:app` | the same, for Alembic (Flask-Migrate) |
+| Flask | `flask`, and `app = Flask(` in the same files or `wsgi.py` | `-m gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 app:app` | the same, for Alembic (Flask-Migrate) |
 | anything else | `pyproject.toml` or `requirements.txt` | set it: args to python, like `-m myapp` | none |
 
 When the app's dependencies have no gunicorn or uvicorn, the build installs
 a pinned one. A Django build runs `manage.py collectstatic --noinput`, and
 goes on without it, saying so, if it fails. Serving `/static/` is the app's
-job: add WhiteNoise.
+job: add WhiteNoise (the build warns when it's missing).
 
-**Python version**: `.python-version`, else `runtime.txt`, else the
+gunicorn runs 2 worker processes of 4 threads each (gthread), unless the
+app has a `gunicorn.conf.py`, which then says, or its own start command.
+`WEB_CONCURRENCY` and `GUNICORN_CMD_ARGS` don't override the `--workers`
+homeport passes: set the start command, or add a `gunicorn.conf.py`.
+
+**Python version**: the build settings' (a line, like `3.13`), else
+`.python-version`, else `runtime.txt`, else the
 default (3.14) if `requires-python` allows it, else the newest it allows.
 Offered: 3.12, 3.13, 3.14 and 3.15, each at homeport's pinned patch.
 

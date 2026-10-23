@@ -1,10 +1,12 @@
 # Python apps (Django, FastAPI, Flask)
 
-- **Status:** proposed. The detection is written and unit-tested on branch
-  `python-apps` (homeport-sh/cli#48, draft). The e2e passes in CI on x86-64:
-  Django, FastAPI and Flask are built in the plan's image and run read-only
-  from the bundle in ubuntu:24.04, with migrate, static files and SIGTERM
-  checked. Nothing is released, and the engine is not changed.
+- **Status:** decided, targeted for the first release. The owner's
+  decisions are under "Decisions" below. Built on branch `python-apps`
+  (homeport-sh/cli#48): detection, plan, unit tests, and an e2e that builds
+  Django (with a Tailwind build), FastAPI and Flask in the plan's image and
+  runs each read-only from the bundle in ubuntu:24.04, on x86-64 and arm64.
+  The engine is not changed. The dashboard's build settings are
+  homeport-sh/cloud's own PR.
 - **Date:** 2026-10-22
 - **Why:** a Python web app (Django, FastAPI, Flask) can't be deployed today.
   `build-plan` finds no `go.mod`, `composer.json` or lockfile and stops. There
@@ -79,7 +81,7 @@ over a `package.json` only when a Python framework is recognised.
 
 | Files | What's installed | Notes |
 |---|---|---|
-| `pyproject.toml` + `uv.lock` | `uv export --frozen --no-dev --no-editable`, then `uv pip install --no-deps` of that | preferred. Exact versions with hashes, the project itself when it's a package (`[build-system]`) |
+| `pyproject.toml` + `uv.lock` | `uv export --locked --no-dev --no-editable`, then `uv pip install --no-deps` of that | preferred. Exact versions with hashes, the project itself when it's a package (`[build-system]`) |
 | `requirements.txt` | `uv pip install -r requirements.txt` | as pinned as the file is |
 | `pyproject.toml` alone | error: commit `uv.lock` (`uv lock`) | as `composer.lock` is required |
 | `Pipfile` / `Pipfile.lock`, `poetry.lock` alone | error that says how to move to uv or `requirements.txt` | out of scope for now |
@@ -109,6 +111,8 @@ already installed.
 
 **Python version**, one line from those offered (`pythonReleases`):
 
+0. the build settings' `python` (a line, like `3.13`; `Settings.Python`,
+   checked against `PythonLines()`), set in the dashboard;
 1. `.python-version`'s first line (`3.13`, `3.13.5`, `cpython-3.13`), by its
    major.minor;
 2. `runtime.txt` (`python-3.12.1`, as Heroku reads it);
@@ -139,10 +143,17 @@ Install (one line in the plan):
    (the app's build cache volume), so later builds skip the download when the
    sum still matches. Unpack into `.homeport-build/` in the app's folder, not
    `/tmp`: the build's `/tmp` is a 1 GB tmpfs, and torch alone is bigger.
-2. Install the deps into that CPython's own `site-packages`, compiling bytecode
-   (`--compile-bytecode`). uv's cache is `$HOME/.cache/uv`, which persists per
-   app.
+2. Install the deps into that CPython's own `site-packages`. With a
+   `uv.lock`, `uv export --locked` first: a lock that `pyproject.toml` has
+   moved past fails the build, saying to run `uv lock`. uv's cache is
+   `$HOME/.cache/uv`, which persists per app.
 3. Make sure the server module imports (see "The server" above).
+4. The front-end, when a `package.json` has a `build` script: homeport's
+   pinned Bun is fetched by its sha256 (`fetchBun`, as a Node image's build
+   fetches it), then `bun install` (`--frozen-lockfile` with a `bun.lock`)
+   and `bun run build` - the same `frontEnd` a Laravel app's install runs.
+   This is before `collectstatic`, so Django collects what it built.
+   `node_modules` never ships (the bundle's copy excludes it).
 
 Command (the build, then the bundle):
 
@@ -182,9 +193,12 @@ Flask 66 MB, FastAPI 74 MB, Django 112 MB. A Node bundle is about 120 MB.
   hangs. A person who wants a longer drain sets `stop_grace:` and, for
   gunicorn, `graceful_timeout` in `gunicorn.conf.py`, which gunicorn reads
   from the cwd.
-- **Workers.** No worker count is passed. gunicorn's default is 1 sync
-  worker; both servers read `WEB_CONCURRENCY`, and gunicorn reads
-  `gunicorn.conf.py`. See open question 2.
+- **Workers.** gunicorn gets `--workers 2 --threads 4` (gthread): a sync
+  worker alone serves one request at a time. An app with a
+  `gunicorn.conf.py` gets no flags, so its config says; a start command
+  someone set is theirs as it is. `WEB_CONCURRENCY` and `GUNICORN_CMD_ARGS`
+  can't override flags on gunicorn's command line, so the docs say to set
+  the start command or add a `gunicorn.conf.py`. uvicorn runs one process.
 - **Static files.** A Django app serves its own static files only with
   WhiteNoise (or similar). With collectstatic and no `whitenoise` in the deps,
   the plan warns that `/static/` will 404. FastAPI's `StaticFiles` and Flask's
@@ -203,7 +217,8 @@ Flask 66 MB, FastAPI 74 MB, Django 112 MB. A Node bundle is about 120 MB.
 |---|---|
 | A dep has no wheel for the platform and needs a C library not on the box (psycopg2 from source, then libpq at runtime) | Builds, since noble has `libpq-dev`, but fails at import on the box: the box has no `libpq.so.5`. Use `psycopg[binary]` / `psycopg2-binary`, or a future package. Said in the docs. |
 | Settings import needs a secret at collectstatic time | Built without collectstatic, with a warning. The app's build variables are passed to the build, so setting it there fixes it. |
-| `uv.lock` is out of date with `pyproject.toml` | `uv export --frozen` uses the lock as it is. A stale lock installs what was locked, not an error. `--locked` would refuse instead; see open question 4. |
+| `uv.lock` is out of date with `pyproject.toml` | `uv export --locked` fails the build, and the log says to run `uv lock` and commit it. |
+| The front-end build fails (`bun run build`) | The build fails, as a Laravel app's does. |
 | GitHub (PBS and uv downloads) is down | The first build of an app fails. Later builds use the cached archives. Option B removes this. |
 | A dep compiles for > 15 min or > 4 GB | The build's limits apply as for any toolchain. |
 | An app writes into its own folder at runtime (SQLite next to `manage.py`, uploaded media) | Read-only: it fails. Boxes are stateless, so data belongs in Postgres or object storage. Said in the docs. |
@@ -211,47 +226,88 @@ Flask 66 MB, FastAPI 74 MB, Django 112 MB. A Node bundle is about 120 MB.
 ## Test plan
 
 - Unit (`buildplan/python_test.go`): detection per framework, entry
-  discovery, Django project name, server choice, release detection, version
-  choice (each source, the PEP 440 forms, errors), the lockfile and
-  Pipfile/Poetry errors, JS-with-requirements.txt staying JS, Files() listing
-  the files read, and the plan's install and command shape (pinned sums,
-  layout, exclusions).
-- e2e (`e2e/python-examples.sh`, in CI's `examples` job): Django (gunicorn,
-  WhiteNoise, collectstatic, migrate as the release command against SQLite in
-  `/tmp`), FastAPI (uvicorn) and Flask (gunicorn) examples are built in the
-  plan's own image with the plan's install and command. Each is then run,
-  alone, from the bundle in a bare `ubuntu:24.04` as `./bin <run>`, read-only,
-  checked over HTTP, and sent SIGTERM.
-- On a box, before release: one Django app deployed through the hosted builder
-  on x86-64 and arm64, with a cold wake time measured against a Node app's.
+  discovery, Django project name, server choice and gunicorn's workers,
+  release detection, version choice (the build settings, each file, the
+  PEP 440 forms, errors), the lockfile and Pipfile/Poetry errors, a stale
+  `uv.lock`, the front-end build and its order, JS-with-requirements.txt
+  staying JS, Files() listing the files read, and the plan's install and
+  command shape (pinned sums, layout, exclusions).
+- e2e (`e2e/python-examples.sh`, CI's `python-examples` job, on
+  `ubuntu-24.04` and `ubuntu-24.04-arm`): Django (gunicorn, WhiteNoise, a
+  Tailwind build with Bun, collectstatic, migrate as the release command
+  against SQLite in `/tmp`), FastAPI (uvicorn) and Flask (gunicorn) are built
+  in the plan's own image with the plan's install and command. Each is then
+  run, alone, from the bundle in a bare `ubuntu:24.04` as `./bin <run>`,
+  read-only, checked over HTTP (the Tailwind CSS served with the page's
+  classes in it), and sent SIGTERM. A FastAPI copy with a dependency added
+  after its lock must fail the build, saying to run `uv lock`.
 
-## Open questions for the owner
+### On a box, before release
 
-1. **Python lines and default.** 3.12-3.15 offered, 3.14 the default. 3.15.0
-   came out on 2026-10-01; some binary wheels (pydantic-core, psycopg) can lag
-   a month or two, so it isn't the default yet.
-2. **Worker defaults.** gunicorn's default is 1 sync worker: one slow request
-   blocks the app. Pass `--workers 2 --threads 4` (gthread) when nothing is
-   set, as PHP Octane defaults to 2 workers? Memory is about 60 MB per Django
-   worker.
-3. **Option A vs B** (above): accept a GitHub download on each app's first
-   build, or own a build image.
-4. **A stale `uv.lock`:** install it as it is (`--frozen`, as drafted), or
-   fail the build (`--locked`)?
-5. **Django static files:** is a warning enough, or should homeport serve
-   `STATIC_ROOT` itself at the edge (a platform feature, not app-side)?
-6. **Front-end assets** in a Python app (a `package.json` with Tailwind or
-   Vite beside Django): not built in v1, because the image has no Node. Laravel
-   gets Bun in its base image. Add Bun to the Python build the same way?
+Run by someone with the platform's access, with the released CLI on the
+builders (the FLEET CLI pin). Each step says what passes.
+
+1. **Deploy Django on x86-64.** A fresh app from a repo like
+   `e2e/python/django` (Tailwind, WhiteNoise, `uv.lock`) through the hosted
+   builder. Pass: the build log shows uv and CPython fetched and their sums
+   checked, `tailwindcss` running, collectstatic, compileall; the release
+   command (`manage.py migrate --noinput`) runs and the release goes live.
+2. **It serves.** `/` answers 200; `/static/build/app.css` 200 with the
+   Tailwind output; `/static/site.css` 200; a missing page 404 (not 500).
+3. **The second build is cached.** Redeploy with no change. Pass: no
+   download of uv or CPython (the archives come from `$HOME/.cache/homeport`),
+   and the install is faster than the first.
+4. **Sleep and wake.** Let it sleep, then request `/`. Measure the cold wake
+   (time to the first byte) beside a Node app on the same host. Pass: within
+   about 1.5x of the Node app's.
+5. **Stop grace.** Deploy again while a slow request (a 10s view) is in
+   flight. Pass: the request completes; the old release exits within the
+   stop grace.
+6. **TLS out.** From the app, `urllib.request.urlopen("https://example.com")`
+   (a view, or a release command `-c ...`). Pass: it verifies, with the
+   host's CA bundle the sandbox mounts.
+7. **Postgres.** A Django app with `psycopg[binary]` and `DATABASE_URL` to
+   the partner database. Pass: migrate runs as the release command, and a
+   page reads a row.
+8. **FastAPI and Flask**, one each, with no server in their deps. Pass: the
+   build says it installs the pinned uvicorn or gunicorn, and `/` answers.
+9. **arm64.** Steps 1, 2 and 4 on an arm64 host.
+10. **The dashboard.** For a Python app: no Runtime (Bun/Node) or Octane
+    field; a Python version field offering 3.12-3.15. Set 3.13 and deploy.
+    Pass: the build log fetches cpython-3.13, and the plan's runtime says
+    3.13 from the build settings. Clear it: the next build uses what the
+    project says again.
+11. **Failure messages.** A repo with a stale `uv.lock`: the build fails
+    saying to run `uv lock`. A repo with `poetry.lock` only: the plan says
+    how to move to uv.
+
+## Decisions (owner, 2026-10-22)
+
+1. **Python lines and default:** 3.12-3.15 offered, 3.14 the default.
+2. **Workers:** gunicorn gets `--workers 2 --threads 4` (gthread), unless
+   the app's own start command or `gunicorn.conf.py` sets them.
+3. **Runtime delivery:** option A - downloaded at build, sha256-pinned,
+   cached per app.
+4. **A stale `uv.lock`:** fails the build (`--locked`), saying to run
+   `uv lock`.
+5. **Django static files:** a warning when WhiteNoise is missing.
+6. **Front-end assets:** built with the pinned Bun, as a Laravel app's are
+   (the shared `frontEnd`), before `collectstatic`; `node_modules` never
+   ships.
+
+## Still open
+
+- `WEB_CONCURRENCY` can't change gunicorn's workers while homeport passes
+  `--workers`. Today the answer is a start command or a `gunicorn.conf.py`.
+  If people expect the variable to work, homeport could leave the flags
+  out when the app's variables set it - that needs the variables at plan
+  time.
 
 ## Effort
 
-- Done on the branch: detection, plan, unit tests, examples, an e2e that is
-  green in CI, and this note.
-- To ship: owner decisions 1-4 (each a constant or one line), the e2e run
-  green on CI, then a box test on both archs (half a day). Then the
-  dashboard's build settings: a Python framework shows no Octane or Bun/Node
-  runtime field. Today `runtime` only accepts bun or node, so a Python version
-  override isn't offered; `.python-version` is the way (half a day if wanted).
-  Then the website docs (half a day). **About 2 days in all**, no engine
-  release.
+- Done on the branch: detection, plan, the decisions above, unit tests,
+  examples, an e2e on both archs, and this note. The dashboard's Python
+  fields are homeport-sh/cloud's own PR, which needs a CLI release with
+  `Settings.Python` first.
+- To ship: the box test plan above (half a day), then the website docs.
+  No engine release.

@@ -126,33 +126,6 @@ func (r reader) inertiaSSR() bool {
 	return false
 }
 
-// phpAssets is what a PHP app's install runs after composer: its front-end
-// build, and its SSR build when it renders on the server.
-func (r reader) phpAssets(ssr bool) string {
-	if !r.exists("package.json") {
-		return ""
-	}
-	build := ""
-	if r.hasScript("build") {
-		build = "bun run build"
-	}
-	if ssr {
-		if r.hasScript("build:ssr") {
-			build = "bun run build:ssr" // the client's build and the SSR one
-		} else {
-			build = join(build, "bun run vite build --ssr")
-		}
-	}
-	if build == "" {
-		return ""
-	}
-	install := "bun install"
-	if r.exists("bun.lock") || r.exists("bun.lockb") {
-		install += " --frozen-lockfile"
-	}
-	return install + " && " + build
-}
-
 // startSSR matches a composer script that starts Inertia's SSR server, and
 // the runtime it names
 var startSSRRe = regexp.MustCompile(`inertia:start-ssr\b[^"']*--runtime[= ](bun|node)\b`)
