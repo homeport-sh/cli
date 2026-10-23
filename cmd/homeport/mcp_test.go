@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/homeport-sh/cli/internal/cloud"
 	"github.com/homeport-sh/cli/internal/config"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -63,7 +64,7 @@ func callTool(t *testing.T, cs *mcp.ClientSession, name string, args map[string]
 }
 
 var (
-	readTools  = []string{"list_apps", "deploy_status", "runtime_logs", "list_variables", "get_database", "usage", "list_domains", "get_domain"}
+	readTools  = []string{"list_apps", "deploy_status", "runtime_logs", "list_variables", "get_database", "usage", "list_domains", "get_domain", "queue_status"}
 	writeTools = []string{"deploy", "create_app", "set_variables", "unset_variables", "create_database", "attach_database", "detach_database", "add_domain"}
 )
 
@@ -423,5 +424,22 @@ func TestMCPDomains(t *testing.T) {
 	}
 	if text, isErr := callTool(t, cs, "add_domain", with(map[string]any{"domain": "https://x.example.com"})); !isErr || len(yes.asked) != 1 {
 		t.Fatalf("not a domain, asked anyway: %v %s %q", isErr, text, yes.asked)
+	}
+}
+
+// The queue's status is read-only: how it runs, its last report, its drains.
+func TestMCPQueueStatus(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	f.queue = &cloud.Queue{Mode: "on_demand", Backend: "postgres", Command: "queue:drain", TimeoutSeconds: 600, Waiting: ptr(2),
+		Drains: []cloud.QueueDrain{{ID: "qd1", Trigger: "kick", Status: "succeeded", Processed: ptr(7), Reported: true}}}
+	cs := mcpSession(t, h, nil)
+	text, isErr := callTool(t, cs, "queue_status", blog)
+	if isErr || !strings.Contains(text, `"mode": "on_demand"`) || !strings.Contains(text, `"waiting": 2`) || !strings.Contains(text, `"processed": 7`) {
+		t.Fatalf("%v %s", isErr, text)
+	}
+	if got := strings.Join(f.queueCalls, "|"); got != "GET " {
+		t.Errorf("calls %s", got)
 	}
 }

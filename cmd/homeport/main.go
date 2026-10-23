@@ -67,6 +67,15 @@ func (a *app) usage() {
   homeport domains remove <domain>
                       removes one: it stops being served; asks first [--yes]
                       each [--env <name>] [--team <slug> --app <name>]
+  homeport queue status
+                      how an environment's background jobs run, what the
+                      last drain said is waiting, and its recent drains
+  homeport queue drain
+                      runs the app's drain here, with its .env, until the
+                      queue is empty; --remote starts one on homeport
+  homeport queue retry-failed
+                      runs its retry here; --remote on homeport
+                      each [--env <name>] [--team <slug> --app <name>]
   homeport token create --name <where>
                       a token for CI (HOMEPORT_TOKEN), printed once: for
                       one environment, and it acts there alone

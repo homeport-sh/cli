@@ -85,6 +85,9 @@ type fakeAPI struct {
 	created      []fakeCreate   // apps made (POST /v1/cli/teams/{team}/apps)
 	domains      []cloud.Domain // an app's platform domains, by name
 	domainCalls  []string       // each Domains API call: method, app and what follows /domains
+	queue        *cloud.Queue   // an app's queue (nil: it has none)
+	queueBusy    bool           // a drain is running: Drain now is refused
+	queueCalls   []string       // each Queue API call: method and what follows /queue
 	rollbacks    []struct {
 		Deploy     string `json:"deploy"`
 		RunRelease bool   `json:"run_release"`
@@ -384,6 +387,8 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 		names = append(names, slices.Collect(maps.Keys(f.files))...)
 		slices.Sort(names)
 		f.write(w, 200, names)
+	case strings.Contains(p, "/queue"):
+		f.serveQueue(w, r)
 	case strings.HasSuffix(p, "/logs"):
 		f.write(w, 200, map[string]any{"Cursor": "c2", "Lines": []map[string]any{{"Time": "2026-10-08T12:00:00Z", "Level": "error", "Message": "panic: boom", "Process": "web"}}})
 	case strings.Contains(p, "/domains"):
@@ -410,6 +415,26 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 		f.write(w, 200, map[string]any{"ID": "d1", "Status": s, "Detail": f.detail})
 	default:
 		f.t.Errorf("unexpected %s %s", r.Method, p)
+		w.WriteHeader(404)
+	}
+}
+
+// serveQueue is an app's queue: its status, a drain started now, its
+// failed jobs retried.
+func (f *fakeAPI) serveQueue(w http.ResponseWriter, r *http.Request) {
+	_, rest, _ := strings.Cut(r.URL.Path, "/queue")
+	f.queueCalls = append(f.queueCalls, r.Method+" "+rest)
+	switch {
+	case f.queue == nil:
+		f.write(w, 404, map[string]string{"error": "blog has no queue: deploy it with one"})
+	case r.Method == "GET" && rest == "":
+		f.write(w, 200, f.queue)
+	case r.Method == "POST" && rest == "/drain" && f.queueBusy:
+		f.write(w, 409, map[string]string{"error": "a drain is running: it works what's queued"})
+	case r.Method == "POST" && (rest == "/drain" || rest == "/retry-failed"):
+		f.write(w, 202, map[string]string{"id": "qd1", "status": "queued"})
+	default:
+		f.t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
 		w.WriteHeader(404)
 	}
 }

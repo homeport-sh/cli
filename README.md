@@ -33,6 +33,9 @@ homeport deploy     # upload the working tree, build it, follow it live
 | `homeport domains add <domain>` | adds one, and says the DNS records to set at its provider (the same one again is the one there) |
 | `homeport domains get <domain>` | one's status, why it isn't live, and its DNS records |
 | `homeport domains remove <domain>` | removes one: it's no longer served (asks first; `--yes`) |
+| `homeport queue status` | how an environment's background jobs run (on demand, always on), what the last drain said is waiting and when the next delayed job is due, and its recent drains |
+| `homeport queue drain` | runs the app's drain here, with its `.env`, against your local database; `--remote` starts one on homeport now |
+| `homeport queue retry-failed` | runs the queue's retry here; `--remote` on homeport |
 | `homeport mcp` | an MCP server on stdio for your editor or agent |
 | `homeport build-plan` | what a hosted build runs for this repository (JSON) |
 | `homeport version` | this CLI's version |
@@ -246,6 +249,7 @@ Cursor (`~/.cursor/mcp.json`, or `.cursor/mcp.json` in a project):
 | `create_database`, `attach_database`, `detach_database` | its database (**change it**) |
 | `usage` | a team's month so far and its estimate (reads) |
 | `list_domains`, `get_domain` | an app's platform domains, their status and DNS records (reads) |
+| `queue_status` | an environment's queue: how it runs, what's waiting, its recent drains (reads) |
 | `add_domain` | adds a platform domain to an app (**changes it**) |
 
 An agent can be talked into things by what it reads, such as a log line or
