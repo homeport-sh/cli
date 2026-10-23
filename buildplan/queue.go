@@ -299,7 +299,7 @@ func (r reader) anyFile(dir string, exts []string, match func(name string, b []b
 // which isn't offered yet. A drain is what the app names: its queue:drain
 // script, run as the bundle runs a script's file, or rsc-kit's queue:drain
 // command (src/commands/queue:drain.ts, ./app queue:drain) - pg-boss has no
-// drain of its own, and @homeport/queue's drain() is one - or Graphile
+// drain of its own, and @homeport-sh/queue's drain() is one - or Graphile
 // Worker's own --once. queue:retry and queue:work (rsc-kit: work, too) are
 // its retry and worker the same way.
 const (
@@ -349,7 +349,7 @@ func (r reader) jsQueue(p *Plan) *Queue {
 			q.Worker = r.rscKitCommand(rscKitWorkName)
 		}
 		if q.Drain == "" {
-			notes = append(notes, "To drain the queue on demand, add src/commands/queue:drain.ts that works it with @homeport/queue's drain(); "+
+			notes = append(notes, "To drain the queue on demand, add src/commands/queue:drain.ts that works it with @homeport-sh/queue's drain(); "+
 				"until then, run its worker always on.")
 		}
 	} else {
@@ -379,7 +379,7 @@ func (r reader) jsQueue(p *Plan) *Queue {
 			}
 		}
 		if q.Drain == "" && pkg.Scripts[queueDrainName] == "" && q.Framework == "pg-boss" {
-			notes = append(notes, "To drain the queue on demand, add a queue:drain script that works it with @homeport/queue's drain(); "+
+			notes = append(notes, "To drain the queue on demand, add a queue:drain script that works it with @homeport-sh/queue's drain(); "+
 				"until then, run its worker always on.")
 		}
 	}

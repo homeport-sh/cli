@@ -1,4 +1,4 @@
-// @homeport/queue: pg-boss on homeport, drained on demand.
+// @homeport-sh/queue: pg-boss on homeport, drained on demand.
 //
 // homeport runs the app's drain - a queue:drain script or rsc-kit command -
 // in a sandbox of its own when there may be work, as
@@ -28,16 +28,16 @@ function maxTimeArg(argv) {
 }
 
 function table(schema) {
-  if (!schemaRe.test(schema)) throw new Error(`@homeport/queue: schema ${JSON.stringify(schema)} isn't a name`);
+  if (!schemaRe.test(schema)) throw new Error(`@homeport-sh/queue: schema ${JSON.stringify(schema)} isn't a name`);
   return `${schema}.job`;
 }
 
 export async function drain(boss, options = {}) {
   const { handlers = {}, schema = "pgboss", batchSize = 10, signal, now = Date.now, log = console.log, warn = console.error } = options;
   const names = options.queues ?? Object.keys(handlers);
-  if (names.length === 0) throw new Error("@homeport/queue: drain needs a handler for each queue it works");
+  if (names.length === 0) throw new Error("@homeport-sh/queue: drain needs a handler for each queue it works");
   for (const n of names) {
-    if (typeof handlers[n] !== "function") throw new Error(`@homeport/queue: no handler for the queue ${JSON.stringify(n)}`);
+    if (typeof handlers[n] !== "function") throw new Error(`@homeport-sh/queue: no handler for the queue ${JSON.stringify(n)}`);
   }
   const jobs = table(schema);
   const maxSeconds = options.maxSeconds ?? maxTimeArg(process.argv) ?? defaultMaxSeconds;

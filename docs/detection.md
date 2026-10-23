@@ -703,12 +703,12 @@ the bundle runs a script's file (`bun scripts/drain.ts` is
 `scripts/drain.ts`); a script that needs a shell can't, and the plan's
 `note` says so. An rsc-kit app's command `src/commands/queue:drain.ts` runs
 as `./app queue:drain`. pg-boss has no drain of its own: `drain()` from
-`@homeport/queue` is one.
+`@homeport-sh/queue` is one.
 
 ```ts
 // src/commands/queue:drain.ts
 import { PgBoss } from "pg-boss";
-import { drain } from "@homeport/queue";
+import { drain } from "@homeport-sh/queue";
 import { handlers } from "../jobs";
 
 export default async () => {

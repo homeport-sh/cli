@@ -69,8 +69,8 @@ func TestAJavaScriptAppsQueueIsDetected(t *testing.T) {
 		files map[string]string
 		says  []string
 	}{
-		"pg-boss":                     {pgBoss(""), []string{"queue:drain", "@homeport/queue", "drain()"}},
-		"rsc-kit":                     {rscKitBoss("src/commands/migrate.ts", command), []string{"src/commands/queue:drain.ts", "@homeport/queue"}},
+		"pg-boss":                     {pgBoss(""), []string{"queue:drain", "@homeport-sh/queue", "drain()"}},
+		"rsc-kit":                     {rscKitBoss("src/commands/migrate.ts", command), []string{"src/commands/queue:drain.ts", "@homeport-sh/queue"}},
 		"a script that needs a shell": {pgBoss(`,"queue:drain":"bun scripts/drain.ts && echo done"`), []string{"queue:drain", "shell"}},
 		"Graphile, a dev dependency": {js(`{"scripts":{"start":"node server.js"},"dependencies":{"express":"^5"},"devDependencies":{"graphile-worker":"^0.16"}}`),
 			[]string{"devDependencies"}},

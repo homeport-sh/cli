@@ -183,7 +183,7 @@ func TestQueueDrainRunsTheDrainHere(t *testing.T) {
 		files map[string]string
 		says  string
 	}{
-		"no drain": {map[string]string{"bun.lock": "{}", "package.json": `{"scripts":{"start":"bun src/index.ts"},"dependencies":{"hono":"^4","pg-boss":"^12"}}`}, "@homeport/queue"},
+		"no drain": {map[string]string{"bun.lock": "{}", "package.json": `{"scripts":{"start":"bun src/index.ts"},"dependencies":{"hono":"^4","pg-boss":"^12"}}`}, "@homeport-sh/queue"},
 		"no retry": {map[string]string{"bun.lock": "{}", "package.json": `{"scripts":{"start":"bun src/index.ts","queue:drain":"bun d.ts"},"dependencies":{"hono":"^4","pg-boss":"^12"}}`}, "retry"},
 		"no queue": {map[string]string{"bun.lock": "{}", "package.json": `{"scripts":{"start":"bun src/index.ts"},"dependencies":{"hono":"^4"}}`}, "queue:"},
 	} {

@@ -1,4 +1,4 @@
-# @homeport/queue
+# @homeport-sh/queue
 
 pg-boss on [homeport.sh](https://homeport.sh), drained on demand: no worker
 running all day. homeport runs the app's drain in a sandbox of its own when
@@ -8,7 +8,7 @@ says when to drain again.
 ```ts
 // src/commands/queue:drain.ts (rsc-kit), or a "queue:drain" script's file
 import { PgBoss } from "pg-boss";
-import { drain } from "@homeport/queue";
+import { drain } from "@homeport-sh/queue";
 
 const handlers = {
   email: async (jobs) => {
