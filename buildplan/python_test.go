@@ -425,3 +425,20 @@ func TestThePythonBundleCompilesWithoutAProcessPool(t *testing.T) {
 		}
 	}
 }
+
+// homeport's gunicorn config survives the platform's freeze and its
+// read-only release. A frozen app's clock runs on (gunicorn's heartbeat is
+// time.monotonic), so on a thaw the arbiter finds every worker silent for
+// the whole freeze and kills one with the request that woke it in hand: a
+// 502. Its worker timeout is off (gthread's heartbeat is its main loop, not
+// a request, so it only ever caught a stuck loop). And gunicorn 26's control
+// socket, under $HOME/.gunicorn, is off: the release, $HOME, is read-only,
+// so it logs an error at every start.
+func TestGunicornsConfigSurvivesAThawAndAReadOnlyHome(t *testing.T) {
+	p := detect(t, pyproject([]string{"flask", "gunicorn"}, "app.py", "app = Flask(__name__)\n"), buildplan.Settings{})
+	for _, want := range []string{"'timeout = 0'", "'control_socket_disable = True'"} {
+		if !strings.Contains(p.Command, want) {
+			t.Errorf("the config has no %s: %s", want, p.Command)
+		}
+	}
+}
