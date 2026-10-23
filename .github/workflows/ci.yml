@@ -33,8 +33,8 @@ jobs:
       - name: go test
         run: go test ./...
 
-      # @homeport/queue, against a stand-in for pg-boss
-      - name: "@homeport/queue"
+      # @homeport-sh/queue, against a stand-in for pg-boss
+      - name: "@homeport-sh/queue"
         run: bun test
         working-directory: npm/queue
 
