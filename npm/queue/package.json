@@ -1,0 +1,26 @@
+{
+  "name": "@homeport/queue",
+  "version": "0.0.0",
+  "private": true,
+  "description": "pg-boss on homeport.sh, drained on demand: drain(), retryFailed() and kick().",
+  "homepage": "https://homeport.sh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/homeport-sh/cli.git",
+    "directory": "npm/queue"
+  },
+  "license": "FSL-1.1-ALv2",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md"
+  ],
+  "sideEffects": false
+}
