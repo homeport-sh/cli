@@ -203,6 +203,9 @@ type Plan struct {
 	// Headers: the app's response headers - homeport.yaml's, or the
 	// settings' when they have any (headers.go); a static site's too
 	Headers []HeaderRule `json:"headers,omitempty"`
+	// Queue: the app's background jobs, detected or homeport.yaml's
+	// (queue.go); nil when it has none
+	Queue *Queue `json:"queue,omitempty"`
 
 	// a bundle's build, and what makes the bundle from what it left
 	// (Command is both): a build command someone sets replaces the first;
@@ -270,7 +273,9 @@ const LaravelCaches = "php artisan event:cache && php artisan route:cache" +
 var SiteFolders = []string{"build", "dist", "out"}
 
 // Files are the files Detect reads, relative to the app's folder: a control
-// plane fetches just these to show what a build will do.
+// plane fetches just these to show what a build will do. Not a Laravel
+// app's app/ and database/migrations, which its queue's detection scans
+// (queue.go): the builder's plan says what that found.
 func Files() []string {
 	return slices.Concat([]string{ConfigFile, "go.mod", "composer.json", "composer.lock", "package.json", "bun.lock", "bun.lockb",
 		"package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", ".nvmrc", ".node-version", ".bun-version", "index.html",
@@ -301,6 +306,7 @@ type fileConfig struct {
 	Processes map[string]processConfig `yaml:"processes"`
 	Packages  []string                 `yaml:"packages"`
 	Headers   []HeaderRule             `yaml:"headers"`
+	Queue     *queueConfig             `yaml:"queue"`
 }
 
 type processConfig struct {
@@ -570,6 +576,14 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 			p.Run, p.Octane = phpServerRoot(p.Run), p.Run == PHPOctaneRun
 		}
 	}
+	if php && r.requires("laravel/framework") {
+		p.Queue = r.laravelQueue(p.laravelViews && s.Command == "")
+	}
+	if cfg.Queue != nil {
+		if p.Queue, err = cfg.Queue.over(p.Queue); err != nil {
+			return Plan{}, fmt.Errorf("%s: %w", ConfigFile, err)
+		}
+	}
 	packages := cfg.Packages
 	if len(s.Packages) > 0 {
 		packages = s.Packages
@@ -592,7 +606,7 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 		p.Run, p.Release, p.ReleaseReason, p.StopGrace, p.Processes = "", "", "", "", nil // nothing runs
 		p.NoRelease, p.ReleaseDetected = false, ""
 		p.Runtime, p.RuntimeVersion, p.RuntimeReason, p.Health = "", "", "", ""
-		p.SSR, p.Reverb = "", false
+		p.SSR, p.Reverb, p.Queue = "", false, nil
 	}
 	return p, nil
 }
@@ -669,7 +683,7 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 				p.Command = join(p.Command, ssrAssemble(p.Artifact, x))
 			}
 			if r.requires("laravel/framework") {
-				p.Command = LaravelCaches + " && " + join(p.Command, releaseViewCache(p.Artifact))
+				p.Command = LaravelCaches + " && " + join(p.Command, releaseViewCache(p.Artifact), queueRunner(p.Artifact))
 				p.laravelViews = true
 			}
 		}

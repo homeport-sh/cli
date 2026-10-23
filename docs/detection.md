@@ -652,6 +652,65 @@ The release is read-only, so everything is compiled at build. Data goes to
 a database or object storage, never into the app's folder. An app with a
 top-level `bin/` folder is refused, because `bin` is the interpreter.
 
+## Background jobs (queues)
+
+The plan's `queue` says how the app's background jobs run, when it has any.
+homeport never reads the queue itself: the framework's own worker does, in
+the backend its driver names (`backend`: `postgres`, the environment's
+database; `redis` later). There are two ways to run it, chosen in the
+environment's settings, not here:
+
+- **On demand** (every plan): a **drain** runs the `drain` command, args to
+  `./bin` in a sandbox of its own, when there may be work. It works the
+  queue until it's empty, for at most `timeout`, and exits. Its last line
+  says what's left, so homeport knows when to drain again:
+
+  ```
+  homeport-queue: processed=12 failed=1 waiting=0 next_due=1793481600
+  ```
+
+  homeport adds `--max-time=<timeout less a minute>` to the command. A
+  drain that prints no line still works; it just can't say when a delayed
+  job is due.
+- **Always on** (paid plans): `worker` runs as a process, and gets
+  `stop_grace` after SIGTERM to finish the job it holds.
+
+Detection never adds a process: running a worker process and draining on
+demand would work the same jobs twice.
+
+| The app | Seen by | `backend` | `drain` | `worker` |
+|---|---|---|---|---|
+| Laravel | a class in `app/` that `implements ShouldQueue`, or the `jobs` table's migration | `postgres` | `php-cli .homeport/queue.php ./bin` | `php-cli artisan queue:work --tries=3 --timeout=60`, `stop_grace: 90s` |
+| Laravel Horizon | `laravel/horizon` in `composer.json` | `redis` | none: Horizon supervises its own workers | `php-cli artisan horizon` |
+
+A Laravel bundle that homeport builds has `.homeport/queue.php`. It boots
+the app once and runs `artisan queue:work --stop-when-empty` in the same
+process, and runs it again while jobs are ready and time is left. It counts
+`processed` and `failed` from Laravel's queue events. On the `database`
+driver it also reads `waiting` (jobs ready now) and `next_due` (the
+earliest delayed job, retry or lapsed reservation) from the jobs table; on
+any other driver both are 0. Options after `./bin` go to `queue:work`
+(`--queue=high,default`). A build command you set makes its own bundle,
+which doesn't have the runner, so its drain is `php-cli artisan queue:work
+--stop-when-empty`. `retry` (`php-cli artisan queue:retry all`) retries the
+failed jobs.
+
+The plan's `source` says where the queue came from: `detected`, or
+`config`. `queue:` in `homeport.yaml` says it instead. `none` (or `""`)
+means no queue. A map sets `backend`, `drain`, `timeout` and `retry` over
+what was detected:
+
+```yaml
+queue:
+  backend: postgres     # postgres; redis later
+  drain: php-cli artisan queue:work --stop-when-empty --queue=high,default
+  timeout: 20m          # 1m to 60m (10m by default)
+  retry: php-cli artisan queue:retry all
+```
+
+`drain` and `retry` are args to `./bin`, run without a shell, as the
+release command is.
+
 ## System packages
 
 An app can ship with executables from a short list homeport curates and

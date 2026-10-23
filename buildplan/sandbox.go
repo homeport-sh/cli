@@ -59,17 +59,21 @@ func CheckRun(run string) error {
 // CheckRelease says whether release is a command the sandbox can run before
 // a release goes live: args to the app's bin, in a sandbox of its own that
 // has no shell.
-func CheckRelease(release string) error {
-	r := strings.TrimSpace(release)
+func CheckRelease(release string) error { return checkArgs("release command", release) }
+
+// checkArgs says whether v, what (a release command, a queue's drain), is
+// args to the app's bin the sandbox can run: no shell, no variables.
+func checkArgs(what, v string) error {
+	r := strings.TrimSpace(v)
 	switch {
-	case release == "":
+	case v == "":
 		return nil
-	case len(release) > maxCommandSz:
-		return fmt.Errorf("release command: at most %d characters", maxCommandSz)
+	case len(v) > maxCommandSz:
+		return fmt.Errorf("%s: at most %d characters", what, maxCommandSz)
 	case r == "./bin" || strings.HasPrefix(r, "./bin "):
-		return fmt.Errorf("release command: args to the app's binary - write `%s`, not %q", strings.TrimSpace(strings.TrimPrefix(r, "./bin")), release)
-	case !binArgsRe.MatchString(release):
-		return errors.New("release command: args to the app's binary, run without a shell (" + binArgsSays + ")")
+		return fmt.Errorf("%s: args to the app's binary - write `%s`, not %q", what, strings.TrimSpace(strings.TrimPrefix(r, "./bin")), v)
+	case !binArgsRe.MatchString(v):
+		return errors.New(what + ": args to the app's binary, run without a shell (" + binArgsSays + ")")
 	}
 	return nil
 }
