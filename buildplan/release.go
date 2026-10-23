@@ -18,13 +18,13 @@ import (
 var migrateScripts = []string{"migrate", "db:migrate"}
 
 // rscKitMigrate: rsc-kit runs src/commands/<name>.* as ./app <name>.
-var rscKitMigrate = rscKitCommandFiles("migrate")
+var rscKitMigrate = RSCKitCommandFiles("migrate")
 
 // rscKitExts are a command file's extensions, in the order rsc-kit reads.
 var rscKitExts = []string{"ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx"}
 
-// rscKitCommandFiles are the files that would be each named command.
-func rscKitCommandFiles(names ...string) []string {
+// RSCKitCommandFiles are the files that would be each named command.
+func RSCKitCommandFiles(names ...string) []string {
 	var out []string
 	for _, n := range names {
 		for _, e := range rscKitExts {

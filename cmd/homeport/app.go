@@ -53,6 +53,7 @@ type app struct {
 	open     func(url string) error
 	sleep    func(ctx context.Context, d time.Duration) error
 	hostname func() (string, error)
+	exec     func(*exec.Cmd) error // runs a command here: homeport queue drain
 	// mcpAllowChanges: `homeport mcp --allow-changes` - tools may change
 	// things without asking, for an editor that can't ask
 	mcpAllowChanges bool
@@ -63,7 +64,7 @@ type app struct {
 func newApp() *app {
 	wd, _ := os.Getwd()
 	return &app{in: os.Stdin, out: os.Stdout, err: os.Stderr, tty: isTerminal(os.Stdin) && isTerminal(os.Stdout), wd: wd,
-		open: openBrowser, sleep: sleepCtx, hostname: os.Hostname}
+		open: openBrowser, sleep: sleepCtx, hostname: os.Hostname, exec: (*exec.Cmd).Run}
 }
 
 // run runs one command and says how it ended.
@@ -94,6 +95,8 @@ func (a *app) run(args []string) int {
 		err = a.rollback(ctx, rest)
 	case "domains":
 		err = a.domains(ctx, rest)
+	case "queue":
+		err = a.queue(ctx, rest)
 	case "build-plan":
 		err = cmdBuildPlan(rest)
 	case "mcp":

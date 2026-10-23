@@ -208,6 +208,14 @@ const (
 //go:embed embed/queue.php
 var queuePHP string
 
+// QueueRunnerFile is where a Laravel bundle has the queue runner, as its
+// drain names it.
+const QueueRunnerFile = queuePHPF
+
+// QueueRunnerPHP is the queue runner's source, for a drain run outside a
+// bundle (homeport queue drain).
+func QueueRunnerPHP() string { return queuePHP }
+
 // queueRunner puts the queue runner in the bundle b.
 func queueRunner(b string) string {
 	return join("mkdir -p "+b+"/.homeport",
@@ -310,7 +318,7 @@ var queueUse = scriptUse{"queue drain", "drain.js", map[string]string{"graphile-
 
 // queueFiles are the files JavaScript queue detection reads (Files).
 func queueFiles() []string {
-	return rscKitCommandFiles(queueDrainName, queueRetryName, queueWorkName, rscKitWorkName)
+	return RSCKitCommandFiles(queueDrainName, queueRetryName, queueWorkName, rscKitWorkName)
 }
 
 // a pg-boss schedule: boss.schedule(name, cron)
@@ -388,7 +396,7 @@ func (r reader) jsQueue(p *Plan) *Queue {
 
 // rscKitCommand is the rsc-kit command name, if the app has it.
 func (r reader) rscKitCommand(name string) string {
-	for _, f := range rscKitCommandFiles(name) {
+	for _, f := range RSCKitCommandFiles(name) {
 		if r.exists(f) {
 			return name
 		}

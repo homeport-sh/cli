@@ -800,6 +800,20 @@ func (a *app) mcpServer() *mcp.Server {
 	type teamIn struct {
 		Team string `json:"team" jsonschema:"the team's address (slug)"`
 	}
+	mcp.AddTool(s, &mcp.Tool{Name: "queue_status", Annotations: readOnly,
+		Description: "Shows an environment's queue: how its background jobs run (mode: on_demand drains, always_on worker, off), in what backend, its drain command and timeout, what its last report said (jobs waiting, when the next delayed one is due), and its recent drains - why each started, how it went, what it processed and failed. Changes nothing."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in where) (*mcp.CallToolResult, any, error) {
+			c, t, err := at(ctx, in)
+			if err != nil {
+				return refused(err)
+			}
+			q, err := c.Queue(ctx, t.link.Team, t.link.App)
+			if err != nil {
+				return refused(err)
+			}
+			return result(q)
+		})
+
 	mcp.AddTool(s, &mcp.Tool{Name: "usage", Annotations: readOnly,
 		Description: "Shows a team's usage this month - by app and environment - its plan, budget, and what the month is likely to cost. Changes nothing."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in teamIn) (*mcp.CallToolResult, any, error) {

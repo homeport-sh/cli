@@ -655,3 +655,70 @@ func (c *Client) PullEnv(ctx context.Context, team, app string) (map[string]stri
 	err := c.call(ctx, "GET", appPath(team, app)+"/env/addons", nil, &out)
 	return out.Values, out.Withheld, err
 }
+
+// Queue is an environment's queue: how it runs (Mode: on_demand, always_on,
+// off), in what (Backend), its drain command and longest run, what its last
+// report said (Waiting, NextDue, at ReportedAt; nil before any), and its
+// recent drains, newest first.
+type Queue struct {
+	Mode           string       `json:"mode"`
+	Backend        string       `json:"backend"`
+	Command        string       `json:"command"`
+	TimeoutSeconds int          `json:"timeout_seconds"`
+	Waiting        *int         `json:"waiting"`
+	NextDue        *time.Time   `json:"next_due"`
+	ReportedAt     *time.Time   `json:"reported_at"`
+	Drains         []QueueDrain `json:"drains"`
+}
+
+// QueueDrain is one drain: why it started (Trigger: activity, due, chain,
+// sweep, kick, manual, retry), how it went (Status: queued, running,
+// succeeded, failed, timed_out, lost), and its report line's counts, when
+// it printed one (Reported).
+type QueueDrain struct {
+	ID         string     `json:"id"`
+	Trigger    string     `json:"trigger"`
+	Status     string     `json:"status"`
+	StartedAt  *time.Time `json:"started_at"`
+	DurationMS *int64     `json:"duration_ms"`
+	Processed  *int       `json:"processed"`
+	Failed     *int       `json:"failed"`
+	Waiting    *int       `json:"waiting"`
+	Reported   bool       `json:"reported"`
+}
+
+// Queue is the environment's queue.
+func (c *Client) Queue(ctx context.Context, team, app string) (*Queue, error) {
+	var out Queue
+	if err := c.call(ctx, "GET", appPath(team, app)+"/queue", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// QueueRun is a run of the queue's command started on homeport: a drain,
+// or its retry.
+type QueueRun struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+}
+
+// DrainQueue starts a drain of the environment's queue now (refused while
+// one runs).
+func (c *Client) DrainQueue(ctx context.Context, team, app string) (*QueueRun, error) {
+	var out QueueRun
+	if err := c.call(ctx, "POST", appPath(team, app)+"/queue/drain", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// RetryFailedQueue runs the queue's retry command now: its failed jobs
+// queued again.
+func (c *Client) RetryFailedQueue(ctx context.Context, team, app string) (*QueueRun, error) {
+	var out QueueRun
+	if err := c.call(ctx, "POST", appPath(team, app)+"/queue/retry-failed", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
