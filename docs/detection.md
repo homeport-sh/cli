@@ -626,9 +626,9 @@ ships.
 
 | Framework | Recognised by | Start command | Release command |
 |---|---|---|---|
-| Django | `manage.py` and `django` | `-m gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 <project>.wsgi`; with uvicorn and no gunicorn, `-m uvicorn ... <project>.asgi:application` | `manage.py migrate --noinput` |
+| Django | `manage.py` and `django` | `-m gunicorn --bind 0.0.0.0:$PORT -c .homeport/gunicorn.conf.py <project>.wsgi`; with uvicorn and no gunicorn, `-m uvicorn ... <project>.asgi:application` | `manage.py migrate --noinput` |
 | FastAPI | `fastapi`, and `app = FastAPI(` at the top of `main.py`, `app.py`, `app/main.py`, ... | `-m uvicorn --host 0.0.0.0 --port $PORT main:app` | `-m alembic upgrade head`, with `alembic.ini` and `alembic` |
-| Flask | `flask`, and `app = Flask(` in the same files or `wsgi.py` | `-m gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 app:app` | the same, for Alembic (Flask-Migrate) |
+| Flask | `flask`, and `app = Flask(` in the same files or `wsgi.py` | `-m gunicorn --bind 0.0.0.0:$PORT -c .homeport/gunicorn.conf.py app:app` | the same, for Alembic (Flask-Migrate) |
 | anything else | `pyproject.toml` or `requirements.txt` | set it: args to python, like `-m myapp` | none |
 
 When the app's dependencies have no gunicorn or uvicorn, the build installs
@@ -636,10 +636,12 @@ a pinned one. A Django build runs `manage.py collectstatic --noinput`, and
 goes on without it, saying so, if it fails. Serving `/static/` is the app's
 job: add WhiteNoise (the build warns when it's missing).
 
-gunicorn runs 2 worker processes of 4 threads each (gthread), unless the
-app has a `gunicorn.conf.py`, which then says, or its own start command.
-`WEB_CONCURRENCY` and `GUNICORN_CMD_ARGS` don't override the `--workers`
-homeport passes: set the start command, or add a `gunicorn.conf.py`.
+gunicorn runs 2 worker processes of 4 threads each (gthread), from a
+config file homeport writes into the bundle (`.homeport/gunicorn.conf.py`).
+The app's variables win: `WEB_CONCURRENCY` sets the workers (a value that
+isn't a positive number is 2), and `GUNICORN_CMD_ARGS` (`--threads 8`)
+overrides either. An app with its own `gunicorn.conf.py`, or its own start
+command, gets no homeport config: its own says.
 
 **Python version**: the build settings' (a line, like `3.13`), else
 `.python-version`, else `runtime.txt`, else the

@@ -49,7 +49,7 @@ func TestAPythonAppShipsAsABundleWithItsInterpreter(t *testing.T) {
 	if p.Runtime != "python" || p.RuntimeVersion != buildplan.DefaultPython || p.PackageManager != "uv" {
 		t.Errorf("runtime: %s %s %s", p.Runtime, p.RuntimeVersion, p.PackageManager)
 	}
-	if p.Run != "-m gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 app:app" {
+	if p.Run != "-m gunicorn --bind 0.0.0.0:$PORT -c .homeport/gunicorn.conf.py app:app" {
 		t.Errorf("run: %s", p.Run)
 	}
 	if err := buildplan.CheckRun(p.Run); err != nil {
@@ -107,7 +107,7 @@ func TestPythonFrameworks(t *testing.T) {
 		release, releaseOf string
 	}{
 		{"django on gunicorn", pyproject([]string{"Django>=5.2", "gunicorn"}, "manage.py", managePy),
-			"Django", "-m gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 mysite.wsgi", "manage.py migrate --noinput", "Django"},
+			"Django", "-m gunicorn --bind 0.0.0.0:$PORT -c .homeport/gunicorn.conf.py mysite.wsgi", "manage.py migrate --noinput", "Django"},
 		// uvicorn and no gunicorn: the ASGI app
 		{"django on uvicorn", pyproject([]string{"django", "uvicorn[standard]"}, "manage.py", managePy),
 			"Django", "-m uvicorn --host 0.0.0.0 --port $PORT mysite.asgi:application", "manage.py migrate --noinput", "Django"},
@@ -116,7 +116,7 @@ func TestPythonFrameworks(t *testing.T) {
 		{"fastapi with alembic", pyproject([]string{"fastapi", "alembic", "sqlalchemy"}, "main.py", "app = FastAPI()\n", "alembic.ini", "[alembic]\n"),
 			"FastAPI", "-m uvicorn --host 0.0.0.0 --port $PORT main:app", "-m alembic upgrade head", "Alembic"},
 		{"flask in wsgi.py", map[string]string{"requirements.txt": "Flask==3.1.2\n", "wsgi.py": "from myapp import create_app\napplication = create_app()\nserver = Flask('x')\n"},
-			"Flask", "-m gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 wsgi:server", "", ""},
+			"Flask", "-m gunicorn --bind 0.0.0.0:$PORT -c .homeport/gunicorn.conf.py wsgi:server", "", ""},
 	} {
 		p := detect(t, tc.files, buildplan.Settings{})
 		if p.Framework != tc.framework || p.Run != tc.run || p.Release != tc.release {
@@ -292,15 +292,32 @@ func TestAPythonAppsFrontEndIsBuilt(t *testing.T) {
 }
 
 // gunicorn runs 2 workers of 4 threads each (gthread): a sync worker on its
-// own serves one request at a time. An app that sets its workers - a
-// gunicorn.conf.py, or its own start command - keeps its own.
+// own serves one request at a time. They're set in homeport's config file
+// in the bundle, not as flags, so the app's variables win: WEB_CONCURRENCY
+// (a bad value is 2) and GUNICORN_CMD_ARGS, which gunicorn puts above a
+// config file. An app that sets its workers - a gunicorn.conf.py, or its
+// own start command - keeps its own.
 func TestGunicornsWorkers(t *testing.T) {
+	const conf = ".homeport-bundle/.homeport/gunicorn.conf.py"
 	files := pyproject([]string{"flask", "gunicorn"}, "app.py", "app = Flask(__name__)\n")
-	if p := detect(t, files, buildplan.Settings{}); !strings.Contains(p.Run, "--workers 2 --threads 4") {
+	p := detect(t, files, buildplan.Settings{})
+	if p.Run != "-m gunicorn --bind 0.0.0.0:$PORT -c .homeport/gunicorn.conf.py app:app" || strings.Contains(p.Run, "--workers") {
 		t.Errorf("run: %s", p.Run)
 	}
+	if err := buildplan.CheckRun(p.Run); err != nil {
+		t.Error(err)
+	}
+	w, c := strings.Index(p.Command, "> "+conf), strings.Index(p.Command, "compileall")
+	if w < 0 || c < w {
+		t.Errorf("the config isn't written before the bundle is compiled: %s", p.Command)
+	}
+	for _, want := range []string{"os.environ.get(\"WEB_CONCURRENCY\"", "except ValueError", "workers = 2", "threads = 4"} {
+		if !strings.Contains(p.Command, want) {
+			t.Errorf("the config has no %q: %s", want, p.Command)
+		}
+	}
 	files["gunicorn.conf.py"] = "workers = 8\n"
-	if p := detect(t, files, buildplan.Settings{}); p.Run != "-m gunicorn --bind 0.0.0.0:$PORT app:app" {
+	if p := detect(t, files, buildplan.Settings{}); p.Run != "-m gunicorn --bind 0.0.0.0:$PORT app:app" || strings.Contains(p.Command, conf) {
 		t.Errorf("gunicorn.conf.py: %s", p.Run)
 	}
 	delete(files, "gunicorn.conf.py")
@@ -308,7 +325,8 @@ func TestGunicornsWorkers(t *testing.T) {
 		t.Errorf("start command: %s", p.Run)
 	}
 	// uvicorn: one process, as before
-	if p := detect(t, pyproject([]string{"fastapi"}, "main.py", "app = FastAPI()\n"), buildplan.Settings{}); strings.Contains(p.Run, "--workers") {
+	if p := detect(t, pyproject([]string{"fastapi"}, "main.py", "app = FastAPI()\n"), buildplan.Settings{}); strings.Contains(p.Run, "--workers") ||
+		strings.Contains(p.Command, conf) {
 		t.Errorf("uvicorn: %s", p.Run)
 	}
 }

@@ -193,12 +193,17 @@ Flask 66 MB, FastAPI 74 MB, Django 112 MB. A Node bundle is about 120 MB.
   hangs. A person who wants a longer drain sets `stop_grace:` and, for
   gunicorn, `graceful_timeout` in `gunicorn.conf.py`, which gunicorn reads
   from the cwd.
-- **Workers.** gunicorn gets `--workers 2 --threads 4` (gthread): a sync
-  worker alone serves one request at a time. An app with a
-  `gunicorn.conf.py` gets no flags, so its config says; a start command
-  someone set is theirs as it is. `WEB_CONCURRENCY` and `GUNICORN_CMD_ARGS`
-  can't override flags on gunicorn's command line, so the docs say to set
-  the start command or add a `gunicorn.conf.py`. uvicorn runs one process.
+- **Workers.** gunicorn runs with `-c .homeport/gunicorn.conf.py`, a
+  config homeport writes into the bundle (before compileall, so it's
+  compiled with the rest): `workers` from `WEB_CONCURRENCY`, else 2 (a bad
+  value is 2), and `threads = 4` (gthread), as a sync worker alone serves
+  one request at a time. A config file rather than flags, so the app's
+  variables win: gunicorn puts `GUNICORN_CMD_ARGS` above a config file.
+  There's no platform layer of default variables (homeportd's units set
+  fixed ones; a JavaScript bundle's defaults are its own boot.mjs), so this
+  is gunicorn's own mechanism. An app with a `gunicorn.conf.py` gets no
+  `-c`, so gunicorn reads its own; a start command someone set is theirs as
+  it is. uvicorn runs one process.
 - **Static files.** A Django app serves its own static files only with
   WhiteNoise (or similar). With collectstatic and no `whitenoise` in the deps,
   the plan warns that `/static/` will 404. FastAPI's `StaticFiles` and Flask's
@@ -239,7 +244,8 @@ Flask 66 MB, FastAPI 74 MB, Django 112 MB. A Node bundle is about 120 MB.
   in the plan's own image with the plan's install and command. Each is then
   run, alone, from the bundle in a bare `ubuntu:24.04` as `./bin <run>`,
   read-only, checked over HTTP (the Tailwind CSS served with the page's
-  classes in it), and sent SIGTERM. A FastAPI copy with a dependency added
+  classes in it), and sent SIGTERM. Flask's gunicorn runs 2 workers, and 3
+  with `WEB_CONCURRENCY=3`. A FastAPI copy with a dependency added
   after its lock must fail the build, saying to run `uv lock`.
 
 ### On a box, before release
@@ -284,8 +290,10 @@ builders (the FLEET CLI pin). Each step says what passes.
 ## Decisions (owner, 2026-10-22)
 
 1. **Python lines and default:** 3.12-3.15 offered, 3.14 the default.
-2. **Workers:** gunicorn gets `--workers 2 --threads 4` (gthread), unless
-   the app's own start command or `gunicorn.conf.py` sets them.
+2. **Workers:** 2 workers of 4 threads (gthread), from homeport's config
+   file in the bundle, so the app's `WEB_CONCURRENCY` and
+   `GUNICORN_CMD_ARGS` win; unless the app's own start command or
+   `gunicorn.conf.py` sets them.
 3. **Runtime delivery:** option A - downloaded at build, sha256-pinned,
    cached per app.
 4. **A stale `uv.lock`:** fails the build (`--locked`), saying to run
@@ -294,14 +302,6 @@ builders (the FLEET CLI pin). Each step says what passes.
 6. **Front-end assets:** built with the pinned Bun, as a Laravel app's are
    (the shared `frontEnd`), before `collectstatic`; `node_modules` never
    ships.
-
-## Still open
-
-- `WEB_CONCURRENCY` can't change gunicorn's workers while homeport passes
-  `--workers`. Today the answer is a start command or a `gunicorn.conf.py`.
-  If people expect the variable to work, homeport could leave the flags
-  out when the app's variables set it - that needs the variables at plan
-  time.
 
 ## Effort
 

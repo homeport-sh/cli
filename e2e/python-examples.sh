@@ -62,14 +62,15 @@ in_bundle() { # name, docker args..., -- bin args...
     -e PORT=8080 -e HOST=0.0.0.0 "${opts[@]}" "$runner" ./bin "$@"
 }
 
-# start <name>: the web, on a port; prints the base URL
+# start <name> [docker args...]: the web, on a port; prints the base URL
 start() {
   local name=$1 run
+  shift
   run=$(jq -r '.run // ""' "$work/$name.plan.json")
   run=${run//\$PORT/8080}
   port=$((port + 1))
   # shellcheck disable=SC2086
-  in_bundle "$name" -d --name "e2e-py-$name" -p "127.0.0.1:$port:8080" -- $run >/dev/null
+  in_bundle "$name" -d --name "e2e-py-$name" -p "127.0.0.1:$port:8080" "$@" -- $run >/dev/null
   for _ in $(seq 1 150); do
     [ "$(status "http://127.0.0.1:$port/")" != 000 ] && break
     sleep 0.2
@@ -97,6 +98,18 @@ is() { # name, url, status
   local got
   got=$(status "$2")
   [ "$got" = "$3" ] && check "$1" "${2#http://127.0.0.1:*/} is $3" ok || check "$1" "${2#http://127.0.0.1:*/} is $3" "$got"
+}
+
+# workers <name> <n>: gunicorn's master and n workers are up (it boots them
+# after it listens)
+workers() {
+  local got=0
+  for _ in $(seq 1 50); do
+    got=$(docker top "e2e-py-$1" -eo args | grep -c '[g]unicorn' || true)
+    [ "$got" = $(($2 + 1)) ] && break
+    sleep 0.2
+  done
+  [ "$got" = $(($2 + 1)) ] && check "$1" "$3: $2 workers" ok || check "$1" "$3: $2 workers" "$((got - 1))"
 }
 
 if build django; then
@@ -130,6 +143,11 @@ if build flask; then
   page flask "$url/" '"framework":"flask"'
   is flask "$url/static/hello.txt" 200
   is flask "$url/nope" 404
+  workers flask 2 "homeport's gunicorn config"
+  stop flask
+  # the app's WEB_CONCURRENCY wins over homeport's config
+  start flask -e WEB_CONCURRENCY=3 >/dev/null
+  workers flask 3 "WEB_CONCURRENCY=3"
   stop flask
 fi
 
