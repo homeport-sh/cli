@@ -319,9 +319,14 @@ func (r reader) py(p *Plan, cfg fileConfig, run, python string) error {
 // gunicornConf is homeport's gunicorn config, in the bundle, when the app
 // has none of its own: 2 workers (the app's WEB_CONCURRENCY, if it's a
 // number) of 4 threads each (gthread), as a sync worker alone serves one
-// request at a time. A config file, not flags, so the app's variables win:
-// gunicorn puts GUNICORN_CMD_ARGS above it. No single quotes: it's written
-// in some.
+// request at a time. No worker timeout: a frozen app's clock runs on
+// (gunicorn's heartbeat is time.monotonic), so on a thaw the arbiter would
+// kill a worker holding the request that woke it (a 502), and gthread's
+// heartbeat is its main loop, not a request. No control socket: gunicorn
+// 26's goes under $HOME/.gunicorn, and $HOME is the read-only release. A
+// config file, not flags, so the app's variables win: gunicorn puts
+// GUNICORN_CMD_ARGS above it (an older gunicorn ignores a name it doesn't
+// know there). No single quotes: it's written in some.
 var gunicornConf = []string{
 	"# written by homeport: the app has no gunicorn.conf.py",
 	"import os",
@@ -332,6 +337,8 @@ var gunicornConf = []string{
 	"if workers < 1:",
 	"    workers = 2",
 	"threads = 4",
+	"timeout = 0",
+	"control_socket_disable = True",
 }
 
 const gunicornConfPath = ".homeport/gunicorn.conf.py"
