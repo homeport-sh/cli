@@ -247,9 +247,14 @@ func (r reader) laravelQueue(runner bool) *Queue {
 // maxScanned bounds the files a scan of a folder reads.
 const maxScanned = 5000
 
-// anyPHP says whether a .php file under dir (regular files only, never
-// through a link) is one match says is.
+// anyPHP says whether a .php file under dir is one match says is (anyFile).
 func (r reader) anyPHP(dir string, match func(name string, b []byte) bool) bool {
+	return r.anyFile(dir, []string{".php"}, match)
+}
+
+// anyFile says whether a file under dir with one of exts (regular files
+// only, never through a link) is one match says is.
+func (r reader) anyFile(dir string, exts []string, match func(name string, b []byte) bool) bool {
 	// each folder down to it a folder, not a link (WalkDir follows its root)
 	d := ""
 	for _, part := range strings.Split(dir, "/") {
@@ -265,7 +270,7 @@ func (r reader) anyPHP(dir string, match func(name string, b []byte) bool) bool 
 			return fs.SkipDir
 		case found || n >= maxScanned:
 			return fs.SkipAll
-		case d.IsDir() || !d.Type().IsRegular() || !strings.HasSuffix(p, ".php"):
+		case d.IsDir() || !d.Type().IsRegular() || !slices.Contains(exts, path.Ext(p)):
 			return nil
 		}
 		n++
@@ -279,4 +284,114 @@ func (r reader) anyPHP(dir string, match func(name string, b []byte) bool) bool 
 		return nil
 	})
 	return found
+}
+
+// A JavaScript app's queue is its library's. pg-boss and Graphile Worker
+// keep jobs in the environment's Postgres; BullMQ and Bee-Queue in Redis,
+// which isn't offered yet. A drain is what the app names: its queue:drain
+// script, run as the bundle runs a script's file, or rsc-kit's queue:drain
+// command (src/commands/queue:drain.ts, ./app queue:drain) - pg-boss has no
+// drain of its own, and @homeport/queue's drain() is one - or Graphile
+// Worker's own --once. queue:retry and queue:work (rsc-kit: work, too) are
+// its retry and worker the same way.
+const (
+	queueDrainName = "queue:drain"
+	queueRetryName = "queue:retry"
+	queueWorkName  = "queue:work"
+	rscKitWorkName = "work"
+	graphileCLI    = "node_modules/graphile-worker/dist/cli.js"
+	redisQueueNote = " needs Redis, which homeport doesn't offer yet: pg-boss or Graphile Worker run in your database"
+	scheduleNote   = "pg-boss runs schedule() jobs only while a worker runs: drained on demand, move them to cron jobs."
+)
+
+// queueUse: a queue script, run as a drain; Graphile Worker's command by
+// its file.
+var queueUse = scriptUse{"queue drain", "drain.js", map[string]string{"graphile-worker": "dist/cli.js"}}
+
+// queueFiles are the files JavaScript queue detection reads (Files).
+func queueFiles() []string {
+	return rscKitCommandFiles(queueDrainName, queueRetryName, queueWorkName, rscKitWorkName)
+}
+
+// a pg-boss schedule: boss.schedule(name, cron)
+var scheduleRe = regexp.MustCompile(`\.schedule\(`)
+
+// jsQueue is a JavaScript app's queue, if its dependencies have a queue
+// library.
+func (r reader) jsQueue(p *Plan) *Queue {
+	deps := r.deps()
+	q := Queue{Backend: "postgres", Source: QueueDetected}
+	switch {
+	case deps["pg-boss"]:
+		q.Framework = "pg-boss"
+	case deps["graphile-worker"]:
+		q.Framework = "Graphile Worker"
+	case deps["bullmq"]:
+		return &Queue{Framework: "BullMQ", Backend: "redis", Note: "BullMQ" + redisQueueNote, Source: QueueDetected}
+	case deps["bee-queue"]:
+		return &Queue{Framework: "Bee-Queue", Backend: "redis", Note: "Bee-Queue" + redisQueueNote, Source: QueueDetected}
+	default:
+		return nil
+	}
+	var notes []string
+	if p.RSCKit {
+		// ./app is the server: a command is all it runs
+		q.Drain, q.Retry = r.rscKitCommand(queueDrainName), r.rscKitCommand(queueRetryName)
+		if q.Worker = r.rscKitCommand(queueWorkName); q.Worker == "" {
+			q.Worker = r.rscKitCommand(rscKitWorkName)
+		}
+		if q.Drain == "" {
+			notes = append(notes, "To drain the queue on demand, add src/commands/queue:drain.ts that works it with @homeport/queue's drain(); "+
+				"until then, run its worker always on.")
+		}
+	} else {
+		pkg := r.pkg()
+		for _, s := range []struct {
+			name string
+			to   *string
+		}{{queueDrainName, &q.Drain}, {queueRetryName, &q.Retry}, {queueWorkName, &q.Worker}} {
+			if pkg.Scripts[s.name] == "" {
+				continue
+			}
+			args, _, warning := r.scriptArgs(p, pkg, s.name, queueUse)
+			*s.to = args
+			if warning != "" {
+				notes = append(notes, warning+".")
+			}
+		}
+		if q.Framework == "Graphile Worker" {
+			switch {
+			case !r.prodDeps()["graphile-worker"]:
+				notes = append(notes, "graphile-worker is in devDependencies, and the bundle ships dependencies only: move it to dependencies for homeport to run it.")
+			case q.Drain == "" && pkg.Scripts[queueDrainName] == "":
+				q.Drain = graphileCLI + " --once"
+			}
+			if q.Worker == "" && r.prodDeps()["graphile-worker"] {
+				q.Worker = graphileCLI
+			}
+		}
+		if q.Drain == "" && pkg.Scripts[queueDrainName] == "" && q.Framework == "pg-boss" {
+			notes = append(notes, "To drain the queue on demand, add a queue:drain script that works it with @homeport/queue's drain(); "+
+				"until then, run its worker always on.")
+		}
+	}
+	if q.Framework == "pg-boss" && r.anyFile("src", []string{".ts", ".mts", ".cts", ".tsx", ".js", ".mjs", ".cjs", ".jsx"},
+		func(_ string, b []byte) bool { return scheduleRe.Match(b) }) {
+		notes = append(notes, scheduleNote)
+	}
+	if q.Drain != "" {
+		q.Timeout = DefaultQueueTimeout
+	}
+	q.Note = strings.Join(notes, " ")
+	return &q
+}
+
+// rscKitCommand is the rsc-kit command name, if the app has it.
+func (r reader) rscKitCommand(name string) string {
+	for _, f := range rscKitCommandFiles(name) {
+		if r.exists(f) {
+			return name
+		}
+	}
+	return ""
 }
