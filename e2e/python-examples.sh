@@ -141,7 +141,8 @@ sed -i 's/dependencies = \[/dependencies = ["httpx", /' "$stale/pyproject.toml"
 if docker run --rm -v "$stale:/app" -w /app "$(jq -r .image "$work/stale.plan.json")" sh -ec "$(jq -r '.install' "$work/stale.plan.json")" > "$work/stale.build.log" 2>&1; then
   check stale-lock "the build fails" "it built"
 else
-  grep -q "run uv lock" "$work/stale.build.log" && check stale-lock "the build fails, saying to run uv lock" ok || {
+  # uv's own reason, and homeport's advice
+  grep -q "needs to be updated" "$work/stale.build.log" && grep -q "run uv lock" "$work/stale.build.log" && check stale-lock "the build fails, saying to run uv lock" ok || {
     tail -20 "$work/stale.build.log" >&2; check stale-lock "the build fails, saying to run uv lock" "not said"; }
 fi
 

@@ -321,6 +321,11 @@ func TestAStaleUVLockFailsTheBuild(t *testing.T) {
 		!strings.Contains(p.Install, "uv.lock is out of date") || !strings.Contains(p.Install, "run uv lock") {
 		t.Errorf("install: %s", p.Install)
 	}
+	// --locked resolves, so it needs the build's Python: uv finds none on
+	// PATH, and a .python-version names a line it must find
+	if !strings.Contains(p.Install, "-o .homeport-build/requirements.txt --python .homeport-build/python/bin/python3.14 ") {
+		t.Errorf("uv export isn't told the build's Python: %s", p.Install)
+	}
 }
 
 // An app's own top-level bin/ folder can't ship: bin is the interpreter.
