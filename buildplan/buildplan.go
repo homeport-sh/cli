@@ -279,7 +279,7 @@ var SiteFolders = []string{"build", "dist", "out"}
 func Files() []string {
 	return slices.Concat([]string{ConfigFile, "go.mod", "composer.json", "composer.lock", "package.json", "bun.lock", "bun.lockb",
 		"package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", ".nvmrc", ".node-version", ".bun-version", "index.html",
-		"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"}, svelteConfigs, nextConfigs, nuxtConfigs, nitroConfigs, releaseFiles(), pythonFiles())
+		"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"}, svelteConfigs, nextConfigs, nuxtConfigs, nitroConfigs, releaseFiles(), pythonFiles(), queueFiles())
 }
 
 var (
@@ -576,8 +576,11 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 			p.Run, p.Octane = phpServerRoot(p.Run), p.Run == PHPOctaneRun
 		}
 	}
-	if php && r.requires("laravel/framework") {
+	switch {
+	case php && r.requires("laravel/framework"):
 		p.Queue = r.laravelQueue(p.laravelViews && s.Command == "")
+	case p.RSCKit || (p.Kind == Bundle && (p.Toolchain == "node" || p.Toolchain == "bun")):
+		p.Queue = r.jsQueue(&p)
 	}
 	if cfg.Queue != nil {
 		if p.Queue, err = cfg.Queue.over(p.Queue); err != nil {

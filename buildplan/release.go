@@ -18,7 +18,21 @@ import (
 var migrateScripts = []string{"migrate", "db:migrate"}
 
 // rscKitMigrate: rsc-kit runs src/commands/<name>.* as ./app <name>.
-var rscKitMigrate = []string{"src/commands/migrate.ts", "src/commands/migrate.tsx", "src/commands/migrate.js", "src/commands/migrate.mjs", "src/commands/migrate.mts"}
+var rscKitMigrate = rscKitCommandFiles("migrate")
+
+// rscKitExts are a command file's extensions, in the order rsc-kit reads.
+var rscKitExts = []string{"ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx"}
+
+// rscKitCommandFiles are the files that would be each named command.
+func rscKitCommandFiles(names ...string) []string {
+	var out []string
+	for _, n := range names {
+		for _, e := range rscKitExts {
+			out = append(out, "src/commands/"+n+"."+e)
+		}
+	}
+	return out
+}
 
 // prismaLock is in Prisma's migrations folder once it has any.
 const prismaLock = "prisma/migrations/migration_lock.toml"
@@ -48,39 +62,13 @@ func (r reader) detectRelease(p *Plan) (release, why, warning string) {
 	case p.Kind != Bundle || (p.Toolchain != "node" && p.Toolchain != "bun"):
 		return "", "", ""
 	}
-	pkg, prod := r.pkg(), r.prodDeps()
+	pkg := r.pkg()
 	for _, name := range migrateScripts {
-		if pkg.Scripts[name] == "" {
-			continue
+		if pkg.Scripts[name] != "" {
+			return r.scriptArgs(p, pkg, name, releaseUse)
 		}
-		from := fmt.Sprintf("its %q script (%s)", name, pkg.Scripts[name])
-		st, err := parseStart(pkg.Scripts, name, 0)
-		if err != nil {
-			says := " can't run as a release command"
-			if errors.Is(err, errShell) || errors.Is(err, errEnv) {
-				says = " " + err.Error() + ", which a release command can't"
-			}
-			return "", "", from + says + ": set the release command, args to " + p.Runtime + " (like `migrate.js`)"
-		}
-		if (st.bin == "bunx" || st.bin == "npx") && len(st.args) > 0 {
-			args := slices.DeleteFunc(slices.Clone(st.args), func(a string) bool { return a == "--bun" || a == "-y" || a == "--yes" })
-			if len(args) == 0 {
-				break
-			}
-			st.bin, st.args = args[0], args[1:]
-		}
-		switch {
-		case st.file != "" && st.runtime != "" && st.runtime != p.Runtime:
-			return "", "", fmt.Sprintf("%s runs on %s, and the app on %s: set the release command", from, title(st.runtime), title(p.Runtime))
-		case st.file != "":
-			return strings.Join(slices.Concat(st.flags, []string{st.file}, st.args), " "), from, ""
-		case migrateBins[st.bin] == "":
-			return "", "", from + " runs " + st.bin + ": set the release command to its file under node_modules, as args to " + p.Runtime
-		case !prod[st.bin]:
-			return "", "", fmt.Sprintf("%s runs %s, which is in devDependencies, and the bundle ships dependencies only: move it to dependencies for the release command to run it, or set one", from, st.bin)
-		}
-		return strings.Join(slices.Concat([]string{"node_modules/" + st.bin + "/" + migrateBins[st.bin]}, st.args), " "), from, ""
 	}
+	prod := r.prodDeps()
 	if r.exists(prismaLock) {
 		if !prod["prisma"] {
 			return "", "", "it has Prisma's migrations (" + prismaLock + "), but prisma is in devDependencies, and the bundle ships dependencies only: " +
@@ -89,6 +77,50 @@ func (r reader) detectRelease(p *Plan) (release, why, warning string) {
 		return "node_modules/prisma/" + migrateBins["prisma"] + " migrate deploy", "it has Prisma's migrations (prisma/migrations): prisma migrate deploy", ""
 	}
 	return "", "", ""
+}
+
+// scriptUse is what a script is run as: what it's called (a release
+// command, a queue drain), a file a person might give it, and the packages
+// whose command it may run by its file (the file in the package).
+type scriptUse struct {
+	what, example string
+	bins          map[string]string
+}
+
+var releaseUse = scriptUse{"release command", "migrate.js", migrateBins}
+
+// scriptArgs: package.json's script name as args to p's runtime, run as
+// u - the file it runs, with the runtime's flags and the file's args, or a
+// package's command by its file - and where they came from; or a warning
+// saying why it can't run as one.
+func (r reader) scriptArgs(p *Plan, pkg pkgJSON, name string, u scriptUse) (args, from, warning string) {
+	what, bins := u.what, u.bins
+	from = fmt.Sprintf("its %q script (%s)", name, pkg.Scripts[name])
+	st, err := parseStart(pkg.Scripts, name, 0)
+	if err != nil {
+		says := " can't run as a " + what
+		if errors.Is(err, errShell) || errors.Is(err, errEnv) {
+			says = " " + err.Error() + ", which a " + what + " can't"
+		}
+		return "", "", from + says + ": set the " + what + ", args to " + p.Runtime + " (like `" + u.example + "`)"
+	}
+	if (st.bin == "bunx" || st.bin == "npx") && len(st.args) > 0 {
+		args := slices.DeleteFunc(slices.Clone(st.args), func(a string) bool { return a == "--bun" || a == "-y" || a == "--yes" })
+		if len(args) > 0 {
+			st.bin, st.args = args[0], args[1:]
+		}
+	}
+	switch {
+	case st.file != "" && st.runtime != "" && st.runtime != p.Runtime:
+		return "", "", fmt.Sprintf("%s runs on %s, and the app on %s: set the %s", from, title(st.runtime), title(p.Runtime), what)
+	case st.file != "":
+		return strings.Join(slices.Concat(st.flags, []string{st.file}, st.args), " "), from, ""
+	case bins[st.bin] == "":
+		return "", "", from + " runs " + st.bin + ": set the " + what + " to its file under node_modules, as args to " + p.Runtime
+	case !r.prodDeps()[st.bin]:
+		return "", "", fmt.Sprintf("%s runs %s, which is in devDependencies, and the bundle ships dependencies only: move it to dependencies for the %s to run it, or set one", from, st.bin, what)
+	}
+	return strings.Join(slices.Concat([]string{"node_modules/" + st.bin + "/" + bins[st.bin]}, st.args), " "), from, ""
 }
 
 // prodDeps: package.json's dependencies alone, what a bundle ships.

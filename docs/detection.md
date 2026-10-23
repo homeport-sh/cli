@@ -682,6 +682,9 @@ demand would work the same jobs twice.
 |---|---|---|---|---|
 | Laravel | a class in `app/` that `implements ShouldQueue`, or the `jobs` table's migration | `postgres` | `php-cli .homeport/queue.php ./bin` | `php-cli artisan queue:work --tries=3 --timeout=60`, `stop_grace: 90s` |
 | Laravel Horizon | `laravel/horizon` in `composer.json` | `redis` | none: Horizon supervises its own workers | `php-cli artisan horizon` |
+| pg-boss | `pg-boss` in `package.json` | `postgres` | the app's: a `queue:drain` script, or rsc-kit's `queue:drain` command | a `queue:work` script; rsc-kit's `queue:work` or `work` command |
+| Graphile Worker | `graphile-worker` in `package.json` | `postgres` | a `queue:drain` script, else `node_modules/graphile-worker/dist/cli.js --once` | `node_modules/graphile-worker/dist/cli.js` |
+| BullMQ, Bee-Queue | `bullmq` or `bee-queue` in `package.json` | `redis` | none | none |
 
 A Laravel bundle that homeport builds has `.homeport/queue.php`. It boots
 the app once and runs `artisan queue:work --stop-when-empty` in the same
@@ -694,6 +697,36 @@ any other driver both are 0. Options after `./bin` go to `queue:work`
 which doesn't have the runner, so its drain is `php-cli artisan queue:work
 --stop-when-empty`. `retry` (`php-cli artisan queue:retry all`) retries the
 failed jobs.
+
+A JavaScript app's drain is one it names. A `queue:drain` script runs as
+the bundle runs a script's file (`bun scripts/drain.ts` is
+`scripts/drain.ts`); a script that needs a shell can't, and the plan's
+`note` says so. An rsc-kit app's command `src/commands/queue:drain.ts` runs
+as `./app queue:drain`. pg-boss has no drain of its own: `drain()` from
+`@homeport/queue` is one.
+
+```ts
+// src/commands/queue:drain.ts
+import { PgBoss } from "pg-boss";
+import { drain } from "@homeport/queue";
+import { handlers } from "../jobs";
+
+export default async () => {
+  const boss = new PgBoss(process.env.DATABASE_URL!);
+  await boss.start();
+  await drain(boss, { handlers });
+  await boss.stop();
+};
+```
+
+It works each queue a handler is given for until a pass finds nothing,
+then prints the line from `waiting` and `next_due` in pg-boss's job table.
+Without a drain the queue runs always on only, and the `note` says how to
+add one. pg-boss runs `schedule()` jobs only while a worker runs, so an app
+that calls it is told to move them to cron jobs to drain on demand. A
+`queue:retry` script or command is `retry`. Graphile Worker's `--once` is
+its drain; its `crontab` isn't run by one. BullMQ and Bee-Queue need Redis,
+which homeport doesn't offer yet.
 
 The plan's `source` says where the queue came from: `detected`, or
 `config`. `queue:` in `homeport.yaml` says it instead. `none` (or `""`)
