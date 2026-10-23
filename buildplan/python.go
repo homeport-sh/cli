@@ -598,7 +598,10 @@ func pyAssemble(b string, rel pythonRelease, conf bool) string {
 			lib+"/site-packages/pip "+lib+"/site-packages/pip-*.dist-info",
 		"cp "+pyBuild+"/python/bin/python"+line+" "+b+"/bin",
 		writeConf,
-		"{ "+b+"/bin -m compileall -q -j 0 --invalidation-mode unchecked-hash "+b+" || echo 'homeport: the files above don'\"'\"'t compile: Python says so if they'\"'\"'re imported' >&2; }")
+		// one process: -j's pool needs a POSIX semaphore, and the hosted
+		// build's sandbox has no writable /dev/shm (the pool fails before
+		// compiling a file)
+		"{ "+b+"/bin -m compileall -q --invalidation-mode unchecked-hash "+b+" || echo 'homeport: the files above don'\"'\"'t compile: Python says so if they'\"'\"'re imported' >&2; }")
 }
 
 // pyRelease: a Django app's migrations, or Alembic's (FastAPI's, Flask's

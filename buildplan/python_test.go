@@ -403,3 +403,25 @@ func TestThePythonSet(t *testing.T) {
 		t.Errorf("js: %v", err)
 	}
 }
+
+// The bundle is compiled in one process: compileall's -j other than 1 makes
+// a process pool, whose queue needs a POSIX semaphore, and the hosted
+// build's sandbox has no writable /dev/shm - so the pool fails before a file
+// is compiled (PermissionError from SemLock), and the release ships no .pyc
+// at all.
+func TestThePythonBundleCompilesWithoutAProcessPool(t *testing.T) {
+	p := detect(t, pyproject([]string{"flask", "gunicorn"}, "app.py", "app = Flask(__name__)\n"), buildplan.Settings{})
+	i := strings.Index(p.Command, "-m compileall ")
+	if i < 0 {
+		t.Fatalf("no compileall: %s", p.Command)
+	}
+	args := strings.Fields(p.Command[i:])
+	for k, a := range args {
+		if a == "||" || a == "}" {
+			break
+		}
+		if a == "-j" && (k+1 >= len(args) || args[k+1] != "1") || strings.HasPrefix(a, "-j") && a != "-j" && a != "-j1" {
+			t.Errorf("compileall runs a process pool (%s): %s", strings.Join(args[k:min(k+2, len(args))], " "), p.Command[i:])
+		}
+	}
+}
