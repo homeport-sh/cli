@@ -332,7 +332,7 @@ func (r reader) pyInstall() (func(py string) string, error) {
 	switch {
 	case r.exists("uv.lock") && r.exists("pyproject.toml"):
 		return func(py string) string {
-			return "{ uv export --locked --no-dev --no-editable --no-header --format requirements-txt -o " + pyBuild + "/requirements.txt || " +
+			return "{ uv export --locked --no-dev --no-editable --no-header --format requirements-txt -o " + pyBuild + "/requirements.txt --python " + py + " || " +
 				"{ echo 'homeport: if uv.lock is out of date with pyproject.toml, run uv lock and commit it' >&2; exit 1; }; } && " +
 				"uv pip install --python " + py + " --no-deps -r " + pyBuild + "/requirements.txt"
 		}, nil
