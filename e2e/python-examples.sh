@@ -105,7 +105,7 @@ is() { # name, url, status
 workers() {
   local got=0
   for _ in $(seq 1 50); do
-    got=$(docker top "e2e-py-$1" -eo args | grep -c '[g]unicorn' || true)
+    got=$(docker top "e2e-py-$1" -o pid,args | grep -c '[g]unicorn' || true)
     [ "$got" = $(($2 + 1)) ] && break
     sleep 0.2
   done
