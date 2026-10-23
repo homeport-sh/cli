@@ -73,6 +73,10 @@ type Settings struct {
 	// Runtime: what runs a JavaScript app, bun or node; empty is what the
 	// project says (its engines, version files, start script)
 	Runtime string `json:"runtime,omitempty"`
+	// Python: the Python line a Python app runs, like 3.13 (one of
+	// PythonLines); empty is what the project says (its .python-version,
+	// runtime.txt, requires-python)
+	Python string `json:"python,omitempty"`
 	// Packages: the system packages it ships with (packages.go), replacing
 	// homeport.yaml's when there are any
 	Packages []string `json:"packages,omitempty"`
@@ -85,7 +89,7 @@ type Settings struct {
 func (s Settings) IsZero() bool {
 	return s.Root == "" && s.Kind == "" && s.Install == "" && s.Command == "" && s.Output == "" &&
 		s.Run == "" && s.Release == "" && !s.NoRelease && s.StopGrace == "" && len(s.Processes) == 0 && s.Octane == nil && s.Runtime == "" &&
-		len(s.Packages) == 0 && len(s.Headers) == 0
+		s.Python == "" && len(s.Packages) == 0 && len(s.Headers) == 0
 }
 
 // With is s with what o sets in its place: one deploy's settings over the
@@ -102,7 +106,7 @@ func (s Settings) With(o Settings) Settings {
 		Command: pick(s.Command, o.Command), Output: pick(s.Output, o.Output), Run: pick(s.Run, o.Run),
 		Release: pick(s.Release, o.Release), NoRelease: s.NoRelease, StopGrace: pick(s.StopGrace, o.StopGrace),
 		Processes: slices.Clone(s.Processes), Octane: s.Octane,
-		Runtime: pick(s.Runtime, o.Runtime), Packages: slices.Clone(s.Packages), Headers: slices.Clone(s.Headers)}
+		Runtime: pick(s.Runtime, o.Runtime), Python: pick(s.Python, o.Python), Packages: slices.Clone(s.Packages), Headers: slices.Clone(s.Headers)}
 	// a release command and none are one setting: o's, when it says either
 	if o.NoRelease {
 		out.Release, out.NoRelease = "", true
@@ -346,6 +350,9 @@ func (s Settings) Check() error {
 	if s.Runtime != "" && s.Runtime != "bun" && s.Runtime != "node" {
 		return fmt.Errorf("runtime %q: bun or node", s.Runtime)
 	}
+	if s.Python != "" && !slices.Contains(PythonLines(), s.Python) {
+		return fmt.Errorf("python %q: one of %s", s.Python, strings.Join(PythonLines(), ", "))
+	}
 	if err := CheckHeaders(s.Headers); err != nil {
 		return err
 	}
@@ -517,6 +524,9 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	if len(s.Processes) > 0 {
 		p.Processes = slices.SortedFunc(slices.Values(s.Processes), func(a, b Process) int { return strings.Compare(a.Name, b.Name) })
 	}
+	if s.Python != "" && p.Toolchain != "python" {
+		return Plan{}, errors.New("a Python version is for Python apps: this one isn't built as a Python app")
+	}
 	php := p.Toolchain == "php" && p.Kind == Bundle
 	if s.Octane != nil && *s.Octane && !php {
 		return Plan{}, errors.New("Octane is for Laravel apps: this one isn't built as a PHP app")
@@ -638,7 +648,7 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 		p.Install = "composer check-platform-reqs --no-dev --lock && composer install --no-dev --optimize-autoloader --no-interaction"
 		// Inertia's SSR: built with the rest, run beside the web (laravel.go)
 		ssr := cfg.Build.Command == "" && cfg.Static == "" && r.inertiaSSR()
-		p.Install = join(p.Install, r.phpAssets(ssr))
+		p.Install = join(p.Install, r.frontEnd(ssr))
 		if cfg.Static == "" {
 			p.Kind = Bundle
 			if cfg.Build.Artifact == "" {
@@ -674,7 +684,7 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 		}
 	case r.python():
 		// Python: its interpreter in the bundle, as bin (python.go)
-		if err := r.py(&p, cfg, cmpOr(s.Run, cfg.Run)); err != nil {
+		if err := r.py(&p, cfg, cmpOr(s.Run, cfg.Run), s.Python); err != nil {
 			return Plan{}, err
 		}
 	case r.exists("package.json") && (r.hasLockfile() || r.ws != nil):

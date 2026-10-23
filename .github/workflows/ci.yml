@@ -69,7 +69,24 @@ jobs:
       - name: build and run the examples
         run: e2e/js-examples.sh "$RUNNER_TEMP/homeport" examples
 
-      # Django, FastAPI and Flask: built in the plan's image, run from the
-      # bundle - the interpreter as bin - read-only in a bare Ubuntu 24.04
+  # Django (with a Tailwind build), FastAPI and Flask: built in the plan's
+  # image, run from the bundle - the interpreter as bin - read-only in a bare
+  # Ubuntu 24.04, on x86-64 and on arm64
+  python-examples:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: build homeport
+        run: go build -o "$RUNNER_TEMP/homeport" ./cmd/homeport
+
       - name: build and run the Python examples
         run: e2e/python-examples.sh "$RUNNER_TEMP/homeport" e2e/python

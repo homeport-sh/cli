@@ -76,6 +76,16 @@ func PythonVersions() []string {
 	return out
 }
 
+// PythonLines are the Python lines offered, like 3.14, oldest first: what
+// a Python app's settings may name.
+func PythonLines() []string {
+	out := make([]string, len(pythonReleases))
+	for i, p := range pythonReleases {
+		out[i] = pythonLine(p.Version)
+	}
+	return out
+}
+
 // The server installed when the app's own dependencies have none: its
 // wheel, by its sha256 on PyPI. Its own dependencies resolve against what
 // the app installed, so the app's locked versions stay as they are.
@@ -230,13 +240,14 @@ func (r reader) pyDeps() map[string]bool {
 
 // py makes p a Python app's plan: its interpreter, its install, how it's
 // served. run is a start command someone set (Settings or homeport.yaml):
-// an app with nothing recognised needs one.
-func (r reader) py(p *Plan, cfg fileConfig, run string) error {
+// an app with nothing recognised needs one. python is the Python line the
+// build settings name, if any.
+func (r reader) py(p *Plan, cfg fileConfig, run, python string) error {
 	install, err := r.pyInstall()
 	if err != nil {
 		return err
 	}
-	rel, why, err := r.pythonVersion()
+	rel, why, err := r.pythonVersion(python)
 	if err != nil {
 		return err
 	}
@@ -255,7 +266,7 @@ func (r reader) py(p *Plan, cfg fileConfig, run string) error {
 		if deps["uvicorn"] && !deps["gunicorn"] {
 			server, web = "uvicorn", "-m uvicorn --host 0.0.0.0 --port $PORT "+mod+".asgi:application"
 		} else {
-			server, web = "gunicorn", "-m gunicorn --bind 0.0.0.0:$PORT "+mod+".wsgi"
+			server, web = "gunicorn", "-m gunicorn --bind 0.0.0.0:$PORT "+r.gunicornWorkers()+mod+".wsgi"
 		}
 		if !deps["whitenoise"] {
 			p.Warnings = append(p.Warnings, "a Django app serves its static files (/static/) only through something like WhiteNoise: "+
@@ -269,7 +280,7 @@ func (r reader) py(p *Plan, cfg fileConfig, run string) error {
 		case err == nil && framework == "FastAPI":
 			server, web = "uvicorn", "-m uvicorn --host 0.0.0.0 --port $PORT "+entry
 		case err == nil:
-			server, web = "gunicorn", "-m gunicorn --bind 0.0.0.0:$PORT "+entry
+			server, web = "gunicorn", "-m gunicorn --bind 0.0.0.0:$PORT "+r.gunicornWorkers()+entry
 		}
 	default:
 		if run == "" {
@@ -277,15 +288,16 @@ func (r reader) py(p *Plan, cfg fileConfig, run string) error {
 				"like `-m myapp` or `server.py --port $PORT`")
 		}
 	}
-	if r.exists("package.json") {
-		p.Warnings = append(p.Warnings, "package.json: a Python app's front-end assets aren't built by homeport yet - commit what they build, or set a build command")
-	}
 
 	py := pyBuild + "/python/bin/python" + pythonLine(rel.Version)
 	p.setup = pySetup(rel)
 	p.Install = join(p.setup, install(py))
 	if server != "" && cfg.Build.Command == "" {
 		p.Install = join(p.Install, pyServer(py, server))
+	}
+	// the front-end, with the pinned Bun, before collectstatic collects it
+	if assets := r.frontEnd(false); assets != "" {
+		p.Install = join(p.Install, fetchBun, assets)
 	}
 	p.Run = web
 	if framework == "Django" {
@@ -304,13 +316,24 @@ func (r reader) py(p *Plan, cfg fileConfig, run string) error {
 	return nil
 }
 
+// gunicornWorkers is gunicorn's workers when the app sets none (a
+// gunicorn.conf.py may): 2 processes of 4 threads (gthread), as a sync
+// worker alone serves one request at a time. With a trailing space.
+func (r reader) gunicornWorkers() string {
+	if r.exists("gunicorn.conf.py") {
+		return ""
+	}
+	return "--workers 2 --threads 4 "
+}
+
 // pyInstall is how the app's dependencies are installed into the
 // interpreter at py: uv.lock's exact versions, else requirements.txt's.
 func (r reader) pyInstall() (func(py string) string, error) {
 	switch {
 	case r.exists("uv.lock") && r.exists("pyproject.toml"):
 		return func(py string) string {
-			return "uv export --frozen --no-dev --no-editable --no-header --format requirements-txt -o " + pyBuild + "/requirements.txt && " +
+			return "{ uv export --locked --no-dev --no-editable --no-header --format requirements-txt -o " + pyBuild + "/requirements.txt || " +
+				"{ echo 'homeport: if uv.lock is out of date with pyproject.toml, run uv lock and commit it' >&2; exit 1; }; } && " +
 				"uv pip install --python " + py + " --no-deps -r " + pyBuild + "/requirements.txt"
 		}, nil
 	case r.exists("requirements.txt"):
@@ -368,10 +391,17 @@ func pythonLine(v string) string {
 	return f[0] + "." + f[1]
 }
 
-// pythonVersion is the Python the app runs, and why: .python-version's
-// line, runtime.txt's, the default if requires-python allows it, else the
-// newest it allows.
-func (r reader) pythonVersion() (pythonRelease, string, error) {
+// pythonVersion is the Python the app runs, and why: the build settings'
+// line (set), else .python-version's line, runtime.txt's, the default if
+// requires-python allows it, else the newest it allows.
+func (r reader) pythonVersion(set string) (pythonRelease, string, error) {
+	if set != "" { // Settings.Check took it: one of PythonLines
+		for _, p := range pythonReleases {
+			if pythonLine(p.Version) == set {
+				return p, "the build settings say " + set, nil
+			}
+		}
+	}
 	lines := make([]string, len(pythonReleases))
 	for i, p := range pythonReleases {
 		lines[i] = pythonLine(p.Version)

@@ -107,6 +107,12 @@ if build django; then
   url=$(start django)
   page django "$url/" '"framework":"django"'
   is django "$url/static/site.css" 200
+  # the front-end's build (Tailwind, with Bun), collected and served
+  grep -q "tailwindcss -i" "$work/django.build.log" && check django "the front-end built" ok || check django "the front-end built" "tailwindcss didn't run"
+  is django "$url/static/build/app.css" 200
+  curl -s "$url/static/build/app.css" | grep -q 'text-emerald-600' && check django "its CSS has the page's classes" ok || check django "its CSS has the page's classes" "it doesn't"
+  b="$work/django/$(jq -r .artifact "$work/django.plan.json")"
+  [ ! -e "$b/node_modules" ] && check django "node_modules doesn't ship" ok || check django "node_modules doesn't ship" "it does"
   is django "$url/nope" 404
   stop django
 fi
@@ -125,6 +131,18 @@ if build flask; then
   is flask "$url/static/hello.txt" 200
   is flask "$url/nope" 404
   stop flask
+fi
+
+# a uv.lock that pyproject.toml has moved past fails the build, saying so
+stale="$work/stale"
+cp -R "$examples/fastapi" "$stale"
+sed -i 's/dependencies = \[/dependencies = ["httpx", /' "$stale/pyproject.toml"
+"$hp" build-plan "$stale" > "$work/stale.plan.json"
+if docker run --rm -v "$stale:/app" -w /app "$(jq -r .image "$work/stale.plan.json")" sh -ec "$(jq -r '.install' "$work/stale.plan.json")" > "$work/stale.build.log" 2>&1; then
+  check stale-lock "the build fails" "it built"
+else
+  grep -q "run uv lock" "$work/stale.build.log" && check stale-lock "the build fails, saying to run uv lock" ok || {
+    tail -20 "$work/stale.build.log" >&2; check stale-lock "the build fails, saying to run uv lock" "not said"; }
 fi
 
 if [ "$fail" != 0 ]; then
