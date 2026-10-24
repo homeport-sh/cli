@@ -42,6 +42,7 @@ function walk(dir, rel = "") {
 	return out;
 }
 
+const directives = (cc) => (cc ?? "").toLowerCase().split(",").map((d) => d.trim()).sort().join(",");
 const urls = new Map(), immutable = new Set();
 for (const tree of ["immutable", "files", "pages"]) {
 	for (const f of walk(path.join(root, tree))) {
@@ -57,8 +58,9 @@ for (const [u, f] of urls) {
 	if (r.status !== 200) bad(`${u}: the app answers ${r.status}`);
 	else if (r.headers.has(marker)) bad(`${u}: the app ran its code for it (${marker})`);
 	else if (!body.equals(fs.readFileSync(f))) bad(`${u}: not the bytes the app answers`);
-	// the host's for an immutable asset: the app's own, exactly
-	else if (immutable.has(u) && r.headers.get("cache-control") !== "public, max-age=31536000, immutable") {
+	// the host's for an immutable asset: the app's own directives (sirv
+	// writes them without spaces, Next.js and express with)
+	else if (immutable.has(u) && directives(r.headers.get("cache-control")) !== "immutable,max-age=31536000,public") {
 		bad(`${u}: the app answers Cache-Control ${r.headers.get("cache-control")}, not the host's year, immutable`);
 	}
 	else ok(`${u}: the app's own answer, from a file, none of its code run`);
