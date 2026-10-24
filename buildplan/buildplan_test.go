@@ -222,21 +222,23 @@ func TestSayingHowAnRSCKitAppBuildsWins(t *testing.T) {
 
 // A PHP app ships as a bundle: its installed files and, at their top, the
 // image's prebuilt FrankenPHP (bin) - nothing is compiled per app. It's
-// served by default, from the bundle's folder: php-server over public/ on
-// the port homeport gives it, in worker mode through Octane's worker when
+// served by default, from the bundle's folder: by the bundle's own config
+// for FrankenPHP (.homeport/web.caddyfile: public/ on the port homeport
+// gives it, and the visitor as homeport's proxy says, with nothing of the
+// app's changed), in worker mode through Octane's worker when
 // the app uses Octane. What homeport.yaml or a person says still wins; a
 // static site runs nothing.
 func TestAPHPAppShipsAsABundle(t *testing.T) {
 	php := map[string]string{"composer.json": `{"require":{"laravel/framework":"^13.0"}}`, "composer.lock": "{}"}
 	p := detect(t, php, buildplan.Settings{})
 	if p.Kind != buildplan.Bundle || p.Artifact != ".homeport-bundle" || p.StaticFallback ||
-		!strings.Contains(p.Command, " && frankenphp-bundle . .homeport-bundle && mv -T .homeport-bundle/frankenphp .homeport-bundle/bin") || p.Run != "php-server --root public --listen :$PORT" {
+		!strings.Contains(p.Command, " && frankenphp-bundle . .homeport-bundle && mv -T .homeport-bundle/frankenphp .homeport-bundle/bin") || p.Run != "run --config .homeport/web.caddyfile --adapter caddyfile" {
 		t.Fatalf("default: %+v", p)
 	}
 	// on the base with the static FrankenPHP and Bun 1.4.4, pinned by
 	// digest, whose bundles' opcache skips timestamp checks and keeps its
 	// compiled scripts across wakes; homeport's php.ini survives an app's own
-	if p.Image != "ghcr.io/homeport-sh/frankenphp:8.5-1.13.3-bun1.4.4@sha256:d3123627e99874cb274d38294fbb2002c7a7e4aa5762a477912918f854fce8c6" {
+	if p.Image != "ghcr.io/homeport-sh/frankenphp:8.5-1.13.3-bun1.4.4-2@sha256:ce919ee0f5f8000a966215ef44dcae12a8d6421ef3c2c1e4f2037476ec6c32fc" {
 		t.Fatalf("image: %s", p.Image)
 	}
 	if b, _ := json.Marshal(p); !strings.Contains(string(b), `"kind":"bundle"`) {

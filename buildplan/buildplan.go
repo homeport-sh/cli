@@ -238,20 +238,23 @@ const PHPVersion = "8.5"
 // front-end assets. A Laravel bundle's php.ini has opcache skip timestamp
 // checks and keep what it compiles, in the release's storage/, across
 // wakes. Pinned by digest: a tag can be pushed again.
-const FrankenPHPImage = "ghcr.io/homeport-sh/frankenphp:" + PHPVersion + "-1.13.3-bun1.4.4@sha256:d3123627e99874cb274d38294fbb2002c7a7e4aa5762a477912918f854fce8c6"
+const FrankenPHPImage = "ghcr.io/homeport-sh/frankenphp:" + PHPVersion + "-1.13.3-bun1.4.4-2@sha256:ce919ee0f5f8000a966215ef44dcae12a8d6421ef3c2c1e4f2037476ec6c32fc"
 
 // BundleDir is where a PHP app's build puts its bundle, in the app's folder.
 const BundleDir = ".homeport-bundle"
 
 // PHPRun is how a PHP app's bundle runs when nothing says: FrankenPHP (its
-// bin) serves public/ on the port homeport gives it ($PORT is substituted
-// where it's run, without a shell); with no args it would print its help
-// and exit. PHPOctaneRun serves an app that uses Octane in FrankenPHP's
+// bin) with the config frankenphp-bundle writes for it, which serves
+// public/ on the port homeport gives it ($PORT, from the environment) and
+// tells the app its visitor as homeport's proxy says - the visitor's
+// address and https, whatever proxies the app trusts, with nothing of the
+// app's changed (no TrustProxies, no config/trustedproxy.php); with no args
+// it would print its help and exit. PHPOctaneRun serves an app that uses Octane in FrankenPHP's
 // worker mode, through Octane's worker: the config frankenphp-bundle writes
 // for it (octane:frankenphp's, without artisan in front; HOMEPORT_WORKERS
 // workers, 2 by default, which the smallest size has the memory for).
 const (
-	PHPRun       = "php-server --root public --listen :$PORT"
+	PHPRun       = "run --config .homeport/web.caddyfile --adapter caddyfile"
 	PHPOctaneRun = "run --config .homeport/octane.caddyfile --adapter caddyfile"
 )
 

@@ -42,8 +42,10 @@ func TestSvelteKitsBunAdapterIsABunBundle(t *testing.T) {
 			t.Errorf("%s: build %s", name, p.Command)
 		}
 		// it knows its scheme from the edge's X-Forwarded-Proto, its host
-		// from the Host; a visitor's X-Forwarded-Host isn't read
-		if !strings.Contains(p.Command, `"PROTOCOL_HEADER":"x-forwarded-proto"`) || strings.Contains(p.Command, "HOST_HEADER") {
+		// from the Host, its visitor's address from X-Real-IP; a visitor's
+		// X-Forwarded-Host isn't read
+		if !strings.Contains(p.Command, `"PROTOCOL_HEADER":"x-forwarded-proto"`) || !strings.Contains(p.Command, `"ADDRESS_HEADER":"x-real-ip"`) ||
+			strings.Contains(p.Command, "HOST_HEADER") {
 			t.Errorf("%s: env %s", name, p.Command)
 		}
 		// and the build checks the adapter wrote what it starts
@@ -59,12 +61,14 @@ func TestSvelteKitsBunAdapterIsABunBundle(t *testing.T) {
 // homeport's.
 func TestSvelteKitsBunAdapterEnvPrefix(t *testing.T) {
 	p := detect(t, js(skBun, "bun.lock", "{}", "vite.config.ts", skBunConfig("adapter({ envPrefix: 'MY_APP_' })")), buildplan.Settings{})
-	for _, want := range []string{`"MY_APP_PORT":"$PORT"`, `"MY_APP_HOST":"$HOST"`, `"MY_APP_PROTOCOL_HEADER":"x-forwarded-proto"`} {
+	for _, want := range []string{`"MY_APP_PORT":"$PORT"`, `"MY_APP_HOST":"$HOST"`, `"MY_APP_PROTOCOL_HEADER":"x-forwarded-proto"`,
+		`"MY_APP_ADDRESS_HEADER":"x-real-ip"`} {
 		if !strings.Contains(p.Command, want) {
 			t.Errorf("no %s: %s", want, p.Command)
 		}
 	}
-	if strings.Contains(p.Command, "HOST_HEADER") || strings.Contains(p.Command, `{"PROTOCOL_HEADER"`) || strings.Contains(p.Command, `,"PROTOCOL_HEADER"`) {
+	if strings.Contains(p.Command, "HOST_HEADER") || strings.Contains(p.Command, `{"PROTOCOL_HEADER"`) || strings.Contains(p.Command, `,"PROTOCOL_HEADER"`) ||
+		strings.Contains(p.Command, `{"ADDRESS_HEADER"`) || strings.Contains(p.Command, `,"ADDRESS_HEADER"`) {
 		t.Errorf("unprefixed: %s", p.Command)
 	}
 }
