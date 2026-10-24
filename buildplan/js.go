@@ -1,6 +1,8 @@
 package buildplan
 
 import (
+	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -664,6 +666,9 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		// not the deploy
 		p.assemble = join(`{ [ -f `+entry+` ] || { echo 'homeport: the build made no `+entry+` - is the adapter in the config the one installed, and its out this?' >&2; exit 1; }; }`, p.assemble)
 	}
+	if pr != nil && binName == "" && (pr.name == "SvelteKit" && !pr.only || pr.name == "Astro") {
+		p.assemble = join(p.assemble, prerendered(pr.name, entry, settingsRun != "" || cfg.Run != ""))
+	}
 	p.Command = join(build, p.assemble)
 	if binName != "" {
 		entry = ".homeport/start.mjs"
@@ -677,6 +682,29 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 	}
 	return nil
 }
+
+// prerendered is the bundle step that puts the prerendered pages and assets
+// the framework's own server answers from files - before any of the app's
+// code runs - in .homeport/public, for homeport's host to answer without
+// waking the app (embed/public.mjs, run by the bundle's own bin), and
+// .output/edge.json from the same pages, for the edge to keep them too. It
+// never fails the build. An app with a start command of its own gets none: its
+// server may run code of its own before the framework's.
+func prerendered(framework, entry string, ownRun bool) string {
+	if ownRun {
+		return "echo 'homeport: prerendered pages are served by the app, which wakes for them: it starts with its own command, which may run code of its own before them'"
+	}
+	kind, dir := "astro", "dist"
+	if framework == "SvelteKit" {
+		kind, dir = "sveltekit", path.Dir(entry)
+	}
+	const b = BundleDir
+	// in braces: a failure before it still fails the build
+	return "{ printf '%s' '" + base64.StdEncoding.EncodeToString([]byte(publicMJS)) + "' | base64 -d > .homeport-public.mjs && (cd " + b + " && ./bin ../.homeport-public.mjs " + kind + " " + dir + " ../.output/edge.json) || rm -rf " + b + "/.homeport/public; rm -f .homeport-public.mjs; }"
+}
+
+//go:embed embed/public.mjs
+var publicMJS string
 
 func cmpOr(a, b string) string {
 	if a != "" {
