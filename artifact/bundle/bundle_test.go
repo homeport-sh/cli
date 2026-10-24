@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -412,5 +413,26 @@ func TestPackDir(t *testing.T) {
 	os.Symlink("/etc/passwd", filepath.Join(dir, "b/link"))
 	if _, err := PackDir(dir, io.Discard, Options{}); err == nil || !strings.Contains(err.Error(), "symlink (b/link)") {
 		t.Fatalf("symlink: %v", err)
+	}
+}
+
+// A file's mtime travels in its tar header (Laravel compares a compiled
+// view's to its source's), not in the manifest.
+func TestModTimeTravels(t *testing.T) {
+	at := time.Unix(1_700_000_000, 0)
+	var b bytes.Buffer
+	w := NewWriter(&b, Options{})
+	w.FileTime("a", 0o644, 1, at, strings.NewReader("a"))
+	w.Close()
+	var got time.Time
+	Read(bytes.NewReader(b.Bytes()), lim, func(e Entry, _ io.Reader) error { got = e.ModTime; return nil })
+	if !got.Equal(at) {
+		t.Fatalf("Read: %v", got)
+	}
+	m, _ := manifestOf(t, b.Bytes())
+	c := m.Chunks[0]
+	ReadRange(bytes.NewReader(b.Bytes()[c.Off:c.Off+c.Len]), m, 0, 0, lim, func(e Entry, _ io.Reader) error { got = e.ModTime; return nil })
+	if !got.Equal(at) {
+		t.Fatalf("ReadRange: %v", got)
 	}
 }

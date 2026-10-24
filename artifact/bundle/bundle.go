@@ -111,6 +111,9 @@ type Entry struct {
 	Size   int64  `json:"s,omitempty"`
 	SHA256 string `json:"h,omitempty"` // hex; files only
 	Chunk  int    `json:"c"`
+	// ModTime is the tar header's, as Read and ReadRange read it: not in
+	// the manifest (a file reused from another release keeps its own)
+	ModTime time.Time `json:"-"`
 }
 
 // Chunk is where a chunk lies in the artifact.
@@ -632,7 +635,7 @@ func Read(r io.Reader, lim Limits, fn func(Entry, io.Reader) error) error {
 		if err != nil {
 			return err
 		}
-		e := Entry{Path: name, Dir: dir, Mode: uint32(h.Mode) & 0o777}
+		e := Entry{Path: name, Dir: dir, Mode: uint32(h.Mode) & 0o777, ModTime: h.ModTime}
 		if !dir {
 			e.Size = h.Size
 			files++
@@ -703,6 +706,7 @@ func ReadRange(r io.Reader, m *Manifest, first, last int, lim Limits, fn func(En
 		if name != e.Path || dir != e.Dir || uint32(h.Mode)&0o7777 != e.Mode || (!dir && h.Size != e.Size) {
 			return fmt.Errorf("%w: %s (%o, %d bytes) where it lists %s (%o, %d bytes)", ErrManifest, name, h.Mode, h.Size, e.Path, e.Mode, e.Size)
 		}
+		e.ModTime = h.ModTime
 		h256.Reset()
 		body := io.TeeReader(tr, h256)
 		if fn != nil {
