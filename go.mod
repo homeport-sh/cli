@@ -3,6 +3,7 @@ module github.com/homeport-sh/cli
 go 1.27.3
 
 require (
+	github.com/klauspost/compress v1.20.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	go.yaml.in/yaml/v3 v3.0.5
 )
