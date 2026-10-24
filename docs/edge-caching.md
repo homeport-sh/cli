@@ -8,7 +8,7 @@ treatment.
 
 Nothing here needs a setting or a change to your app.
 
-## Prerendered pages: SvelteKit and Astro
+## Prerendered pages and assets: SvelteKit, Astro, Next.js, React Router
 
 When the build detects one of these frameworks, it copies the pages and assets
 the framework prerendered into the bundle, at the URLs the framework's own
@@ -20,8 +20,11 @@ release. The app doesn't wake for them and never sees the request.
 | SvelteKit, `@sveltejs/adapter-node` 5 and 6 | yes | prerendered pages (`export const prerender = true`), prerendered endpoints (`/api/data.json`), `static/` files, `_app/immutable/` assets |
 | Astro, `@astrojs/node` with `mode: 'standalone'` | yes | prerendered pages, `public/` files, `_astro/` assets |
 | Astro, `@astrojs/node` with `staticHeaders: true` | assets only | `_astro/` assets. The adapter adds headers of its own to each page (a CSP), so the pages stay with the app. |
+| Next.js, `output: 'standalone'` | assets only | `/_next/static/` assets. A URL your middleware (or proxy) matches, or that your config's `headers`, `redirects` or `beforeFiles` rewrites match, stays with the app. With `assetPrefix` or `i18n` set, everything goes to the app. |
+| React Router 7 and Remix 2 (Vite), started with `react-router-serve` or `remix-serve` | assets only | `assets/` under the build's `publicPath`. Remix's classic compiler and React Router's RSC build go to the app. |
 | SvelteKit, `@sveltejs/adapter-bun` | no | everything goes to the app |
-| Nuxt, Nitro, TanStack Start, React Router, Remix, Express and other servers | no | everything goes to the app |
+| Nuxt, Nitro, TanStack Start, Express and other servers | no | everything goes to the app. Their request hooks or route rules can run before any file. |
+| Laravel (FrankenPHP) | no | everything goes to the app. It sends no `Cache-Control` for its files, so serving them from the host would change their headers. |
 | rsc-kit, Next.js (next-bun-compile) | through the edge contract | see [A framework with a server of its own](#a-framework-with-a-server-of-its-own) |
 | An app with its own start command (`run:` in `homeport.yaml`, or the start command in its settings) | no | everything goes to the app. Its command might run code of its own first. |
 | A static site (no server) | already | the whole site is files, and it never sleeps |
@@ -76,10 +79,10 @@ page. Any other form goes to the app, which redirects it as it always has.
 
 - `Content-Type` comes from the file's extension.
 - `Cache-Control`:
-  - Fingerprinted assets (`_app/immutable/`, `_astro/`) get `public, max-age=31536000, immutable`.
+  - Fingerprinted assets (`_app/immutable/`, `_astro/`, `_next/static/`, `assets/`) get `public, max-age=31536000, immutable`, the same header the framework's server sends for them.
   - Pages and every other file get `no-cache`. A browser or CDN may keep them but asks again every time, so a deploy shows at once.
 - `ETag` and `Last-Modified` are sent. A request with `If-None-Match` or `If-Modified-Since` that still matches gets a 304 with no body.
-- Responses are compressed with zstd or gzip, as the app's are. `Range` requests work.
+- Responses are compressed, as the app's are. The build writes each text file's Brotli (quality 11) and gzip copies once, on the builder, and the host sends the copy the browser accepts, with `Vary: Accept-Encoding` and an `ETag` of its own. The edge keeps the same copies, so neither the host nor the edge compresses these files again. A file too small or one that doesn't shrink has no copy and is compressed as it's sent (zstd or gzip). `Range` requests work.
 - The response headers you set in `homeport.yaml` (`headers:`, see [headers.md](headers.md)) apply to these answers as they do to the app's.
 
 ### Deploys
@@ -159,6 +162,13 @@ sources, in the versions the build detects:
   - `:63-75` adds headers from `_headers.json` (`staticHeaders`, `dist/server.js:9`) to pages. When that file exists, the build copies only the immutable assets.
   - Middleware ran for a prerendered page at build time, and its result is the file.
   - `mode: 'middleware'` needs a server of yours, so the build refuses it.
+- **Next.js 16.4.3 (standalone).**
+  - `dist/server/lib/router-utils/resolve-routes.js:50-82` orders a request's routes: the config's `headers` and `redirects`, then middleware (its matchers), then `beforeFiles` rewrites, then the files (`check_fs`). The build reads the same lists (`.next/routes-manifest.json`, `.next/server/middleware-manifest.json`, `.next/server/functions-config-manifest.json`) and leaves any asset URL one of them matches to the app. A matcher with `has` or `missing` counts as a match.
+  - `dist/server/lib/router-server.js:483-494` sends `public, max-age=31536000, immutable` for `/_next/static/`, except `/_next/static/service-worker/` (`max-age=0`), which stays with the app.
+  - `public/` files get `max-age=0` from Next.js, so they stay with the app.
+- **React Router 7.18.4 (`react-router-serve`) and Remix 2.17.5 (`remix-serve`).**
+  - `dist/cli.js` runs `express.static(<assetsBuildDirectory>/assets, { immutable: true, maxAge: "1y" })` at `<publicPath>assets` before the app's request handler. Only `compression` runs before it. The build reads `assetsBuildDirectory` and `publicPath` from the server build it's given.
+  - The other files in the client build get no `Cache-Control` (React Router) or an hour (`public/`), so they stay with the app.
 
 A few more rules hold on top of these:
 
@@ -175,7 +185,7 @@ from the files or with a 404, never by passing it to the app.
 
 Each case is tested with a real build of each framework. The test checks that:
 
-- Every URL the build copied is answered by the running app with the same bytes and without a header its hook or middleware adds.
+- Every URL the build copied is answered by the running app with the same bytes and without a header its hook or middleware adds. An asset the host sends as immutable is one the app sends with that same `Cache-Control`.
 - A page behind a hook or middleware (a 401 without a session) is not copied, and the app still answers it with that 401.
 - Every page `.output/edge.json` lists is one of the copied pages, and no page behind a hook or middleware, or left to the app, is listed.
 

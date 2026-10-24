@@ -288,7 +288,7 @@ func TestWhatTheAppsCodeRunsForIsLeftToTheApp(t *testing.T) {
 }
 
 // stepRe: the step in the build: the script, what it runs on
-var stepRe = regexp.MustCompile(`\{ printf '%s' '([A-Za-z0-9+/=]+)' \| base64 -d > \.homeport-public\.mjs && \(cd ` + regexp.QuoteMeta(buildplan.BundleDir) + ` && \./bin \.\./\.homeport-public\.mjs (\w+) ([\w./-]+) \.\./\.output/edge\.json\) \|\| rm -rf ` + regexp.QuoteMeta(buildplan.BundleDir) + `/\.homeport/public; rm -f \.homeport-public\.mjs; \}`)
+var stepRe = regexp.MustCompile(`\{ printf '%s' '([A-Za-z0-9+/=]+)' \| base64 -d > \.homeport-public\.mjs && \(cd ` + regexp.QuoteMeta(buildplan.BundleDir) + ` && \./bin \.\./\.homeport-public\.mjs ([\w-]+) ([\w./-]+) \.\./\.output/edge\.json\) \|\| rm -rf ` + regexp.QuoteMeta(buildplan.BundleDir) + `/\.homeport/public; rm -f \.homeport-public\.mjs; \}`)
 
 // sveltekitApp: a SvelteKit app on adapter-node
 const sveltekitApp = `{"scripts":{"build":"vite build"},"devDependencies":{"@sveltejs/kit":"^3","@sveltejs/adapter-node":"^6"}}`

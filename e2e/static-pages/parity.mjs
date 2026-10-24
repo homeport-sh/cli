@@ -5,7 +5,8 @@
 //
 // Every URL in the tree: the running app answers it 200, with the same
 // bytes, and without the marker header the app's hook (or middleware) sets
-// on every response it runs for. Each --hook path: the app's code runs for
+// on every response it runs for - and an immutable asset, the Cache-Control
+// the host sends for it. Each --hook path: the app's code runs for
 // it (the marker is there), and it is NOT in the tree. Each --left path (a
 // redirect, another base): NOT in the tree. --edge: the edge marker the
 // build wrote lists only pages of the tree (so each is checked above),
@@ -41,10 +42,12 @@ function walk(dir, rel = "") {
 	return out;
 }
 
-const urls = new Map();
+const directives = (cc) => (cc ?? "").toLowerCase().split(",").map((d) => d.trim()).sort().join(",");
+const urls = new Map(), immutable = new Set();
 for (const tree of ["immutable", "files", "pages"]) {
 	for (const f of walk(path.join(root, tree))) {
 		urls.set(tree === "pages" ? f.slice(0, -".html".length) : f, path.join(root, tree, f));
+		if (tree === "immutable") immutable.add(f);
 	}
 }
 if (urls.size === 0) bad("nothing in " + root);
@@ -55,6 +58,11 @@ for (const [u, f] of urls) {
 	if (r.status !== 200) bad(`${u}: the app answers ${r.status}`);
 	else if (r.headers.has(marker)) bad(`${u}: the app ran its code for it (${marker})`);
 	else if (!body.equals(fs.readFileSync(f))) bad(`${u}: not the bytes the app answers`);
+	// the host's for an immutable asset: the app's own directives (sirv
+	// writes them without spaces, Next.js and express with)
+	else if (immutable.has(u) && directives(r.headers.get("cache-control")) !== "immutable,max-age=31536000,public") {
+		bad(`${u}: the app answers Cache-Control ${r.headers.get("cache-control")}, not the host's year, immutable`);
+	}
 	else ok(`${u}: the app's own answer, from a file, none of its code run`);
 }
 for (const u of left) {

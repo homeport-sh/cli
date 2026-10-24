@@ -1,6 +1,7 @@
 #!/bin/bash
-# Builds SvelteKit and Astro apps the way a hosted build does (js-lib.sh),
-# then checks the prerendered pages the build put in .homeport/public -
+# Builds SvelteKit, Astro, Next.js and React Router apps the way a hosted
+# build does (js-lib.sh), then checks the prerendered pages and assets the
+# build put in .homeport/public -
 # what homeport's host answers without waking the app, and whose pages the
 # edge marker (.output/edge.json) lists for the edge - against the app
 # itself, running from what the build made (static-pages/parity.mjs): each
@@ -22,19 +23,24 @@ port=18180
 . "$(dirname "$0")/js-lib.sh"
 
 # pages <name> <marker header> <parity args...>: the build said what it
-# serves, and each of it is the app's own answer
+# serves, and each of it is the app's own answer. EDGE=0: assets alone, no
+# pages for the edge marker
 pages() {
   local name=$1 marker=$2; shift 2
-  local bundle url
+  local bundle url edge=(--edge "$work/$name/.output/edge.json")
   bundle="$work/$name/$(jq -r .artifact "$work/$name.plan.json")"
   if grep -q 'homeport: served without the app' "$work/$name.build.log"; then
     check "$name" "the build log says what's served without the app" ok
   else check "$name" "build log" "no line saying what's served"; fi
-  if grep -q 'homeport: edge.json: ' "$work/$name.build.log"; then
+  if [ "${EDGE:-1}" = 0 ]; then
+    edge=()
+    if [ ! -e "$work/$name/.output/edge.json" ]; then check "$name" "no edge marker: no pages" ok
+    else check "$name" "edge marker" "one, with no pages"; fi
+  elif grep -q 'homeport: edge.json: ' "$work/$name.build.log"; then
     check "$name" "the build log says what the edge keeps" ok
   else check "$name" "build log" "no line on edge.json"; fi
   url=$(start "$name")
-  if node "$examples/parity.mjs" "$bundle" "$url" "$marker" --edge "$work/$name/.output/edge.json" "$@" >&2; then check "$name" "parity with the app" ok; else check "$name" "parity with the app" "see above"; fi
+  if node "$examples/parity.mjs" "$bundle" "$url" "$marker" "${edge[@]}" "$@" >&2; then check "$name" "parity with the app" ok; else check "$name" "parity with the app" "see above"; fi
   stop "$name"
 }
 
@@ -46,6 +52,15 @@ for app in sveltekit:x-hook:"--hook /dyn /nope --left /about/ /blog/one/" \
   IFS=: read -r name marker args <<<"$app"
   # shellcheck disable=SC2086
   if build "$name" "$name"; then pages "$name" "$marker" $args; fi
+done
+
+# their content-hashed assets alone: Next.js standalone behind middleware
+# that skips /_next/static, and react-router-serve
+for app in next:x-mw:"--hook / /robots.txt /nope" \
+  react-router:x-hook:"--hook / /about"; do
+  IFS=: read -r name marker args <<<"$app"
+  # shellcheck disable=SC2086
+  if build "$name" "$name"; then EDGE=0 pages "$name" "$marker" $args; fi
 done
 
 if [ "$fail" = 0 ]; then say "all passed"; else

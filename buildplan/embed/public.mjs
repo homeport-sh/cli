@@ -14,6 +14,13 @@
 //
 //   bin public.mjs sveltekit <adapter out> <marker>   (cwd: the bundle)
 //   bin public.mjs astro <outDir> <marker>
+//   bin public.mjs next <standalone app folder> <marker>
+//   bin public.mjs react-router <server build> <marker>
+//   bin public.mjs remix <server build> <marker>
+//
+// Next.js, react-router-serve and remix-serve: their content-hashed assets
+// alone (immutable/), which their servers answer from files with the same
+// year-long immutable Cache-Control.
 //
 // <marker> is the app's .output/edge.json (the edge contract, v2), written
 // from the same tree for the edge to keep its pages: "static" lists the
@@ -59,6 +66,9 @@ class Tree {
 	put(url, src, immutable) {
 		if (this.urls.has(url)) return;
 		if (!plainURL(url, this.wellKnown)) return this.left.push([url, "its URL has characters only the app reads"]);
+		// the host serves a file's .br and .gz (the builder's) for the file's
+		// URL: a URL naming one is the app's
+		if (/\.(br|gz)$/i.test(url)) return this.left.push([url, "a compressed copy (the host serves its own, for the file's URL)"]);
 		const page = url.endsWith("/") || ext(src) === ".html" && !/\.html?$/.test(url);
 		if (page && ext(src) !== ".html") return this.left.push([url, "not an HTML page"]);
 		if (!page && !ext(url)) return this.left.push([url, "no file extension to give it a type"]);
@@ -243,6 +253,108 @@ function astro(outDir) {
 	return t;
 }
 
+// Next.js standalone: the router answers /_next/static/<file> from
+// .next/static, Cache-Control a year and immutable (the service worker's
+// excepted) - after the config's headers and redirects, its middleware
+// (or proxy) and beforeFiles rewrites, so a URL any of those could take
+// is left to the app. assetPrefix and i18n: the app's, all of it.
+function next(dir) {
+	const nd = path.join(dir, ".next");
+	const read = (f) => JSON.parse(fs.readFileSync(path.join(nd, f), "utf8"));
+	let cfg, routes;
+	try {
+		cfg = read("required-server-files.json").config;
+		routes = read("routes-manifest.json");
+	} catch {
+		throw new Error("no Next.js standalone manifests in " + nd);
+	}
+	if (!cfg || typeof cfg !== "object") throw new Error("a Next.js config this doesn't know");
+	if (cfg.assetPrefix) throw new Error("assetPrefix is set (" + cfg.assetPrefix + "): its assets are the app's to place");
+	if (cfg.i18n) throw new Error("i18n is set: its routing is the app's");
+	const base = typeof cfg.basePath === "string" ? cfg.basePath.replace(/\/+$/, "") : "";
+	// what runs before the files: each a regex (has/missing: may match)
+	const regexes = (list) => (Array.isArray(list) ? list : []).map((r) => r && r.regex).filter((r) => typeof r === "string");
+	const rw = routes.rewrites && !Array.isArray(routes.rewrites) ? routes.rewrites.beforeFiles : [];
+	const config = [...regexes(routes.headers), ...regexes(routes.onMatchHeaders), ...regexes(routes.redirects), ...regexes(rw)];
+	let mw = [];
+	const mm = (() => {
+		try {
+			return read("server/middleware-manifest.json");
+		} catch {
+			return null;
+		}
+	})();
+	const fc = (() => {
+		try {
+			return read("server/functions-config-manifest.json");
+		} catch {
+			return null;
+		}
+	})();
+	if (!mm || !fc) throw new Error("no middleware manifests in " + nd + "/server");
+	const edge = mm.middleware && mm.middleware["/"];
+	const node = fc.functions && fc.functions["/_middleware"];
+	if (edge || node) mw = (edge ? edge.matchers : node.matchers) || [{ regexp: ".*" }];
+	const re = (r) => {
+		try {
+			return [new RegExp(r), new RegExp(r, "i")];
+		} catch {
+			return [/^/];
+		}
+	};
+	const configRe = config.map(re).flat(), mwRe = mw.map((m) => re(m.regexp)).flat();
+	const static_ = path.join(nd, "static");
+	if (!isDir(static_)) throw new Error("no .next/static in " + dir);
+	const t = new Tree();
+	for (const f of walk(static_)) {
+		const u = base + "/_next/static/" + f;
+		if (f.startsWith("service-worker/")) {
+			t.left.push([u, "the service worker: its own headers"]);
+			continue;
+		}
+		if (mwRe.some((r) => r.test(u))) {
+			t.left.push([u, "its middleware runs for it"]);
+			continue;
+		}
+		if (configRe.some((r) => r.test(u))) {
+			t.left.push([u, "the config's headers, redirects or rewrites may take it"]);
+			continue;
+		}
+		t.put(u, path.join(static_, f), true);
+	}
+	return t;
+}
+
+// react-router-serve and remix-serve (Vite builds): express.static on the
+// client build's assets/ at publicPath, a year and immutable, before the
+// app - the server build's own exports say where. Remix's classic
+// compiler, and React Router's RSC build: the app's.
+function reactRouter(server) {
+	let s;
+	try {
+		s = fs.readFileSync(server, "utf8");
+	} catch {
+		throw new Error("no server build at " + server);
+	}
+	const str = (name) => {
+		const m = new RegExp("^const " + name + ' = ("(?:[^"\\\\]|\\\\.)*");$', "m").exec(s);
+		try {
+			return m ? JSON.parse(m[1]) : null;
+		} catch {
+			return null;
+		}
+	};
+	const dir = str("assetsBuildDirectory"), pub = str("publicPath");
+	if (dir === null || pub === null || !/^\//.test(pub)) throw new Error("a server build this doesn't know (" + server + ")");
+	if (!/(^|\/)client$/.test(dir.replace(/\\/g, "/"))) throw new Error("not a Vite build (its assets are in " + dir + ")");
+	const assets = path.join(dir, "assets");
+	if (!isDir(assets)) throw new Error("no " + assets);
+	const t = new Tree(); // express.static: no dotfiles
+	const at = pub.replace(/\/+$/, "") + "/assets/";
+	for (const f of walk(assets)) t.put(at + f, path.join(assets, f), true);
+	return t;
+}
+
 // jsonAt: the JSON value starting at i in s
 function jsonAt(s, i) {
 	if (s[i] !== "{") return null;
@@ -288,14 +400,16 @@ function edgeMarker(t, marker) {
 }
 
 const [kind, dir, marker] = process.argv.slice(2);
+const servers = { sveltekit: "adapter-node", astro: "Astro's node adapter", next: "Next.js standalone", "react-router": "react-router-serve", remix: "remix-serve" };
 let wrote = false;
 try {
-	const t = kind === "sveltekit" ? sveltekit(dir) : kind === "astro" ? astro(dir) : null;
+	const kinds = { sveltekit, astro, next, "react-router": reactRouter, remix: reactRouter };
+	const t = Object.hasOwn(kinds, kind) ? kinds[kind](dir) : null;
 	if (!t) throw new Error("no framework " + kind);
 	const n = t.write();
 	const e = edgeMarker(t, marker);
 	wrote = !!e;
-	say(`served without the app, before any of its code runs (as ${kind === "astro" ? "Astro's node adapter" : "adapter-node"} serves them): ${n.pages} prerendered page(s), ${n.files} file(s), ${n.immutable} immutable asset(s)`);
+	say(`served without the app, before any of its code runs (as ${servers[kind]} serves them): ${n.pages} prerendered page(s), ${n.files} file(s), ${n.immutable} immutable asset(s)`);
 	const pages = [...t.urls].filter(([, [tr]]) => tr === "pages").map(([u]) => u);
 	if (pages.length) say("  pages: " + pages.slice(0, 20).join(" ") + (pages.length > 20 ? ` (and ${pages.length - 20} more)` : ""));
 	for (const [u, why] of t.left.slice(0, 20)) say(`  left to the app: ${u} - ${why}`);
