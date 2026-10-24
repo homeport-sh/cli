@@ -410,9 +410,17 @@ Not handled yet: Yarn Plug'n'Play at runtime, and Deno.
 
 A PHP app ships as a **bundle**: its files, installed with Composer
 (`--no-dev`), its front-end assets built with Bun (`bun run build`), and
-FrankenPHP as `bin`. Nothing is compiled per app. It's served with
-`php-server --root public --listen :$PORT`, or, when it requires
+FrankenPHP as `bin`. Nothing is compiled per app. It's served by the
+bundle's own config for FrankenPHP (`run --config .homeport/web.caddyfile
+--adapter caddyfile`: `public/` on `$PORT`), or, when it requires
 `laravel/octane`, through Octane's worker in FrankenPHP's worker mode.
+
+Either way the app sees its visitor as homeport's proxy says - the
+visitor's address (`REMOTE_ADDR`, so `request()->ip()`) and https
+(`HTTPS=on`, so `isSecure()` and `https://` URLs) - whatever proxies it
+trusts, with nothing of the app's changed: no `trustProxies` call, no
+`config/trustedproxy.php`. From anywhere but homeport's proxy, the
+forwarding headers a request came with are dropped.
 
 ### Laravel's caches
 

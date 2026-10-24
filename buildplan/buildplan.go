@@ -244,14 +244,17 @@ const FrankenPHPImage = "ghcr.io/homeport-sh/frankenphp:" + PHPVersion + "-1.13.
 const BundleDir = ".homeport-bundle"
 
 // PHPRun is how a PHP app's bundle runs when nothing says: FrankenPHP (its
-// bin) serves public/ on the port homeport gives it ($PORT is substituted
-// where it's run, without a shell); with no args it would print its help
-// and exit. PHPOctaneRun serves an app that uses Octane in FrankenPHP's
+// bin) with the config frankenphp-bundle writes for it, which serves
+// public/ on the port homeport gives it ($PORT, from the environment) and
+// tells the app its visitor as homeport's proxy says - the visitor's
+// address and https, whatever proxies the app trusts, with nothing of the
+// app's changed (no TrustProxies, no config/trustedproxy.php); with no args
+// it would print its help and exit. PHPOctaneRun serves an app that uses Octane in FrankenPHP's
 // worker mode, through Octane's worker: the config frankenphp-bundle writes
 // for it (octane:frankenphp's, without artisan in front; HOMEPORT_WORKERS
 // workers, 2 by default, which the smallest size has the memory for).
 const (
-	PHPRun       = "php-server --root public --listen :$PORT"
+	PHPRun       = "run --config .homeport/web.caddyfile --adapter caddyfile"
 	PHPOctaneRun = "run --config .homeport/octane.caddyfile --adapter caddyfile"
 )
 
