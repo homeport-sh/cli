@@ -84,7 +84,7 @@ type Options struct {
 	// (DefaultChunkBytes when 0). Smaller chunks make a host fetch less
 	// for a small change, and compress a little worse.
 	ChunkBytes int64
-	// Level is zstd's (zstd.SpeedBetterCompression when 0).
+	// Level is zstd's (zstd.SpeedDefault when 0).
 	Level zstd.EncoderLevel
 }
 
@@ -195,7 +195,7 @@ func NewWriter(w io.Writer, opt Options) *Writer {
 		opt.ChunkBytes = DefaultChunkBytes
 	}
 	if opt.Level == 0 {
-		opt.Level = zstd.SpeedBetterCompression
+		opt.Level = zstd.SpeedDefault
 	}
 	bw := &Writer{out: &countWriter{w: w, h: sha256.New()}, opt: opt, start: -1, m: Manifest{Version: manifestVersion}}
 	bw.cur = &chunkWriter{w: bw}
