@@ -95,11 +95,13 @@ type preset struct {
 	env map[string]string
 }
 
-// forwarded: the scheme from homeport's edge, which terminates TLS, for
-// SvelteKit's adapters. The host is the request's Host, the one the edge
+// forwarded: the scheme from homeport's edge, which terminates TLS, and the
+// visitor's address from homeport's proxy, which sets X-Real-IP to it
+// (overwriting a visitor's own), for SvelteKit's adapters
+// (getClientAddress). The host is the request's Host, the one the edge
 // routed on: X-Forwarded-Host is a visitor's to set (proxies that trust
 // their peer keep it), so HOST_HEADER isn't.
-var forwarded = map[string]string{"PROTOCOL_HEADER": "x-forwarded-proto"}
+var forwarded = map[string]string{"PROTOCOL_HEADER": "x-forwarded-proto", "ADDRESS_HEADER": "x-real-ip"}
 
 // presets, most specific first: a Nuxt app depends on h3, a NestJS one on
 // express.

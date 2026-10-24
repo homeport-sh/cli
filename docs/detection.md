@@ -157,14 +157,17 @@ Node. Its options are read from its call in the config that imports it
 (`import bun from '@sveltejs/adapter-bun'`), and the build fails if the
 adapter didn't write the file the plan starts. homeport's edge terminates
 TLS and sets `X-Forwarded-Proto`, so the bundle gets `PROTOCOL_HEADER`
-(below). The host is the request's `Host`, the one the edge routed on.
+(below), and homeport's proxy sets `X-Real-IP` to the visitor's address,
+so it gets `ADDRESS_HEADER` too ([Your visitor's IP](#your-visitors-ip)).
+The host is the request's `Host`, the one the edge routed on.
 `HOST_HEADER` isn't set, for adapter-bun or adapter-node, because a
 visitor can set `X-Forwarded-Host`. A compiled server, which has no boot,
 relies on the adapter's own default, the `Host` header with `https`,
 which is what the edge sends. With `envPrefix`, the adapter reads
 `<prefix>PORT` and `<prefix>HOST` and fails on unknown names with that
 prefix, so the bundle sets `<prefix>PORT` and `<prefix>HOST` from
-homeport's `PORT` and `HOST`, and `<prefix>PROTOCOL_HEADER`. A compiled server can't be given them, so `envPrefix` with
+homeport's `PORT` and `HOST`, and `<prefix>PROTOCOL_HEADER` and
+`<prefix>ADDRESS_HEADER`. A compiled server can't be given them, so `envPrefix` with
 `compile` is refused. Set `BODY_SIZE_LIMIT` (default `512K`), with the
 prefix if you use one, as an environment variable of the app.
 
@@ -282,8 +285,10 @@ no source maps unless the app starts with `--enable-source-maps`. Its
 `boot.mjs` does three things before the app starts:
 
 - It sets the framework's env defaults. Your own env wins. SvelteKit gets
-  `PROTOCOL_HEADER`, so it knows its scheme from homeport's proxy. With
-  adapter-bun's `envPrefix`, that name carries the prefix, and
+  `PROTOCOL_HEADER=x-forwarded-proto`, so it knows its scheme from
+  homeport's proxy, and `ADDRESS_HEADER=x-real-ip`, so
+  `getClientAddress()` is the visitor's address. With adapter-bun's
+  `envPrefix`, those names carry the prefix, and
   `<prefix>PORT` and `<prefix>HOST` are set from `PORT` and `HOST`.
 - It turns on Node's compile cache in `homeport-cache/`. That's a writable
   folder of the release, so it survives the app sleeping and waking. The
@@ -659,6 +664,49 @@ Offered: 3.12, 3.13, 3.14 and 3.15, each at homeport's pinned patch.
 The release is read-only, so everything is compiled at build. Data goes to
 a database or object storage, never into the app's folder. An app with a
 top-level `bin/` folder is refused, because `bin` is the interpreter.
+
+## Your visitor's IP
+
+Every request reaches your app through homeport's proxy, so the socket's
+address is the proxy's, not the visitor's. The proxy sets `X-Real-IP` and
+`X-Forwarded-For` to the visitor's address - one address, never a list -
+and `X-Forwarded-Proto` to `https` or `http`.
+
+- **PHP (Laravel, Symfony, any PHP app):** automatic. The bundle's own
+  config for FrankenPHP (`.homeport/web.caddyfile`) sets `REMOTE_ADDR` to
+  the visitor's address and `HTTPS=on` for an https visit, so
+  `request()->ip()`, `isSecure()` and `https://` URLs are right whatever
+  proxies the app trusts. You don't need `trustProxies` or
+  `config/trustedproxy.php`.
+- **SvelteKit (adapter-node, adapter-bun):** automatic. The bundle sets
+  `ADDRESS_HEADER=x-real-ip`, so `getClientAddress()` is the visitor's
+  address. Your own `ADDRESS_HEADER` wins.
+- **Next.js, Nuxt, Remix, React Router, Astro:** read the `x-real-ip`
+  header (or `x-forwarded-for`, the same single address). For example
+  `(await headers()).get('x-real-ip')` in Next.js,
+  `getRequestHeader(event, 'x-real-ip')` in Nuxt,
+  `request.headers.get('x-real-ip')` in a Remix or React Router loader, and
+  `Astro.request.headers.get('x-real-ip')` in Astro.
+- **Express, Fastify, Koa, Hono, Bun.serve, Go, Python:** the socket
+  address (`req.socket.remoteAddress`, Hono's `getConnInfo`,
+  `server.requestIP(req)`, Go's `r.RemoteAddr`, `REMOTE_ADDR`) is
+  homeport's proxy. Read `X-Real-IP`, or have the framework trust exactly
+  one proxy:
+  - Express: `app.set('trust proxy', 1)`, then `req.ip`
+  - Fastify: `Fastify({ trustProxy: 1 })`, then `request.ip`
+  - Koa: `new Koa({ proxy: true, maxIpsCount: 1 })`, then `ctx.ip`
+  - Flask: `app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)`
+    (`werkzeug.middleware.proxy_fix`), then `request.remote_addr`
+  - Hono, Bun.serve, Go, Django, FastAPI: read the header, for example
+    `c.req.header('x-real-ip')`, `req.headers.get('x-real-ip')`,
+    `r.Header.Get("X-Real-IP")`, `request.META['HTTP_X_REAL_IP']`,
+    `request.headers['x-real-ip']`
+
+**Why it's safe.** Each hop only believes the hop right before it. A
+visitor can send its own `X-Real-IP` or `X-Forwarded-For`, but homeport's
+proxy overwrites both with the address the connection came from. Your app
+is reached only through that proxy, so trusting exactly one hop (or
+reading `X-Real-IP`) always gives the address homeport saw.
 
 ## Background jobs (queues)
 
