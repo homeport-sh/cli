@@ -754,6 +754,12 @@ which doesn't have the runner, so its drain is `php-cli artisan queue:work
 --stop-when-empty`. `retry` (`php-cli artisan queue:retry all`) retries the
 failed jobs.
 
+A drained queue's jobs wait for the next drain. The
+[`homeport/laravel`](https://github.com/homeport-sh/laravel) package
+(Laravel 12 and 13) kicks a drain when a job is queued, so on paid plans it
+runs within seconds; without it in `composer.json`'s `require`, the plan's
+`note` suggests it. Horizon runs always on, so it gets no such note.
+
 A JavaScript app's drain is one it names. A `queue:drain` script runs as
 the bundle runs a script's file (`bun scripts/drain.ts` is
 `scripts/drain.ts`); a script that needs a shell can't, and the plan's
