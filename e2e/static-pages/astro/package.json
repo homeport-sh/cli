@@ -1,0 +1,7 @@
+{
+  "name": "astro-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "astro build", "start": "node dist/server/entry.mjs" },
+  "dependencies": { "astro": "7.4.2", "@astrojs/node": "11.1.9" }
+}

@@ -11,6 +11,9 @@ and `homeport.yaml` wins over detection.
 Response headers (`headers:` in `homeport.yaml`) are in
 [headers.md](headers.md).
 
+Which prerendered pages are answered without waking the app (SvelteKit,
+Astro) is in [edge-caching.md](edge-caching.md).
+
 A **stop grace** is how long the web or a process gets to finish after
 SIGTERM before it's killed: on a deploy, a restart, a scale-down or a move.
 `stop_grace:` at the top of `homeport.yaml` is the web's, and a process's
