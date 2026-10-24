@@ -436,3 +436,25 @@ func TestModTimeTravels(t *testing.T) {
 		t.Fatalf("ReadRange: %v", got)
 	}
 }
+
+// A file that would overflow the open chunk starts its own: a big one
+// (an app's binary) shares a chunk with nothing, so a change to a small
+// file beside it never makes a host fetch it again.
+func TestABigFileHasAChunkToItself(t *testing.T) {
+	var b bytes.Buffer
+	w := NewWriter(&b, Options{ChunkBytes: 4096})
+	w.File("a", 0o644, 100, strings.NewReader(strings.Repeat("a", 100)))
+	w.File("bin", 0o755, 10000, strings.NewReader(strings.Repeat("b", 10000)))
+	w.File("c", 0o644, 100, strings.NewReader(strings.Repeat("c", 100)))
+	if _, err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := manifestOf(t, b.Bytes())
+	chunk := map[string]int{}
+	for _, e := range m.Entries {
+		chunk[e.Path] = e.Chunk
+	}
+	if chunk["bin"] == chunk["a"] || chunk["bin"] == chunk["c"] {
+		t.Fatalf("bin shares a chunk: %v", chunk)
+	}
+}

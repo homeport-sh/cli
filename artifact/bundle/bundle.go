@@ -239,13 +239,15 @@ func (w *Writer) cut() error {
 	return nil
 }
 
-// next is the chunk the next entry goes in, cutting the open one if it's
-// full.
-func (w *Writer) next() (int, error) {
+// next is the chunk the next entry - size bytes of file - goes in,
+// cutting the open one if it's full, or the entry would overflow it: a
+// big file (an app's binary) starts a chunk of its own, and shares it
+// with nothing, so a change beside it never fetches it again.
+func (w *Writer) next(size int64) (int, error) {
 	if w.closed {
 		return 0, errors.New("bundle: write after close")
 	}
-	if w.start >= 0 && w.cur.n >= w.opt.ChunkBytes {
+	if w.start >= 0 && (w.cur.n >= w.opt.ChunkBytes || w.cur.n > 0 && w.cur.n+size > w.opt.ChunkBytes) {
 		if err := w.cut(); err != nil {
 			return 0, err
 		}
@@ -276,7 +278,7 @@ func (w *Writer) DirTime(name string, mode fs.FileMode, mtime time.Time) error {
 	if !validName(name) {
 		return w.fail(&ContentError{What: "a path out of the archive", Name: name})
 	}
-	c, err := w.next()
+	c, err := w.next(0)
 	if err != nil {
 		return w.fail(err)
 	}
@@ -304,7 +306,7 @@ func (w *Writer) FileTime(name string, mode fs.FileMode, size int64, mtime time.
 	if size < 0 {
 		return w.fail(fmt.Errorf("bundle: %s: negative size", name))
 	}
-	c, err := w.next()
+	c, err := w.next(size)
 	if err != nil {
 		return w.fail(err)
 	}
