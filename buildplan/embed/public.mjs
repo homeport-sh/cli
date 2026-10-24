@@ -12,16 +12,26 @@
 // it redirects (the other trailing-slash form), answers with headers of the
 // app's, or runs any of the app's code for, is left out - the app answers it.
 //
-//   bin public.mjs sveltekit <adapter out>   (cwd: the bundle)
-//   bin public.mjs astro <outDir>
+//   bin public.mjs sveltekit <adapter out> <marker>   (cwd: the bundle)
+//   bin public.mjs astro <outDir> <marker>
+//
+// <marker> is the app's .output/edge.json (the edge contract, v2), written
+// from the same tree for the edge to keep its pages: "static" lists the
+// first MAX_STATIC of them, "files": true says they're files the host
+// answers - the edge asks for each with a plain GET, never the app. The
+// host answers every page in the tree, listed or not. A marker already
+// there is the framework's own, and kept.
 //
 // It never fails the build: anything it can't read, it says, and leaves
 // nothing behind. Run by the bundle's own bin (Node or Bun): node: only.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const OUT = ".homeport/public";
+// the edge contract's limits on "static": how many, and each path's bytes
+const MAX_STATIC = 200, MAX_PATH = 200;
 const say = (s) => console.log("homeport: " + s);
 
 // URLs it serves: plain characters only (no escapes, nothing a server could
@@ -257,18 +267,45 @@ function jsonAt(s, i) {
 	return null;
 }
 
-const [kind, dir] = process.argv.slice(2);
+// edgeMarker writes marker from the tree's pages, unless one is there: the
+// first MAX_STATIC of them, shortest first, as "static"; the build, a hash
+// of what they are. What it wrote, or null.
+function edgeMarker(t, marker) {
+	if (!marker) return null;
+	if (fs.existsSync(marker)) {
+		say("edge.json: the build wrote its own (" + marker + "), kept as it is");
+		return null;
+	}
+	const pages = [...t.urls].filter(([u, [tr]]) => tr === "pages" && Buffer.byteLength(u) <= MAX_PATH).map(([u]) => u);
+	pages.sort((a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0));
+	if (!pages.length) return null;
+	const h = crypto.createHash("sha256");
+	for (const u of pages) h.update(u + "\0" + crypto.createHash("sha256").update(fs.readFileSync(t.urls.get(u)[1])).digest("hex") + "\n");
+	const m = { v: 2, build: h.digest("hex").slice(0, 16), shells: [], static: pages.slice(0, MAX_STATIC), files: true };
+	fs.mkdirSync(path.dirname(marker), { recursive: true });
+	fs.writeFileSync(marker, JSON.stringify(m) + "\n");
+	return { listed: m.static.length, of: pages.length };
+}
+
+const [kind, dir, marker] = process.argv.slice(2);
+let wrote = false;
 try {
 	const t = kind === "sveltekit" ? sveltekit(dir) : kind === "astro" ? astro(dir) : null;
 	if (!t) throw new Error("no framework " + kind);
 	const n = t.write();
+	const e = edgeMarker(t, marker);
+	wrote = !!e;
 	say(`served without the app, before any of its code runs (as ${kind === "astro" ? "Astro's node adapter" : "adapter-node"} serves them): ${n.pages} prerendered page(s), ${n.files} file(s), ${n.immutable} immutable asset(s)`);
 	const pages = [...t.urls].filter(([, [tr]]) => tr === "pages").map(([u]) => u);
 	if (pages.length) say("  pages: " + pages.slice(0, 20).join(" ") + (pages.length > 20 ? ` (and ${pages.length - 20} more)` : ""));
 	for (const [u, why] of t.left.slice(0, 20)) say(`  left to the app: ${u} - ${why}`);
 	if (t.left.length > 20) say(`  (and ${t.left.length - 20} more left to the app)`);
 	say("  anything else - server-rendered pages, other methods, the other trailing-slash form - is the app's, and wakes it");
+	if (e) {
+		say(`edge.json: ${e.listed} of the ${e.of} page(s) kept at the edge as well` + (e.of > e.listed ? ` (its most is ${MAX_STATIC}: the rest from the host alone, still without the app)` : ""));
+	}
 } catch (e) {
 	fs.rmSync(OUT, { recursive: true, force: true });
+	if (wrote) fs.rmSync(marker, { force: true });
 	say("prerendered pages are served by the app, which wakes for them: " + (e && e.message ? e.message : e));
 }

@@ -1,7 +1,8 @@
 #!/bin/bash
 # Builds SvelteKit and Astro apps the way a hosted build does (js-lib.sh),
 # then checks the prerendered pages the build put in .homeport/public -
-# what homeport's host answers without waking the app - against the app
+# what homeport's host answers without waking the app, and whose pages the
+# edge marker (.output/edge.json) lists for the edge - against the app
 # itself, running from what the build made (static-pages/parity.mjs): each
 # is the app's own answer, byte for byte, from a file, with none of the
 # app's code run (no hook, no middleware); and a page the app's code runs
@@ -29,8 +30,11 @@ pages() {
   if grep -q 'homeport: served without the app' "$work/$name.build.log"; then
     check "$name" "the build log says what's served without the app" ok
   else check "$name" "build log" "no line saying what's served"; fi
+  if grep -q 'homeport: edge.json: ' "$work/$name.build.log"; then
+    check "$name" "the build log says what the edge keeps" ok
+  else check "$name" "build log" "no line on edge.json"; fi
   url=$(start "$name")
-  if node "$examples/parity.mjs" "$bundle" "$url" "$marker" "$@" >&2; then check "$name" "parity with the app" ok; else check "$name" "parity with the app" "see above"; fi
+  if node "$examples/parity.mjs" "$bundle" "$url" "$marker" --edge "$work/$name/.output/edge.json" "$@" >&2; then check "$name" "parity with the app" ok; else check "$name" "parity with the app" "see above"; fi
   stop "$name"
 }
 

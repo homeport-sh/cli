@@ -3,6 +3,7 @@ package buildplan_test
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,14 @@ import (
 // made: "<tree> <url>".
 func public(t *testing.T, kind, dir string, files map[string]string) ([]string, string) {
 	t.Helper()
+	got, out, _ := publicMarker(t, kind, dir, files, "")
+	return got, out
+}
+
+// publicMarker is public, with the edge marker the step wrote beside the
+// bundle ("" none); had: a marker the build left there before it.
+func publicMarker(t *testing.T, kind, dir string, files map[string]string, had string) ([]string, string, string) {
+	t.Helper()
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("no node")
@@ -42,7 +51,14 @@ func public(t *testing.T, kind, dir string, files map[string]string) ([]string, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(node, script, kind, dir)
+	marker := filepath.Join(t.TempDir(), ".output", "edge.json")
+	if had != "" {
+		_ = os.MkdirAll(filepath.Dir(marker), 0o755)
+		if err := os.WriteFile(marker, []byte(had), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command(node, script, kind, dir, marker)
 	cmd.Dir = b
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -64,7 +80,8 @@ func public(t *testing.T, kind, dir string, files map[string]string) ([]string, 
 		return nil
 	})
 	slices.Sort(got)
-	return got, string(out)
+	m, _ := os.ReadFile(marker)
+	return got, string(out), string(m)
 }
 
 func same(t *testing.T, got, want []string, out string) {
@@ -271,7 +288,7 @@ func TestWhatTheAppsCodeRunsForIsLeftToTheApp(t *testing.T) {
 }
 
 // stepRe: the step in the build: the script, what it runs on
-var stepRe = regexp.MustCompile(`\{ printf '%s' '([A-Za-z0-9+/=]+)' \| base64 -d > \.homeport-public\.mjs && \(cd ` + regexp.QuoteMeta(buildplan.BundleDir) + ` && \./bin \.\./\.homeport-public\.mjs (\w+) ([\w./-]+)\) \|\| rm -rf ` + regexp.QuoteMeta(buildplan.BundleDir) + `/\.homeport/public; rm -f \.homeport-public\.mjs; \}`)
+var stepRe = regexp.MustCompile(`\{ printf '%s' '([A-Za-z0-9+/=]+)' \| base64 -d > \.homeport-public\.mjs && \(cd ` + regexp.QuoteMeta(buildplan.BundleDir) + ` && \./bin \.\./\.homeport-public\.mjs (\w+) ([\w./-]+) \.\./\.output/edge\.json\) \|\| rm -rf ` + regexp.QuoteMeta(buildplan.BundleDir) + `/\.homeport/public; rm -f \.homeport-public\.mjs; \}`)
 
 // sveltekitApp: a SvelteKit app on adapter-node
 const sveltekitApp = `{"scripts":{"build":"vite build"},"devDependencies":{"@sveltejs/kit":"^3","@sveltejs/adapter-node":"^6"}}`
@@ -357,5 +374,100 @@ func TestTheStepNeverFailsTheBuild(t *testing.T) {
 	// and a failure before it still fails the build
 	if out, err := shell(t, dir, "false && "+stepCmd); err == nil {
 		t.Errorf("a failure before the step didn't fail the build:\n%s", out)
+	}
+}
+
+// The edge's marker (.output/edge.json, the edge contract v2) comes from the
+// same tree: its pages alone - never a file, an asset or anything left to
+// the app - as "static", "files": true (the host answers them; the edge
+// asks it with a plain GET), shortest first and at most 200; the host
+// answers every page in the tree, listed or not. A marker the build wrote
+// itself is kept, and none is written for a tree with no page.
+func TestTheEdgeMarkerListsTheTreesPages(t *testing.T) {
+	files := map[string]string{
+		"build/adapter-node.js": adapterNode6("",
+			[][2]string{{"/_app/immutable/a.js", "_app/immutable/a.js"}, {"/robots.txt", "robots.txt"}, {"/x%20y.html", "x y.html"}},
+			[][2]string{{"/", "index.html"}, {"/about", "about.html"}, {"/blog/one", "blog/one.html"}, {"/api/data.json", "api/data.json"}},
+			nil),
+	}
+	for _, f := range []string{"_app/immutable/a.js", "robots.txt", "x y.html"} {
+		files["build/client/"+f] = f
+	}
+	for _, f := range []string{"index.html", "about.html", "blog/one.html", "api/data.json"} {
+		files["build/prerendered/"+f] = "prerendered " + f
+	}
+	_, out, raw := publicMarker(t, "sveltekit", "build", files, "")
+	var m struct {
+		V      int      `json:"v"`
+		Build  string   `json:"build"`
+		Shells []string `json:"shells"`
+		Static []string `json:"static"`
+		Files  bool     `json:"files"`
+	}
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		t.Fatalf("no marker: %v\n%s\n%s", err, raw, out)
+	}
+	if m.V != 2 || !regexp.MustCompile(`^[0-9a-f]{16}$`).MatchString(m.Build) || m.Shells == nil || len(m.Shells) != 0 || !m.Files {
+		t.Errorf("marker %s", raw)
+	}
+	if want := []string{"/", "/about", "/blog/one"}; !slices.Equal(m.Static, want) {
+		t.Errorf("static %q, want %q", m.Static, want)
+	}
+	if !strings.Contains(out, "edge.json: 3 of the 3 page(s) kept at the edge as well") {
+		t.Errorf("the log doesn't say what the edge keeps:\n%s", out)
+	}
+	// the same pages, the same build
+	if _, _, again := publicMarker(t, "sveltekit", "build", files, ""); again != raw {
+		t.Errorf("another build of the same pages: %s, then %s", raw, again)
+	}
+	// another page's bytes, another build
+	files["build/prerendered/about.html"] = "changed"
+	if _, _, other := publicMarker(t, "sveltekit", "build", files, ""); other == raw {
+		t.Errorf("a changed page kept the build: %s", other)
+	}
+
+	// the framework's own marker is kept
+	own := `{"v":2,"build":"own","shells":[],"static":["/"]}` + "\n"
+	if _, out, kept := publicMarker(t, "sveltekit", "build", files, own); kept != own || !strings.Contains(out, "edge.json: the build wrote its own") {
+		t.Errorf("the build's own marker became %s\n%s", kept, out)
+	}
+
+	// no page, no marker
+	none := map[string]string{"build/adapter-node.js": adapterNode6("", [][2]string{{"/robots.txt", "robots.txt"}}, nil, nil), "build/client/robots.txt": "r"}
+	if _, _, raw := publicMarker(t, "sveltekit", "build", none, ""); raw != "" {
+		t.Errorf("a marker without pages: %s", raw)
+	}
+
+	// at most 200 listed, shortest first; the tree has every one
+	var pre [][2]string
+	many := map[string]string{}
+	for i := range 250 {
+		u := fmt.Sprintf("/p/%03d", 249-i)
+		pre = append(pre, [2]string{u, u[1:] + ".html"})
+		many["build/prerendered"+u+".html"] = u
+	}
+	pre = append(pre, [2]string{"/", "index.html"})
+	many["build/prerendered/index.html"] = "home"
+	many["build/adapter-node.js"] = adapterNode6("", nil, pre, nil)
+	got, out, raw := publicMarker(t, "sveltekit", "build", many, "")
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Static) != 200 || m.Static[0] != "/" || m.Static[1] != "/p/000" || m.Static[199] != "/p/198" {
+		t.Errorf("listed %d: %q ... %q", len(m.Static), m.Static[:2], m.Static[len(m.Static)-1])
+	}
+	if len(got) != 251 {
+		t.Errorf("the tree has %d pages, not all 251", len(got))
+	}
+	if !strings.Contains(out, "200 of the 251 page(s) kept at the edge as well (its most is 200: the rest from the host alone, still without the app)") {
+		t.Errorf("the log doesn't say the rest are the host's:\n%s", out)
+	}
+}
+
+// A step that fails leaves no marker of its own behind.
+func TestAFailedStepWritesNoMarker(t *testing.T) {
+	_, out, raw := publicMarker(t, "astro", "dist", map[string]string{"dist/server/entry.mjs": "nothing"}, "")
+	if raw != "" || !strings.Contains(out, "served by the app") {
+		t.Errorf("marker %q\n%s", raw, out)
 	}
 }

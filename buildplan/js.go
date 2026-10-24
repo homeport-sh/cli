@@ -686,8 +686,9 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 // prerendered is the bundle step that puts the prerendered pages and assets
 // the framework's own server answers from files - before any of the app's
 // code runs - in .homeport/public, for homeport's host to answer without
-// waking the app (embed/public.mjs, run by the bundle's own bin). It never
-// fails the build. An app with a start command of its own gets none: its
+// waking the app (embed/public.mjs, run by the bundle's own bin), and
+// .output/edge.json from the same pages, for the edge to keep them too. It
+// never fails the build. An app with a start command of its own gets none: its
 // server may run code of its own before the framework's.
 func prerendered(framework, entry string, ownRun bool) string {
 	if ownRun {
@@ -699,7 +700,7 @@ func prerendered(framework, entry string, ownRun bool) string {
 	}
 	const b = BundleDir
 	// in braces: a failure before it still fails the build
-	return "{ printf '%s' '" + base64.StdEncoding.EncodeToString([]byte(publicMJS)) + "' | base64 -d > .homeport-public.mjs && (cd " + b + " && ./bin ../.homeport-public.mjs " + kind + " " + dir + ") || rm -rf " + b + "/.homeport/public; rm -f .homeport-public.mjs; }"
+	return "{ printf '%s' '" + base64.StdEncoding.EncodeToString([]byte(publicMJS)) + "' | base64 -d > .homeport-public.mjs && (cd " + b + " && ./bin ../.homeport-public.mjs " + kind + " " + dir + " ../.output/edge.json) || rm -rf " + b + "/.homeport/public; rm -f .homeport-public.mjs; }"
 }
 
 //go:embed embed/public.mjs

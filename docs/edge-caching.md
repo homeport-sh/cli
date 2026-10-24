@@ -98,6 +98,34 @@ Rolling back serves the older release's pages again.
 A `POST`, `PUT` or any other method goes to the app, even at a prerendered
 URL, so a form action or an endpoint's other methods work as before.
 
+### At the edge too
+
+The same pages are also kept at Homeport's edge, nearer your visitors. The
+edge reads them from the same files the host serves, so nothing is built or
+stored twice:
+
+- The build writes `.output/edge.json` listing the prerendered pages, up to
+  200 of them, shortest URL first. The build log says how many:
+
+  ```
+  homeport: edge.json: 4 of the 4 page(s) kept at the edge as well
+  ```
+
+  Pages past the 200 are still answered by the host without the app; only
+  the edge's copy is capped.
+- The edge fetches each listed page and the assets it links from the host's
+  files, never from the app, so filling the edge doesn't wake a sleeping
+  app. A URL the host has no file for gets a 404 from the host, not the
+  app, and the edge doesn't keep it.
+- Nothing to switch on: no setting, no token, no endpoint in your app.
+- When a new release goes live, the edge drops the old release's pages and
+  fetches the new ones.
+
+If your framework writes its own `.output/edge.json` (see
+[A framework with a server of its own](#a-framework-with-a-server-of-its-own)),
+the build keeps it as it is and the host still answers the prerendered
+files.
+
 ## Security
 
 **A prerendered page is answered without the app only where the framework's
@@ -140,17 +168,23 @@ A few more rules hold on top of these:
 - Paused apps stay paused, and the response headers you set still apply.
 - An app with its own start command is left alone, because its command could run code before the framework.
 
+The edge keeps nothing the host wouldn't answer: it lists only pages from
+the copied files, fetches them from the host's files with a header only the
+edge sends (edges strip it from visitors), and the host answers that fetch
+from the files or with a 404, never by passing it to the app.
+
 Each case is tested with a real build of each framework. The test checks that:
 
 - Every URL the build copied is answered by the running app with the same bytes and without a header its hook or middleware adds.
 - A page behind a hook or middleware (a 401 without a session) is not copied, and the app still answers it with that 401.
+- Every page `.output/edge.json` lists is one of the copied pages, and no page behind a hook or middleware, or left to the app, is listed.
 
 ## A framework with a server of its own
 
 Frameworks that render on request (rsc-kit, Next.js through next-bun-compile,
 or one you write) can still have pages that are the same for everyone. These
 reach Homeport's edge through the
-[edge contract, v2](https://github.com/homeport-sh/cloud/blob/main/design/edge-contract.md#v2).
+[edge contract](edge-contract.md).
 
 A framework adds two fields:
 
