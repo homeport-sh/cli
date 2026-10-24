@@ -1,0 +1,6 @@
+---
+export const prerender = true;
+export function getStaticPaths() { return [{ params: { slug: 'one' } }, { params: { slug: 'two' } }]; }
+const { slug } = Astro.params;
+---
+<html><body><h1>Post {slug}</h1></body></html>
