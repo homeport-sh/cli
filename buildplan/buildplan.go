@@ -55,8 +55,9 @@ type Settings struct {
 	Command string `json:"command,omitempty"` // the build
 	Output  string `json:"output,omitempty"`  // the binary, or the site's folder, relative to Root
 	Run     string `json:"run,omitempty"`     // a binary's args (it's run as ./bin <run>)
-	// Release: args to ./bin, run before a release goes live (migrations)
-	Release string `json:"release,omitempty"`
+	// Release: args to ./bin, run before a release goes live (migrations):
+	// one command, or several run in order (Commands)
+	Release Commands `json:"release,omitempty"`
 	// NoRelease: the app has no release command - none is detected, and
 	// homeport.yaml's is not run - where an empty Release is "detect it"
 	NoRelease bool `json:"no_release,omitempty"`
@@ -88,7 +89,7 @@ type Settings struct {
 // IsZero says whether nothing is set.
 func (s Settings) IsZero() bool {
 	return s.Root == "" && s.Kind == "" && s.Install == "" && s.Command == "" && s.Output == "" &&
-		s.Run == "" && s.Release == "" && !s.NoRelease && s.StopGrace == "" && len(s.Processes) == 0 && s.Octane == nil && s.Runtime == "" &&
+		s.Run == "" && len(s.Release) == 0 && !s.NoRelease && s.StopGrace == "" && len(s.Processes) == 0 && s.Octane == nil && s.Runtime == "" &&
 		s.Python == "" && len(s.Packages) == 0 && len(s.Headers) == 0
 }
 
@@ -104,14 +105,15 @@ func (s Settings) With(o Settings) Settings {
 	}
 	out := Settings{Root: pick(s.Root, o.Root), Kind: pick(s.Kind, o.Kind), Install: pick(s.Install, o.Install),
 		Command: pick(s.Command, o.Command), Output: pick(s.Output, o.Output), Run: pick(s.Run, o.Run),
-		Release: pick(s.Release, o.Release), NoRelease: s.NoRelease, StopGrace: pick(s.StopGrace, o.StopGrace),
+		Release: slices.Clone(s.Release), NoRelease: s.NoRelease, StopGrace: pick(s.StopGrace, o.StopGrace),
 		Processes: slices.Clone(s.Processes), Octane: s.Octane,
 		Runtime: pick(s.Runtime, o.Runtime), Python: pick(s.Python, o.Python), Packages: slices.Clone(s.Packages), Headers: slices.Clone(s.Headers)}
 	// a release command and none are one setting: o's, when it says either
+	// (its commands, whole)
 	if o.NoRelease {
-		out.Release, out.NoRelease = "", true
-	} else if o.Release != "" {
-		out.NoRelease = false
+		out.Release, out.NoRelease = nil, true
+	} else if len(o.Release) > 0 {
+		out.Release, out.NoRelease = slices.Clone(o.Release), false
 	}
 	if len(o.Processes) > 0 {
 		out.Processes = slices.Clone(o.Processes)
@@ -154,7 +156,7 @@ type Plan struct {
 	// default, PHPRun): checked by whoever
 	// runs it (the CLI, the control plane), not here
 	Run       string    `json:"run,omitempty"`
-	Release   string    `json:"release,omitempty"`
+	Release   Commands  `json:"release,omitempty"`
 	StopGrace string    `json:"stop_grace,omitempty"` // the web's (Settings.StopGrace)
 	Processes []Process `json:"processes,omitempty"`
 	// ReleaseReason: why the release command is the one detection chose
@@ -304,7 +306,7 @@ type fileConfig struct {
 	Static    string                   `yaml:"static"`
 	Runtime   string                   `yaml:"runtime"`
 	Run       string                   `yaml:"run"`
-	Release   *string                  `yaml:"release"` // "" or none says there's none: not detected
+	Release   *Commands                `yaml:"release"` // a command or a list; "", [] or none says there's none: not detected
 	StopGrace string                   `yaml:"stop_grace"`
 	Processes map[string]processConfig `yaml:"processes"`
 	Packages  []string                 `yaml:"packages"`
@@ -331,7 +333,7 @@ func (p *processConfig) UnmarshalYAML(n *yaml.Node) error {
 // Check says whether settings are well-formed, before anything reads them.
 func (s Settings) Check() error {
 	for name, v := range map[string]string{"root directory": s.Root, "kind": s.Kind, "runtime": s.Runtime, "install command": s.Install,
-		"build command": s.Command, "output": s.Output, "start command": s.Run, "release command": s.Release, "stop grace": s.StopGrace} {
+		"build command": s.Command, "output": s.Output, "start command": s.Run, "stop grace": s.StopGrace} {
 		if err := checkText(name, v); err != nil {
 			return err
 		}
@@ -350,8 +352,8 @@ func (s Settings) Check() error {
 	if s.Output != "" && !relPath(s.Output) {
 		return fmt.Errorf("output %q must be a path inside the app's folder", s.Output)
 	}
-	if s.NoRelease && s.Release != "" {
-		return fmt.Errorf("release command %q, and none: one or the other", s.Release)
+	if s.NoRelease && len(s.Release) > 0 {
+		return fmt.Errorf("release command %q, and none: one or the other", s.Release.String())
 	}
 	if s.Kind != "" && s.Kind != Binary && s.Kind != Static {
 		return fmt.Errorf("kind %q: binary or static", s.Kind)
@@ -374,7 +376,7 @@ func (s Settings) Check() error {
 	if err := CheckRun(s.Run); err != nil {
 		return err
 	}
-	if err := CheckRelease(s.Release); err != nil {
+	if err := CheckReleases(s.Release); err != nil {
 		return err
 	}
 	if err := CheckStopGrace("the web", s.StopGrace); err != nil {
@@ -456,8 +458,8 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	if cfg.Run != "" {
 		p.Run = cfg.Run
 	}
-	// homeport.yaml's release: "" or release: none says there's none
-	fileNone := cfg.Release != nil && (strings.TrimSpace(*cfg.Release) == "" || strings.TrimSpace(*cfg.Release) == "none")
+	// homeport.yaml's release: "", [] or none says there's none
+	fileNone := cfg.Release != nil && (len(*cfg.Release) == 0 || len(*cfg.Release) == 1 && slices.Contains([]string{"", "none"}, strings.TrimSpace((*cfg.Release)[0])))
 	if cfg.Release != nil && !fileNone {
 		p.Release = *cfg.Release
 	}
@@ -502,19 +504,23 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	if s.Run != "" {
 		p.Run = s.Run
 	}
-	if s.Release != "" {
-		p.Release = s.Release
+	if len(s.Release) > 0 {
+		p.Release = slices.Clone(s.Release)
 	}
 	switch {
 	case s.NoRelease:
-		p.Release, p.NoRelease, p.ReleaseReason = "", true, "none: set by the build settings"
-	case s.Release == "" && fileNone:
-		p.NoRelease, p.ReleaseReason = true, "none: set by homeport.yaml (release: "+strconv.Quote(*cfg.Release)+")"
+		p.Release, p.NoRelease, p.ReleaseReason = nil, true, "none: set by the build settings"
+	case len(s.Release) == 0 && fileNone:
+		said := "[]"
+		if len(*cfg.Release) == 1 {
+			said = strconv.Quote((*cfg.Release)[0])
+		}
+		p.NoRelease, p.ReleaseReason = true, "none: set by homeport.yaml (release: "+said+")"
 	}
-	if p.Release == "" && !p.NoRelease {
-		var warning string
-		p.Release, p.ReleaseReason, warning = r.detectRelease(&p)
-		p.ReleaseDetected = p.Release
+	if len(p.Release) == 0 && !p.NoRelease {
+		var warning, detected string
+		detected, p.ReleaseReason, warning = r.detectRelease(&p)
+		p.Release, p.ReleaseDetected = One(detected), detected
 		if warning != "" {
 			p.Warnings = append(p.Warnings, warning)
 		}
@@ -609,7 +615,7 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 		p.Build = p.Command
 	}
 	if p.Kind == Static {
-		p.Run, p.Release, p.ReleaseReason, p.StopGrace, p.Processes = "", "", "", "", nil // nothing runs
+		p.Run, p.Release, p.ReleaseReason, p.StopGrace, p.Processes = "", nil, "", "", nil // nothing runs
 		p.NoRelease, p.ReleaseDetected = false, ""
 		p.Runtime, p.RuntimeVersion, p.RuntimeReason, p.Health = "", "", "", ""
 		p.SSR, p.Reverb, p.Queue = "", false, nil

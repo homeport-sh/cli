@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/homeport-sh/cli/buildplan"
 	"github.com/homeport-sh/cli/internal/cloud"
 )
 
@@ -23,7 +24,7 @@ func rollbackHarness(t *testing.T) (*fakeAPI, *harness) {
 	f.apps[0].Deploys = []cloud.Deploy{
 		{ID: liveDeploy, SHA: strings.Repeat("c", 40), Status: "live", CreatedAt: at.Add(48 * time.Hour)},
 		{ID: earlierDeploy, SHA: strings.Repeat("b", 40), Status: "live", CreatedAt: at.Add(24 * time.Hour),
-			Rollback: &cloud.RollbackOffer{KeptUntil: at.Add(29 * 24 * time.Hour), Release: "./app migrate", BuildVariablesDiffer: true}},
+			Rollback: &cloud.RollbackOffer{KeptUntil: at.Add(29 * 24 * time.Hour), Release: buildplan.One("./app migrate"), BuildVariablesDiffer: true}},
 		{ID: oldestDeploy, SHA: strings.Repeat("a", 40), Status: "live", CreatedAt: at,
 			Rollback: &cloud.RollbackOffer{KeptUntil: at.Add(28 * 24 * time.Hour)}},
 	}

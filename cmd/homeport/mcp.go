@@ -262,7 +262,7 @@ func (a *app) mcpServer() *mcp.Server {
 
 	type deployIn struct {
 		Run       string            `json:"run,omitempty" jsonschema:"how the app starts, for this deploy (its start command's args)"`
-		Release   string            `json:"release,omitempty" jsonschema:"the release command, run before it goes live (migrations)"`
+		Release   []string          `json:"release,omitempty" jsonschema:"the release commands, run in order before it goes live (migrations); the first that fails stops the deploy"`
 		NoRelease bool              `json:"no_release,omitempty" jsonschema:"no release command: none detected, homeport.yaml's not run (not with release)"`
 		Processes map[string]string `json:"processes,omitempty" jsonschema:"processes beside the web, name to command; replaces the app's"`
 		Save      bool              `json:"save,omitempty" jsonschema:"keep these changes as the app's settings for every later deploy"`
@@ -287,7 +287,11 @@ func (a *app) mcpServer() *mcp.Server {
 			what := fmt.Sprintf("Deploy %q (its working tree, uncommitted changes included) to %s, replacing what runs there?", dir, envName(t))
 			// one order, every time: the question asked is the question answered
 			args := []string{}
-			for _, f := range []struct{ flag, value string }{{"--run", in.Run}, {"--release", in.Release}} {
+			flags := []struct{ flag, value string }{{"--run", in.Run}}
+			for _, r := range in.Release {
+				flags = append(flags, struct{ flag, value string }{"--release", r})
+			}
+			for _, f := range flags {
 				if f.value != "" {
 					args = append(args, f.flag, f.value)
 					what += fmt.Sprintf("\n%s %q", f.flag, f.value)

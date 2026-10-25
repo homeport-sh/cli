@@ -32,8 +32,10 @@ func inConfig(err error) error {
 }
 
 // checkSandboxedRelease: a sandboxed release command runs in a sandbox of its
-// own, which has no shell, so it's args to ./bin.
-func checkSandboxedRelease(release string) error { return inConfig(buildplan.CheckRelease(release)) }
+// own, which has no shell, so each is args to ./bin.
+func checkSandboxedRelease(release buildplan.Commands) error {
+	return inConfig(buildplan.CheckReleases(release))
+}
 
 // checkRun: run is args to ./bin that may name only $PORT and $HOST.
 func checkRun(run string) error { return inConfig(buildplan.CheckRun(run)) }

@@ -39,21 +39,21 @@ func TestAReleaseCommandIsDetected(t *testing.T) {
 	}
 	for name, c := range cases {
 		p := detect(t, c.files, buildplan.Settings{})
-		if p.Release != c.release || !strings.Contains(p.ReleaseReason, c.why) {
+		if p.Release.String() != c.release || !strings.Contains(p.ReleaseReason, c.why) {
 			t.Errorf("%s: %q (%s)", name, p.Release, p.ReleaseReason)
 		}
-		if err := buildplan.CheckRelease(p.Release); err != nil {
+		if err := buildplan.CheckReleases(p.Release); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
 		// said wins, and isn't a detection
-		if p := detect(t, c.files, buildplan.Settings{Release: "other"}); !strings.HasSuffix(p.Release, "other") || p.ReleaseReason != "" {
+		if p := detect(t, c.files, buildplan.Settings{Release: buildplan.One("other")}); !strings.HasSuffix(p.Release.String(), "other") || p.ReleaseReason != "" {
 			t.Errorf("%s, settings: %q (%s)", name, p.Release, p.ReleaseReason)
 		}
 		files := map[string]string{"homeport.yaml": "release: \"\"\n"}
 		for k, v := range c.files {
 			files[k] = v
 		}
-		if p := detect(t, files, buildplan.Settings{}); strings.Contains(p.Release, "migrate") || !p.NoRelease {
+		if p := detect(t, files, buildplan.Settings{}); strings.Contains(p.Release.String(), "migrate") || !p.NoRelease {
 			t.Errorf("%s, none in homeport.yaml: %q", name, p.Release)
 		}
 	}
@@ -78,7 +78,7 @@ func TestAReleaseCommandThatCantRunIsSaid(t *testing.T) {
 	}
 	for name, c := range cases {
 		p := detect(t, c.files, buildplan.Settings{})
-		if p.Release != "" || !slices.ContainsFunc(p.Warnings, func(w string) bool { return strings.Contains(w, c.says) && strings.Contains(w, "release") }) {
+		if p.Release.String() != "" || !slices.ContainsFunc(p.Warnings, func(w string) bool { return strings.Contains(w, c.says) && strings.Contains(w, "release") }) {
 			t.Errorf("%s: %q %q", name, p.Release, p.Warnings)
 		}
 	}
@@ -87,7 +87,7 @@ func TestAReleaseCommandThatCantRunIsSaid(t *testing.T) {
 		"go":   {"go.mod": "module m\n\ngo 1.24\n"},
 		"vite": {"package-lock.json": npmLock, "package.json": `{"scripts":{"build":"vite build","migrate":"node m.js"},"devDependencies":{"vite":"^7"}}`},
 	} {
-		if p := detect(t, files, buildplan.Settings{}); p.Release != "" || p.ReleaseReason != "" {
+		if p := detect(t, files, buildplan.Settings{}); p.Release.String() != "" || p.ReleaseReason != "" {
 			t.Errorf("%s: %q", name, p.Release)
 		}
 	}
@@ -138,7 +138,7 @@ func TestNoReleaseCommandIsSaid(t *testing.T) {
 		}
 		for how, w := range said {
 			p := detect(t, w.files, w.s)
-			if p.Release != c.release || !p.NoRelease || !strings.Contains(p.ReleaseReason, w.by) || p.ReleaseDetected != c.detected {
+			if p.Release.String() != c.release || !p.NoRelease || !strings.Contains(p.ReleaseReason, w.by) || p.ReleaseDetected != c.detected {
 				t.Errorf("%s, %s: release %q, none %v (%s), detected %q", name, how, p.Release, p.NoRelease, p.ReleaseReason, p.ReleaseDetected)
 			}
 			if len(p.Warnings) > 0 {
@@ -146,11 +146,11 @@ func TestNoReleaseCommandIsSaid(t *testing.T) {
 			}
 		}
 		// detected: not none, and the command as a person would set it
-		if p := detect(t, c.files, buildplan.Settings{}); p.NoRelease || p.ReleaseDetected != c.detected || !strings.HasSuffix(p.Release, c.detected) {
+		if p := detect(t, c.files, buildplan.Settings{}); p.NoRelease || p.ReleaseDetected != c.detected || !strings.HasSuffix(p.Release.String(), c.detected) {
 			t.Errorf("%s, detected: %q, none %v, detected %q", name, p.Release, p.NoRelease, p.ReleaseDetected)
 		}
 		// a command said over the file's none is that command
-		if p := detect(t, with(c.files, "release: none\n"), buildplan.Settings{Release: "other"}); p.NoRelease || !strings.HasSuffix(p.Release, "other") ||
+		if p := detect(t, with(c.files, "release: none\n"), buildplan.Settings{Release: buildplan.One("other")}); p.NoRelease || !strings.HasSuffix(p.Release.String(), "other") ||
 			p.ReleaseDetected != c.detected {
 			t.Errorf("%s, a command over none: %q, none %v, detected %q", name, p.Release, p.NoRelease, p.ReleaseDetected)
 		}
@@ -160,11 +160,11 @@ func TestNoReleaseCommandIsSaid(t *testing.T) {
 // NoRelease is a setting like any other: one deploy's over the saved ones,
 // either way round, never beside a command, and in JSON as no_release.
 func TestNoReleaseIsASetting(t *testing.T) {
-	saved := buildplan.Settings{Release: "migrate"}
-	if got := saved.With(buildplan.Settings{NoRelease: true}); !got.NoRelease || got.Release != "" {
+	saved := buildplan.Settings{Release: buildplan.One("migrate")}
+	if got := saved.With(buildplan.Settings{NoRelease: true}); !got.NoRelease || got.Release.String() != "" {
 		t.Errorf("none over a command: %+v", got)
 	}
-	if got := (buildplan.Settings{NoRelease: true}).With(buildplan.Settings{Release: "migrate"}); got.NoRelease || got.Release != "migrate" {
+	if got := (buildplan.Settings{NoRelease: true}).With(buildplan.Settings{Release: buildplan.One("migrate")}); got.NoRelease || got.Release.String() != "migrate" {
 		t.Errorf("a command over none: %+v", got)
 	}
 	if got := (buildplan.Settings{NoRelease: true}).With(buildplan.Settings{Run: "serve"}); !got.NoRelease {
@@ -173,7 +173,7 @@ func TestNoReleaseIsASetting(t *testing.T) {
 	if (buildplan.Settings{NoRelease: true}).IsZero() {
 		t.Error("none is something set")
 	}
-	if err := (buildplan.Settings{NoRelease: true, Release: "migrate"}).Check(); err == nil || !strings.Contains(err.Error(), "release") {
+	if err := (buildplan.Settings{NoRelease: true, Release: buildplan.One("migrate")}).Check(); err == nil || !strings.Contains(err.Error(), "release") {
 		t.Errorf("a command and none: %v", err)
 	}
 	if b, _ := json.Marshal(buildplan.Settings{NoRelease: true}); string(b) != `{"no_release":true}` {

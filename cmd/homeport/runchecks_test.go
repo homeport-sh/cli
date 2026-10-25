@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/homeport-sh/cli/buildplan"
 )
 
 // How a hosted app runs is exec'd in its sandbox without a shell: run may
@@ -26,7 +28,7 @@ func TestHowAnAppRunsIsCheckedForTheSandbox(t *testing.T) {
 		"./bin migrate":   false,
 		"migrate && seed": false,
 	} {
-		if err := checkSandboxedRelease(release); (err == nil) != ok {
+		if err := checkSandboxedRelease(buildplan.One(release)); (err == nil) != ok {
 			t.Errorf("release %q: %v", release, err)
 		}
 	}

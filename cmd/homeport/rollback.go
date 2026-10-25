@@ -59,7 +59,7 @@ func (a *app) rollback(ctx context.Context, args []string) error {
 		if d.Rollback.BuildVariablesDiffer {
 			fmt.Fprintln(a.out, "It was built with other build variables than the environment has now, and keeps their old values.")
 		}
-		if d.Rollback.Release != "" && !*runRelease {
+		if len(d.Rollback.Release) > 0 && !*runRelease {
 			fmt.Fprintf(a.out, "Its release command (%s) is skipped: --run-release runs it.\n", d.Rollback.Release)
 		}
 		fmt.Fprint(a.out, "Roll back? [y/N] ")
@@ -98,8 +98,8 @@ func (a *app) listRollbacks(t *target, offers []cloud.Deploy) {
 	for _, d := range offers {
 		line := fmt.Sprintf("  %s  %s  deployed %s  kept until %s", d.ID[:min(8, len(d.ID))], shortSHA(d.SHA),
 			d.CreatedAt.Local().Format("Jan 2 15:04"), d.Rollback.KeptUntil.Local().Format("Jan 2"))
-		if d.Rollback.Release != "" {
-			line += "  release: " + d.Rollback.Release + " (skipped unless --run-release)"
+		if len(d.Rollback.Release) > 0 {
+			line += "  release: " + d.Rollback.Release.String() + " (skipped unless --run-release)"
 		}
 		if d.Rollback.BuildVariablesDiffer {
 			line += "  built with other build variables"

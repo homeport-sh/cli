@@ -119,13 +119,13 @@ func TestPythonFrameworks(t *testing.T) {
 			"Flask", "-m gunicorn --bind 0.0.0.0:$PORT -c .homeport/gunicorn.conf.py wsgi:server", "", ""},
 	} {
 		p := detect(t, tc.files, buildplan.Settings{})
-		if p.Framework != tc.framework || p.Run != tc.run || p.Release != tc.release {
+		if p.Framework != tc.framework || p.Run != tc.run || p.Release.String() != tc.release {
 			t.Errorf("%s: framework %q run %q release %q", tc.name, p.Framework, p.Run, p.Release)
 		}
 		if tc.releaseOf != "" && !strings.Contains(p.ReleaseReason, tc.releaseOf) {
 			t.Errorf("%s: release reason %q", tc.name, p.ReleaseReason)
 		}
-		if err := buildplan.CheckRelease(p.Release); err != nil {
+		if err := buildplan.CheckReleases(p.Release); err != nil {
 			t.Errorf("%s: %v", tc.name, err)
 		}
 	}

@@ -89,21 +89,27 @@ func releaseViewCache(b string) string {
 		"printf '%s' '"+base64.StdEncoding.EncodeToString([]byte(releasePHP))+"' | base64 -d > "+b+"/"+releasePHPF)
 }
 
-// cacheViewsOnRelease has the plan's release command run through the
-// runner, the app's own after it - unless that won't fit, when it runs as
-// it is and the plan says why the views aren't cached. One the sandbox
-// can't run (./bin in front, a shell's &&) is left as it is, for the check
-// that refuses it, saying why: wrapped, it would pass and fail at deploy.
+// cacheViewsOnRelease has the plan's last release command run through the
+// runner, the app's own after it - the views cached once, after every
+// command has run - unless that won't fit, when it runs as it is and the
+// plan says why the views aren't cached. None is the runner alone. Commands
+// the sandbox can't run (./bin in front, a shell's &&) are left as they
+// are, for the check that refuses them, saying why: wrapped, one would
+// pass and fail at deploy.
 func cacheViewsOnRelease(p *Plan) {
-	if CheckRelease(p.Release) != nil {
+	if CheckReleases(p.Release) != nil {
 		return
 	}
-	release := strings.TrimSpace(releaseRunner + " " + p.Release)
+	release := strings.TrimSpace(releaseRunner + " " + p.Release.Last())
 	if len(release) > maxCommandSz {
 		p.Warnings = append(p.Warnings, fmt.Sprintf("Laravel's views aren't compiled on release: the release command is too long to run beside it (at most %d characters)", maxCommandSz-len(releaseRunner)-1))
 		return
 	}
-	p.Release = release
+	if len(p.Release) == 0 {
+		p.Release = Commands{release}
+		return
+	}
+	p.Release = append(slices.Clone(p.Release[:len(p.Release)-1]), release)
 }
 
 // an SSR entry for laravel-vite-plugin in the Vite config: ssr: '…' or [ … ]
