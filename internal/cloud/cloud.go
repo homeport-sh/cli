@@ -225,12 +225,12 @@ type Deploy struct {
 }
 
 // RollbackOffer is what rolling back to an earlier release would ship:
-// its build, kept until KeptUntil. Release: its release command, run only
+// its build, kept until KeptUntil. Release: its release commands, run only
 // if asked; BuildVariablesDiffer: it was built with other build variables
 // than the environment has now.
 type RollbackOffer struct {
 	KeptUntil            time.Time
-	Release              string
+	Release              buildplan.Commands
 	BuildVariablesDiffer bool
 }
 

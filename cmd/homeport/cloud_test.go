@@ -707,7 +707,7 @@ func TestDeployingUploadsTheTreeAndFollowsItLive(t *testing.T) {
 		t.Fatal("uploaded the link")
 	}
 	d := f.deploys[0]
-	if d.Source != "s1" || len(d.SHA) != 40 || d.Save || d.Settings.Run != "./server --debug" || d.Settings.Release != "./migrate" ||
+	if d.Source != "s1" || len(d.SHA) != 40 || d.Save || d.Settings.Run != "./server --debug" || d.Settings.Release.String() != "./migrate" ||
 		len(d.Settings.Processes) != 2 || d.Settings.Processes[0].Name != "worker" || d.Settings.Processes[0].Run != "./work --queue" {
 		t.Fatalf("deployed %+v", d)
 	}
@@ -729,7 +729,7 @@ func TestDeployingSavesWhenAsked(t *testing.T) {
 	if code := h.run("deploy", "--release", "./migrate", "--save", "--unset", "processes"); code != 0 {
 		t.Fatalf("%d %s", code, h.said())
 	}
-	if d := f.deploys[0]; !d.Save || d.Settings.Release != "./migrate" || len(d.Unset) != 1 || d.Unset[0] != "processes" {
+	if d := f.deploys[0]; !d.Save || d.Settings.Release.String() != "./migrate" || len(d.Unset) != 1 || d.Unset[0] != "processes" {
 		t.Fatalf("%+v", d)
 	}
 	// emptying needs saving, as in the dashboard
@@ -738,6 +738,31 @@ func TestDeployingSavesWhenAsked(t *testing.T) {
 	}
 	if code := h.run("deploy", "--process", "no-equals"); code != exitUsage {
 		t.Fatalf("a bad --process: %d", code)
+	}
+}
+
+// --release, given again, is another release command, run after the one
+// before it; once, it's one, sent as a string as it always was.
+func TestDeployingWithSeveralReleaseCommands(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	project(t, h)
+	if code := h.run("deploy", "--release", "migrate --force", "--release", " db:seed --class=Base "); code != 0 {
+		t.Fatalf("%d %s", code, h.said())
+	}
+	b, _ := json.Marshal(f.deploys[0].Settings)
+	if !strings.Contains(string(b), `"release":["migrate --force","db:seed --class=Base"]`) {
+		t.Fatalf("sent %s", b)
+	}
+	if code := h.run("deploy", "--release", "migrate"); code != 0 {
+		t.Fatalf("%d %s", code, h.said())
+	}
+	if b, _ := json.Marshal(f.deploys[1].Settings); !strings.Contains(string(b), `"release":"migrate"`) {
+		t.Fatalf("sent %s", b)
+	}
+	if code := h.run("deploy", "--no-release", "--release", "a", "--release", "b"); code != exitUsage {
+		t.Fatalf("both: %d", code)
 	}
 }
 
@@ -751,7 +776,7 @@ func TestDeployingWithNoRelease(t *testing.T) {
 	if code := h.run("deploy", "--no-release", "--save"); code != 0 {
 		t.Fatalf("%d %s", code, h.said())
 	}
-	if d := f.deploys[0]; !d.Save || !d.Settings.NoRelease || d.Settings.Release != "" {
+	if d := f.deploys[0]; !d.Save || !d.Settings.NoRelease || d.Settings.Release.String() != "" {
 		t.Fatalf("%+v", d)
 	}
 	// a command and none: one or the other

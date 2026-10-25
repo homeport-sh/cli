@@ -136,7 +136,7 @@ func TestThePlanSaysHowTheAppRuns(t *testing.T) {
 		"homeport.yaml": "run: serve --port $PORT\nrelease: migrate\npost_release: ./bin warm\n" +
 			"processes:\n  worker: work --queue default\n  ticker:\n    run: tick\n    memory: 128M\n",
 	})
-	if p.Run != "serve --port $PORT" || p.Release != "migrate" {
+	if p.Run != "serve --port $PORT" || p.Release.String() != "migrate" {
 		t.Fatalf("run/release: %+v", p)
 	}
 	want := []buildplan.Process{{Name: "ticker", Run: "tick", Memory: "128M"}, {Name: "worker", Run: "work --queue default"}}
@@ -150,7 +150,7 @@ func TestThePlanSaysHowTheAppRuns(t *testing.T) {
 		t.Fatalf("stop grace: %+v", g)
 	}
 	// nothing to run: the fields are left out
-	if q := plan(t, map[string]string{"go.mod": "module x\n\ngo 1.24.2\n"}); q.Run != "" || q.Release != "" || q.Processes != nil {
+	if q := plan(t, map[string]string{"go.mod": "module x\n\ngo 1.24.2\n"}); q.Run != "" || q.Release.String() != "" || q.Processes != nil {
 		t.Fatalf("%+v", q)
 	}
 	for name, yml := range map[string]string{
@@ -211,7 +211,7 @@ func TestALaravelReleaseThroughBinIsStillRefused(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 	files["homeport.yaml"] = "release: php-cli artisan migrate --force\n"
-	if p := plan(t, files); p.Release != "php-cli .homeport/release.php ./bin php-cli artisan migrate --force" {
+	if p := plan(t, files); p.Release.String() != "php-cli .homeport/release.php ./bin php-cli artisan migrate --force" {
 		t.Fatalf("release: %q", p.Release)
 	}
 }

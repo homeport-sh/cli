@@ -337,7 +337,7 @@ The release command runs before each release goes live, as args to the
 app's `bin`, and its failure stops the deploy. When neither the build
 settings nor `homeport.yaml` set one, it's the framework's obvious
 migration: the plan's `release_detected` has it as you would set it, and
-its `release_reason` says why:
+its `release_reason` says why. Detection gives one command at most.
 
 | The app | Release command |
 |---|---|
@@ -352,9 +352,28 @@ there to run: the plan's `warnings` say to move it, or to set the release
 command. So does a script that needs a shell, or runs another tool. A
 binary other than rsc-kit's, a Go app and a static site get none.
 
+### Several release commands
+
+`release` may be a list. The commands run in order, each before the next,
+and the first that fails stops the deploy: the deploy's log names it, and
+the release before keeps serving. All of them together get the ten minutes
+a release command gets. At most 10.
+
+```
+release:
+  - php-cli artisan migrate --force
+  - php-cli artisan db:seed --class=RolesSeeder --force
+```
+
+In the dashboard's build settings, put one command on each line. With the
+CLI, give `--release` once for each: `homeport deploy --release "php-cli
+artisan migrate --force" --release "php-cli artisan db:seed --force"`. One
+command is still written as a string, in the build settings and the plan,
+and several as a list. Each is checked as one command is.
+
 To have no release command at all, choose **None** for it in the
 dashboard's build settings, deploy with `homeport deploy --no-release
---save`, or set `release: none` (or `release: ""`) in `homeport.yaml`. That
+--save`, or set `release: none` (or `release: ""`, or `release: []`) in `homeport.yaml`. That
 is apart from setting nothing, which detects one: the build settings keep
 it as `"no_release": true`. The plan then has `"no_release": true`, a
 `release_reason` saying who set it, and still the command detection found
@@ -477,6 +496,9 @@ With no release command set, yours is `php-cli artisan migrate --force`
 release command. Never set the wrapped line above: homeport adds the
 wrapper itself. A release command the sandbox can't run, such as one
 starting with `./bin`, is refused at build, saying what to write.
+
+With several release commands, only the last runs through the wrapper, so
+the views are compiled once, after every command has run.
 
 If your release command fails, the deploy stops, as before. If
 `view:cache` fails, the deploy goes on, and views compile as they're

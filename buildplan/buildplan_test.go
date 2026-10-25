@@ -354,12 +354,12 @@ func TestHowItRunsIsSetOverTheFileOverDetection(t *testing.T) {
 		"homeport.yaml": "run: serve --port $PORT\nrelease: migrate\nprocesses:\n  worker: work --queue default\n",
 	}
 	p := detect(t, files, buildplan.Settings{})
-	if p.Run != "serve --port $PORT" || p.Release != "migrate" || len(p.Processes) != 1 || p.Processes[0].Name != "worker" {
+	if p.Run != "serve --port $PORT" || p.Release.String() != "migrate" || len(p.Processes) != 1 || p.Processes[0].Name != "worker" {
 		t.Fatalf("file: %+v", p)
 	}
-	p = detect(t, files, buildplan.Settings{Release: "migrate --force", Processes: []buildplan.Process{
+	p = detect(t, files, buildplan.Settings{Release: buildplan.One("migrate --force"), Processes: []buildplan.Process{
 		{Name: "scheduler", Run: "schedule:work"}, {Name: "mailer", Run: "queue:work --queue mail"}}})
-	if p.Run != "serve --port $PORT" || p.Release != "migrate --force" {
+	if p.Run != "serve --port $PORT" || p.Release.String() != "migrate --force" {
 		t.Fatalf("settings: %+v", p)
 	}
 	// the person's processes are the app's: the file's are replaced, not added to
@@ -367,7 +367,7 @@ func TestHowItRunsIsSetOverTheFileOverDetection(t *testing.T) {
 		t.Fatalf("processes: %+v", p.Processes)
 	}
 	// none anywhere: none
-	if p := detect(t, map[string]string{"go.mod": "module m\n\ngo 1.24\n"}, buildplan.Settings{}); p.Release != "" || p.Processes != nil {
+	if p := detect(t, map[string]string{"go.mod": "module m\n\ngo 1.24\n"}, buildplan.Settings{}); p.Release.String() != "" || p.Processes != nil {
 		t.Fatalf("detected: %+v", p)
 	}
 }
@@ -376,10 +376,10 @@ func TestHowItRunsIsSetOverTheFileOverDetection(t *testing.T) {
 // field: what it leaves empty is the saved settings'.
 func TestOneDeploysSettingsWinOverTheSavedOnes(t *testing.T) {
 	off, on := false, true
-	saved := buildplan.Settings{Root: "web", Command: "bun run build", Run: "serve", Release: "migrate", Octane: &on,
+	saved := buildplan.Settings{Root: "web", Command: "bun run build", Run: "serve", Release: buildplan.One("migrate"), Octane: &on,
 		Processes: []buildplan.Process{{Name: "worker", Run: "work"}}}
 	got := saved.With(buildplan.Settings{Run: "serve --debug", Octane: &off})
-	if got.Run != "serve --debug" || got.Release != "migrate" || got.Command != "bun run build" || got.Root != "web" ||
+	if got.Run != "serve --debug" || got.Release.String() != "migrate" || got.Command != "bun run build" || got.Root != "web" ||
 		got.Octane == nil || *got.Octane || len(got.Processes) != 1 {
 		t.Fatalf("with: %+v", got)
 	}
@@ -431,7 +431,7 @@ func TestOctaneIsDetectedAndCanBeTurnedOff(t *testing.T) {
 // only $PORT and $HOST; a release and each process are args to ./bin with no
 // variables; at most four processes, named, never web or release.
 func TestHowItRunsIsCheckedByTheSandboxsRules(t *testing.T) {
-	ok := buildplan.Settings{Run: "serve --addr ${HOST}:$PORT", Release: "php-cli artisan migrate --force",
+	ok := buildplan.Settings{Run: "serve --addr ${HOST}:$PORT", Release: buildplan.One("php-cli artisan migrate --force"),
 		Processes: []buildplan.Process{{Name: "worker", Run: "php-cli artisan queue:work", Memory: "256M", CPU: "50%"}}}
 	if err := ok.Check(); err != nil {
 		t.Fatalf("ok: %v", err)
@@ -447,12 +447,12 @@ func TestHowItRunsIsCheckedByTheSandboxsRules(t *testing.T) {
 		"run with a shell":         {buildplan.Settings{Run: "serve; rm -rf /"}, "run"},
 		"run with a variable":      {buildplan.Settings{Run: "serve $SECRET"}, "$PORT"},
 		"run with a newline":       {buildplan.Settings{Run: "serve\nrm"}, "control characters"},
-		"release with &&":          {buildplan.Settings{Release: "migrate && seed"}, "release"},
-		"release with a pipe":      {buildplan.Settings{Release: "migrate | tee"}, "release"},
-		"release with a variable":  {buildplan.Settings{Release: "migrate $DB"}, "release"},
-		"release with a newline":   {buildplan.Settings{Release: "migrate\nseed"}, "release"},
-		"release through ./bin":    {buildplan.Settings{Release: "./bin migrate"}, "write `migrate`"},
-		"release too long":         {buildplan.Settings{Release: strings.Repeat("x", 1001)}, "1000"},
+		"release with &&":          {buildplan.Settings{Release: buildplan.One("migrate && seed")}, "release"},
+		"release with a pipe":      {buildplan.Settings{Release: buildplan.One("migrate | tee")}, "release"},
+		"release with a variable":  {buildplan.Settings{Release: buildplan.One("migrate $DB")}, "release"},
+		"release with a newline":   {buildplan.Settings{Release: buildplan.One("migrate\nseed")}, "release"},
+		"release through ./bin":    {buildplan.Settings{Release: buildplan.One("./bin migrate")}, "write `migrate`"},
+		"release too long":         {buildplan.Settings{Release: buildplan.One(strings.Repeat("x", 1001))}, "1000"},
 		"process named web":        {buildplan.Settings{Processes: []buildplan.Process{{Name: "web", Run: "x"}}}, "not web or release"},
 		"process named release":    {buildplan.Settings{Processes: []buildplan.Process{{Name: "release", Run: "x"}}}, "not web or release"},
 		"process named in caps":    {buildplan.Settings{Processes: []buildplan.Process{{Name: "Worker", Run: "x"}}}, "lowercase"},
@@ -527,7 +527,7 @@ func TestSettingsHoldNoControlCharacters(t *testing.T) {
 		"output DEL":   {Output: "dist\x7f"},
 		"kind NUL":     {Kind: "static\x00"},
 		"run DEL":      {Run: "serve\x7f"},
-		"release BEL":  {Release: "migrate\x07"},
+		"release BEL":  {Release: buildplan.One("migrate\x07")},
 		"process name": {Processes: []buildplan.Process{{Name: "work\x7f", Run: "x"}}},
 		"process run":  {Processes: []buildplan.Process{{Name: "worker", Run: "x\x7f"}}},
 		"memory":       {Processes: []buildplan.Process{{Name: "worker", Run: "x", Memory: "1M\x7f"}}},

@@ -35,7 +35,7 @@ func (a *app) usage() {
                       it's live, then prints its address. In a folder
                       nothing links, its app (named after the folder, or
                       --app) is created, asked first, and linked
-                      [--run <cmd>] [--release <cmd> | --no-release]
+                      [--run <cmd>] [--release <cmd>… | --no-release]
                       [--process name=cmd]…
                       [--save] [--unset run|release|processes|octane]…
                       [--team <slug> --app <name> [--env <name>]]
@@ -90,6 +90,7 @@ func (a *app) usage() {
                       detected without a homeport.yaml, or from one
   homeport version    this CLI's version
 
+--release again is another release command, run after the one before it.
 --run, --release and --process change this deploy alone, as the dashboard's
 "Redeploy with changes" does; --save keeps them for every deploy after it.
 --yes creates an app the team hasn't without asking: needed in CI, where

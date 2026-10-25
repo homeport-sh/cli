@@ -312,12 +312,31 @@ func TestAQuestionIsTheSameEachTime(t *testing.T) {
 	h.login(t)
 	project(t, h)
 	cs := mcpSession(t, h, &person{approve: true})
-	args := map[string]any{"run": "./server", "release": "./migrate", "processes": map[string]string{"worker": "./w", "cron": "./c", "mail": "./m"}}
+	args := map[string]any{"run": "./server", "release": []string{"./migrate"}, "processes": map[string]string{"worker": "./w", "cron": "./c", "mail": "./m"}}
 	for i := range 8 {
 		f.buildGet, f.steps = 0, []string{"uploaded", "deploying", "live"}
 		if text, isErr := callTool(t, cs, "deploy", args); isErr {
 			t.Fatalf("deploy %d: %s", i, text)
 		}
+	}
+}
+
+// release is a list: each a --release, run in that order, and the
+// question names each.
+func TestDeployingWithSeveralReleaseCommandsByMCP(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	project(t, h)
+	p := &person{approve: true}
+	cs := mcpSession(t, h, p)
+	f.steps = []string{"uploaded", "deploying", "live"}
+	if text, isErr := callTool(t, cs, "deploy", map[string]any{"release": []string{"migrate --force", "db:seed"}}); isErr {
+		t.Fatalf("%s", text)
+	}
+	if len(f.deploys) != 1 || f.deploys[0].Settings.Release.String() != "migrate --force, then db:seed" || len(p.asked) != 1 ||
+		!strings.Contains(p.asked[0], `--release "migrate --force"`+"\n"+`--release "db:seed"`) {
+		t.Fatalf("deploys %+v, asked %q", f.deploys, p.asked)
 	}
 }
 

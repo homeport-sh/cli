@@ -315,37 +315,37 @@ func TestALaravelAppsViewsAreCachedAsItsReleaseRuns(t *testing.T) {
 	const runner = "php-cli .homeport/release.php ./bin"
 	// none said: Laravel's migrations (release.go)
 	p := detect(t, laravel(nil), buildplan.Settings{})
-	if p.Release != runner+" php-cli artisan migrate --force" {
+	if p.Release.String() != runner+" php-cli artisan migrate --force" {
 		t.Fatalf("release: %q", p.Release)
 	}
 	if !strings.Contains(p.Command, "/.homeport/release.php") || strings.Contains(p.Command, "view:cache") {
 		t.Fatalf("command: %s", p.Command)
 	}
-	if err := buildplan.CheckRelease(p.Release); err != nil {
+	if err := buildplan.CheckReleases(p.Release); err != nil {
 		t.Fatalf("check: %v", err)
 	}
 	// the app's own release command, from its settings or homeport.yaml,
 	// runs through it
-	if p := detect(t, laravel(nil), buildplan.Settings{Release: "php-cli artisan migrate --force"}); p.Release != runner+" php-cli artisan migrate --force" {
+	if p := detect(t, laravel(nil), buildplan.Settings{Release: buildplan.One("php-cli artisan migrate --force")}); p.Release.String() != runner+" php-cli artisan migrate --force" {
 		t.Errorf("settings: %q", p.Release)
 	}
-	if p := detect(t, laravel(nil, "homeport.yaml", "release: php-cli artisan migrate --force\n"), buildplan.Settings{}); p.Release != runner+" php-cli artisan migrate --force" {
+	if p := detect(t, laravel(nil, "homeport.yaml", "release: php-cli artisan migrate --force\n"), buildplan.Settings{}); p.Release.String() != runner+" php-cli artisan migrate --force" {
 		t.Errorf("homeport.yaml: %q", p.Release)
 	}
 	// Octane, and SSR beside the web, too
-	if p := detect(t, laravel([]string{"laravel/octane"}), buildplan.Settings{}); p.Release != runner+" php-cli artisan migrate --force" {
+	if p := detect(t, laravel([]string{"laravel/octane"}), buildplan.Settings{}); p.Release.String() != runner+" php-cli artisan migrate --force" {
 		t.Errorf("octane: %q", p.Release)
 	}
 	// one too long to run through it runs as it is, and the plan says so
 	long := "php-cli artisan migrate --force " + strings.Repeat("x", 1000-len("php-cli artisan migrate --force "))
-	if p := detect(t, laravel(nil), buildplan.Settings{Release: long}); p.Release != long || !slices.ContainsFunc(p.Warnings, func(w string) bool { return strings.Contains(w, "view") }) {
+	if p := detect(t, laravel(nil), buildplan.Settings{Release: buildplan.One(long)}); p.Release.String() != long || !slices.ContainsFunc(p.Warnings, func(w string) bool { return strings.Contains(w, "view") }) {
 		t.Errorf("too long: %q %v", p.Release, p.Warnings)
 	}
 	// one the sandbox can't run is left as it is, for the check that
 	// refuses it, saying why (wrapped, ./bin would pass, and fail at deploy)
 	for _, bad := range []string{"./bin php-cli artisan migrate --force", "./bin"} {
 		p := detect(t, laravel(nil, "homeport.yaml", "release: "+bad+"\n"), buildplan.Settings{})
-		if p.Release != bad || buildplan.CheckRelease(p.Release) == nil {
+		if p.Release.String() != bad || buildplan.CheckReleases(p.Release) == nil {
 			t.Errorf("%q: %q", bad, p.Release)
 		}
 	}
@@ -355,17 +355,17 @@ func TestALaravelAppsViewsAreCachedAsItsReleaseRuns(t *testing.T) {
 		files map[string]string
 		s     buildplan.Settings
 	}{
-		"plain PHP":     {map[string]string{"composer.json": `{"require":{"slim/slim":"^4"}}`, "composer.lock": "{}"}, buildplan.Settings{Release: "php-cli migrate.php"}},
-		"build command": {laravel(nil), buildplan.Settings{Command: "frankenphp-bundle . .homeport-bundle", Release: "php-cli artisan migrate --force"}},
+		"plain PHP":     {map[string]string{"composer.json": `{"require":{"slim/slim":"^4"}}`, "composer.lock": "{}"}, buildplan.Settings{Release: buildplan.One("php-cli migrate.php")}},
+		"build command": {laravel(nil), buildplan.Settings{Command: "frankenphp-bundle . .homeport-bundle", Release: buildplan.One("php-cli artisan migrate --force")}},
 		"homeport.yaml": {laravel(nil, "homeport.yaml", "build:\n  command: frankenphp-bundle . .homeport-bundle\nrelease: php-cli artisan migrate --force\n"), buildplan.Settings{}},
 	} {
 		p := detect(t, c.files, c.s)
-		if strings.Contains(p.Release, "release.php") || strings.Contains(p.Command, "release.php") {
+		if strings.Contains(p.Release.String(), "release.php") || strings.Contains(p.Command, "release.php") {
 			t.Errorf("%s: %q %s", name, p.Release, p.Command)
 		}
 	}
 	// a static site runs nothing
-	if p := detect(t, laravel(nil, "homeport.yaml", "static: public\n"), buildplan.Settings{}); p.Release != "" {
+	if p := detect(t, laravel(nil, "homeport.yaml", "static: public\n"), buildplan.Settings{}); p.Release.String() != "" {
 		t.Errorf("static: %q", p.Release)
 	}
 }
