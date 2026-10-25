@@ -666,8 +666,8 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		// not the deploy
 		p.assemble = join(`{ [ -f `+entry+` ] || { echo 'homeport: the build made no `+entry+` - is the adapter in the config the one installed, and its out this?' >&2; exit 1; }; }`, p.assemble)
 	}
-	if pr != nil && binName == "" && (pr.name == "SvelteKit" && !pr.only || pr.name == "Astro") {
-		p.assemble = join(p.assemble, prerendered(pr.name, entry, settingsRun != "" || cfg.Run != ""))
+	if kind, dir := publicTree(pr, layout, entry, binName, args, r.ws); kind != "" {
+		p.assemble = join(p.assemble, prerendered(kind, dir, settingsRun != "" || cfg.Run != ""))
 	}
 	p.Command = join(build, p.assemble)
 	if binName != "" {
@@ -690,17 +690,42 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 // .output/edge.json from the same pages, for the edge to keep them too. It
 // never fails the build. An app with a start command of its own gets none: its
 // server may run code of its own before the framework's.
-func prerendered(framework, entry string, ownRun bool) string {
+func prerendered(kind, dir string, ownRun bool) string {
 	if ownRun {
 		return "echo 'homeport: prerendered pages are served by the app, which wakes for them: it starts with its own command, which may run code of its own before them'"
-	}
-	kind, dir := "astro", "dist"
-	if framework == "SvelteKit" {
-		kind, dir = "sveltekit", path.Dir(entry)
 	}
 	const b = BundleDir
 	// in braces: a failure before it still fails the build
 	return "{ printf '%s' '" + base64.StdEncoding.EncodeToString([]byte(publicMJS)) + "' | base64 -d > .homeport-public.mjs && (cd " + b + " && ./bin ../.homeport-public.mjs " + kind + " " + dir + " ../.output/edge.json) || rm -rf " + b + "/.homeport/public; rm -f .homeport-public.mjs; }"
+}
+
+// publicTree is the server whose files embed/public.mjs reads, and where
+// in the bundle ("" none): SvelteKit's adapter-node (its out), Astro's node
+// adapter (dist), Next.js standalone (the app's folder in it: a workspace
+// member's is under the workspace's), and react-router-serve or
+// remix-serve (the server build they're given). Any other server - one of
+// the app's own, Nitro's, a compiled binary - may run code of the app's
+// before a file, or serves none of its own: none.
+func publicTree(pr *preset, layout, entry, binName string, args []string, w *workspace) (kind, dir string) {
+	switch {
+	case binName == "react-router-serve" || binName == "remix-serve":
+		if len(args) == 0 || !relPath(args[0]) || strings.HasPrefix(args[0], "/") {
+			return "", ""
+		}
+		return strings.TrimSuffix(binName, "-serve"), clean(args[0])
+	case pr == nil || binName != "":
+		return "", ""
+	case pr.name == "SvelteKit" && !pr.only:
+		return "sveltekit", path.Dir(entry)
+	case pr.name == "Astro":
+		return "astro", "dist"
+	case pr.name == "Next.js" && layout == "standalone":
+		if w != nil {
+			return "next", w.rel
+		}
+		return "next", "."
+	}
+	return "", ""
 }
 
 //go:embed embed/public.mjs
