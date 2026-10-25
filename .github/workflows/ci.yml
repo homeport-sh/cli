@@ -74,6 +74,26 @@ jobs:
       - name: build and run the examples
         run: e2e/js-examples.sh "$RUNNER_TEMP/homeport" examples
 
+  # SvelteKit (adapter-node 6, and 5 with a base path) and Astro (three
+  # trailingSlash/format/base settings), built as a hosted build builds
+  # them: what the build put in .homeport/public - served without waking
+  # the app - is checked against the running app, URL by URL, and a page
+  # behind a hook or middleware is left to the app
+  static-pages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: build homeport
+        run: go build -o "$RUNNER_TEMP/homeport" ./cmd/homeport
+
+      - name: build the apps and check their pages against them
+        run: e2e/static-pages.sh "$RUNNER_TEMP/homeport"
+
   # Django (with a Tailwind build), FastAPI and Flask: built in the plan's
   # image, run from the bundle - the interpreter as bin - read-only in a bare
   # Ubuntu 24.04, on x86-64 and on arm64

@@ -11,6 +11,9 @@ and `homeport.yaml` wins over detection.
 Response headers (`headers:` in `homeport.yaml`) are in
 [headers.md](headers.md).
 
+Which prerendered pages are answered without waking the app (SvelteKit,
+Astro) is in [edge-caching.md](edge-caching.md).
+
 A **stop grace** is how long the web or a process gets to finish after
 SIGTERM before it's killed: on a deploy, a restart, a scale-down or a move.
 `stop_grace:` at the top of `homeport.yaml` is the web's, and a process's
@@ -753,6 +756,12 @@ any other driver both are 0. Options after `./bin` go to `queue:work`
 which doesn't have the runner, so its drain is `php-cli artisan queue:work
 --stop-when-empty`. `retry` (`php-cli artisan queue:retry all`) retries the
 failed jobs.
+
+A drained queue's jobs wait for the next drain. The
+[`homeport/laravel`](https://github.com/homeport-sh/laravel) package
+(Laravel 12 and 13) kicks a drain when a job is queued, so on paid plans it
+runs within seconds; without it in `composer.json`'s `require`, the plan's
+`note` suggests it. Horizon runs always on, so it gets no such note.
 
 A JavaScript app's drain is one it names. A `queue:drain` script runs as
 the bundle runs a script's file (`bun scripts/drain.ts` is

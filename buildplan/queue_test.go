@@ -20,7 +20,10 @@ const (
 // (.homeport/queue.php, which prints the report line), or worked always on
 // by queue:work, given Laravel's job timeout and 30s to finish.
 var laravelQueue = buildplan.Queue{Framework: "Laravel", Backend: "postgres", Drain: "php-cli .homeport/queue.php ./bin", Timeout: "10m",
-	Retry: "php-cli artisan queue:retry all", Worker: "php-cli artisan queue:work --tries=3 --timeout=60", StopGrace: "90s", Source: "detected"}
+	Retry: "php-cli artisan queue:retry all", Worker: "php-cli artisan queue:work --tries=3 --timeout=60", StopGrace: "90s", Note: kickNote, Source: "detected"}
+
+// kickNote is what a drained Laravel queue without homeport/laravel says.
+const kickNote = "Jobs wait for the next drain: `composer require homeport/laravel` runs them within seconds on paid plans."
 
 // A Laravel app queues work when a class in app/ implements ShouldQueue (a
 // job, a mail, a notification, a listener), or it has the jobs table's
@@ -94,6 +97,37 @@ func TestALaravelAppsQueueIsDetected(t *testing.T) {
 	p = detect(t, laravel(nil, "app/Jobs/X.php", shouldQueue), buildplan.Settings{Command: "frankenphp-bundle . .homeport-bundle"})
 	if p.Queue == nil || p.Queue.Drain != "php-cli artisan queue:work --stop-when-empty" || strings.Contains(p.Command, "queue.php") {
 		t.Errorf("a person's build: %+v %s", p.Queue, p.Command)
+	}
+}
+
+// A drained Laravel queue waits for the next drain; homeport/laravel kicks
+// one when a job is queued (paid plans), so the plan suggests it when the
+// app doesn't require it. Horizon runs always on: nothing to kick.
+func TestALaravelQueueSuggestsHomeportLaravel(t *testing.T) {
+	for name, c := range map[string]struct {
+		files map[string]string
+		queue bool
+		note  string
+	}{
+		"absent":   {laravel(nil, "app/Jobs/X.php", shouldQueue), true, kickNote},
+		"present":  {laravel([]string{"homeport/laravel"}, "app/Jobs/X.php", shouldQueue), true, ""},
+		"Horizon":  {laravel([]string{"laravel/horizon"}, "app/Jobs/X.php", shouldQueue), true, ""},
+		"no queue": {laravel(nil), false, ""},
+	} {
+		p := detect(t, c.files, buildplan.Settings{})
+		if (p.Queue != nil) != c.queue {
+			t.Errorf("%s: queue %+v", name, p.Queue)
+			continue
+		}
+		if p.Queue == nil {
+			continue
+		}
+		if got := strings.Contains(p.Queue.Note, "homeport/laravel"); got != (c.note != "") {
+			t.Errorf("%s: note %q", name, p.Queue.Note)
+		}
+		if c.note != "" && p.Queue.Note != c.note {
+			t.Errorf("%s: note %q, want %q", name, p.Queue.Note, c.note)
+		}
 	}
 }
 

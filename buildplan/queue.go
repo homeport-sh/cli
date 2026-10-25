@@ -190,7 +190,9 @@ func (c *queueConfig) over(detected *Queue) (*Queue, error) {
 // Laravel's queue. The database driver (Laravel's default since 11) keeps
 // jobs in the app's own database: a drain is the runner below; always on,
 // queue:work, with Laravel's job timeout (60s) and 30s to finish it.
-// Horizon supervises workers in Redis: always on only.
+// Horizon supervises workers in Redis: always on only. homeport/laravel
+// kicks a drain when a job is queued (paid plans); without it, jobs wait
+// for the next one, and the note says so.
 const (
 	queuePHPF          = ".homeport/queue.php"
 	laravelQueueDrain  = "php-cli " + queuePHPF + " ./bin"
@@ -199,6 +201,8 @@ const (
 	laravelQueueWorker = "php-cli artisan queue:work --tries=3 --timeout=60"
 	laravelHorizon     = "php-cli artisan horizon"
 	laravelQueueGrace  = "90s"
+	laravelKick        = "homeport/laravel"
+	kickNote           = "Jobs wait for the next drain: `composer require " + laravelKick + "` runs them within seconds on paid plans."
 	horizonNote        = "Horizon needs Redis, which homeport doesn't offer yet: run it always on with a Redis URL of your own as a variable, or use Laravel's database queue driver, which runs in your database"
 )
 
@@ -248,8 +252,12 @@ func (r reader) laravelQueue(runner bool) *Queue {
 	if runner {
 		drain = laravelQueueDrain
 	}
+	note := ""
+	if !r.requires(laravelKick) {
+		note = kickNote
+	}
 	return &Queue{Framework: "Laravel", Backend: "postgres", Drain: drain, Timeout: DefaultQueueTimeout, Retry: laravelQueueRetry,
-		Worker: laravelQueueWorker, StopGrace: laravelQueueGrace, Source: QueueDetected}
+		Worker: laravelQueueWorker, StopGrace: laravelQueueGrace, Note: note, Source: QueueDetected}
 }
 
 // maxScanned bounds the files a scan of a folder reads.

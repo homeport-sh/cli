@@ -276,6 +276,9 @@ TanStack Start, Astro, React Router, Remix, NestJS, Elysia, Hono, Fastify,
 Express) - and how each runs.
 [docs/headers.md](docs/headers.md) is an app's response headers
 (`headers:` in `homeport.yaml`).
+[docs/edge-contract.md](docs/edge-contract.md) is the edge contract: what
+a framework builds and answers so the edge can serve its static and
+partially prerendered pages without waking the app.
 
 The Go packages here (`buildplan`, `envfile`, `artifact`, `cidr`) are shared
 with the platform.
