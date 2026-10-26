@@ -44,6 +44,18 @@ func (c Commands) MarshalJSON() ([]byte, error) {
 	return json.Marshal([]string(c))
 }
 
+// JSONSchema is what MarshalJSON writes: a string, a list of strings, or null
+// for none. A host that types what it serves from such a method (rsc-kit, in
+// the control plane) would otherwise know nothing of a type that writes its
+// own JSON. It is a plain map, so this package needs nothing to say it.
+func (Commands) JSONSchema() map[string]any {
+	return map[string]any{"anyOf": []any{
+		map[string]any{"type": "string"},
+		map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		map[string]any{"type": "null"},
+	}}
+}
+
 // UnmarshalJSON reads a string ("" is none) or a list of strings.
 func (c *Commands) UnmarshalJSON(b []byte) error {
 	var one string
