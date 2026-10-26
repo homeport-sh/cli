@@ -273,7 +273,9 @@ build it. It uses the same detection the platform's builders run.
 [docs/detection.md](docs/detection.md) says what it detects - Go, PHP,
 static sites, and JavaScript apps on Node or Bun (Next.js, Nuxt, SvelteKit,
 TanStack Start, Astro, React Router, Remix, NestJS, Elysia, Hono, Fastify,
-Express) - and how each runs.
+Express) - and how each runs. Run in a workspace member's folder (its
+lockfile at the workspace's root), it plans from the repository's root
+with the root directory set to that folder, as the hosted build does.
 [docs/headers.md](docs/headers.md) is an app's response headers
 (`headers:` in `homeport.yaml`).
 [docs/edge-contract.md](docs/edge-contract.md) is the edge contract: what
