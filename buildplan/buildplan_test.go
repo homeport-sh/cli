@@ -601,3 +601,38 @@ func TestBuildIsTheAppsOwn(t *testing.T) {
 		t.Errorf("json: %s", b)
 	}
 }
+
+// A Go program in a folder of its repository's module (one go.mod at the
+// top, a command in cmd/x): it's Go, built in its folder, at the module's
+// Go version. The control plane fetches go.mod above the app's folder.
+func TestAGoProgramInAFolderOfItsModule(t *testing.T) {
+	files := map[string]string{
+		"go.mod":                       "module m\n\ngo 1.26\n\ntoolchain go1.27.3\n",
+		"ci/runner/controller/main.go": "package main\n",
+	}
+	p := detect(t, files, buildplan.Settings{Root: "ci/runner/controller"})
+	if p.Toolchain != "go" || p.Image != "golang:1.27.3" || p.Root != "ci/runner/controller" || !strings.HasSuffix(p.Command, " .") {
+		t.Fatalf("%+v", p)
+	}
+	// the nearest module: a nested go.mod wins over the top's
+	files["ci/go.mod"] = "module ci\n\ngo 1.25\n"
+	if p = detect(t, files, buildplan.Settings{Root: "ci/runner/controller"}); p.Image != "golang:1.25" {
+		t.Fatalf("nearest: %+v", p)
+	}
+	// anything the folder says itself still wins
+	files["ci/runner/controller/index.html"] = "<p>hi</p>"
+	if p = detect(t, files, buildplan.Settings{Root: "ci/runner/controller"}); p.Toolchain != "none" {
+		t.Fatalf("own files: %+v", p)
+	}
+	// no module above: still can't tell
+	if _, err := buildplan.Detect(repo(map[string]string{"x/main.go": "package main\n"}), buildplan.Settings{Root: "x"}); err == nil {
+		t.Fatal("no go.mod anywhere")
+	}
+	found := false
+	for _, f := range buildplan.WorkspaceFiles() {
+		found = found || f == "go.mod"
+	}
+	if !found {
+		t.Fatal("WorkspaceFiles doesn't fetch go.mod above the app")
+	}
+}
