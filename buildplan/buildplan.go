@@ -641,6 +641,10 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 		p.Kind, p.Artifact, p.StaticFallback = Static, clean(cfg.Static), false
 	}
 
+	// nothing in the folder says how it builds, and a Go module is above it
+	goAbove := cfg.Build.Image == "" && !r.exists("go.mod") && !r.exists("composer.json") && !r.python() &&
+		!r.exists("package.json") && !r.exists("index.html") && r.goModuleAbove()
+
 	// a workspace member: its lockfile is its workspace's, above it
 	if cfg.Build.Image == "" && !r.exists("composer.json") && !r.exists("go.mod") && r.exists("package.json") && !r.hasLockfile() && !r.python() {
 		w, err := r.findWorkspace()
@@ -699,7 +703,7 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 				p.laravelViews = true
 			}
 		}
-	case r.exists("go.mod"):
+	case r.exists("go.mod") || goAbove:
 		v, err := r.goVersion()
 		if err != nil {
 			return Plan{}, err
@@ -795,6 +799,9 @@ type reader struct {
 	fsys fs.FS
 	root string
 	ws   *workspace // the app's workspace, when it's a member (workspace.go)
+	// gomod is the folder of the Go module the app's folder is in, when
+	// its go.mod is above it: "" when it's the app's own
+	gomod string
 	// script is the app's build script, when its workspace's root runs
 	// another (workspace.go): "" is build
 	script string
@@ -934,7 +941,11 @@ var (
 )
 
 func (r reader) goVersion() (string, error) {
-	b, err := r.read("go.mod")
+	m := r
+	if r.gomod != "" {
+		m = reader{fsys: r.fsys, root: r.gomod}
+	}
+	b, err := m.read("go.mod")
 	if err != nil {
 		return "", err
 	}
@@ -948,4 +959,18 @@ func (r reader) goVersion() (string, error) {
 		return "", fmt.Errorf("go.mod's Go version %q isn't a version", v)
 	}
 	return v, nil
+}
+
+// goModuleAbove says whether a go.mod is in a folder above the app's (a Go
+// program in a folder of its repository's module, like cmd/x), noting the
+// nearest's folder: it builds in its own folder, where go finds the module.
+func (r *reader) goModuleAbove() bool {
+	for d := r.root; d != "."; {
+		d = path.Dir(d)
+		if (reader{fsys: r.fsys, root: d}).exists("go.mod") {
+			r.gomod = d
+			return true
+		}
+	}
+	return false
 }
