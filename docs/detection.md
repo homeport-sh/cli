@@ -30,6 +30,12 @@ processes:
     stop_grace: 10m    # finish the job it holds
 ```
 
+`health:` at the top of `homeport.yaml` is the path a deploy's health
+check asks for, like `health: /healthz`: a path on the app, starting with
+`/`, no query or spaces, no `..`, at most 200 characters. On the platform
+the file's wins over the environment's setting; unset, the setting's is
+used, else `/`.
+
 | Files | Toolchain | Produces |
 |---|---|---|
 | `go.mod` | Go (`golang:<go.mod's version>`) | a binary |

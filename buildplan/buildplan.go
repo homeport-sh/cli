@@ -179,7 +179,8 @@ type Plan struct {
 	// A JavaScript app's runtime - bun or node, the binary its bundle runs
 	// as bin - its version, and why that one (for people: "its start
 	// script runs bun src/index.ts"); the package manager that installs
-	// it; and the path its health is checked on.
+	// it; and the path its health is checked on - homeport.yaml's health:
+	// (CheckHealthPath), any app's, when it says one.
 	Runtime        string `json:"runtime,omitempty"`
 	RuntimeVersion string `json:"runtime_version,omitempty"`
 	RuntimeReason  string `json:"runtime_reason,omitempty"`
@@ -308,6 +309,7 @@ type fileConfig struct {
 	Run       string                   `yaml:"run"`
 	Release   *Commands                `yaml:"release"` // a command or a list; "", [] or none says there's none: not detected
 	StopGrace string                   `yaml:"stop_grace"`
+	Health    string                   `yaml:"health"` // the path its health is checked on (CheckHealthPath)
 	Processes map[string]processConfig `yaml:"processes"`
 	Packages  []string                 `yaml:"packages"`
 	Headers   []HeaderRule             `yaml:"headers"`
@@ -444,6 +446,9 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	}
 	if err := CheckHeaders(cfg.Headers); err != nil {
 		return Plan{}, fmt.Errorf("%s: %w", ConfigFile, err)
+	}
+	if err := checkFileHealth(cfg.Health); err != nil {
+		return Plan{}, err
 	}
 	p, err := r.detect(cfg, s)
 	if err != nil {
@@ -613,6 +618,9 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 		// frankenphp-bundle, and Laravel's caches: homeport's
 	default:
 		p.Build = p.Command
+	}
+	if cfg.Health != "" {
+		p.Health = cfg.Health // whatever runs, the file's: a site's cleared below
 	}
 	if p.Kind == Static {
 		p.Run, p.Release, p.ReleaseReason, p.StopGrace, p.Processes = "", nil, "", "", nil // nothing runs
