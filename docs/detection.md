@@ -355,8 +355,10 @@ its `release_reason` says why. Detection gives one command at most.
 
 A bundle ships `dependencies` only, so a tool in `devDependencies` isn't
 there to run: the plan's `warnings` say to move it, or to set the release
-command. So does a script that needs a shell, or runs another tool. A
-binary other than rsc-kit's, a Go app and a static site get none.
+command. So does a script that needs a shell, or runs another tool. An
+rsc-kit app's binary is its own whatever builds it, so a build command,
+output or kind you set leaves its `migrate` detected. A binary other than
+rsc-kit's, a Go app and a static site get none.
 
 ### Several release commands
 
@@ -436,6 +438,14 @@ framework) is planned as the app it builds:
 
 The plan's `root` is that member's folder, and its `warnings` say why it
 was chosen. Set the root directory to build another.
+
+With a build command, output or kind set at such a root (`cd apps/web &&
+bun run compile`, output `apps/web/dist/app`), the root is planned as you
+said, and detection reads the root's folder, not the app's: it finds no
+queue or release command there. The plan's `suggested_root` is the member
+that's the app - the one the output is in, else the one the root's build
+script builds - and its `warnings` say to set the root directory to it,
+with the build command and output relative to it.
 
 Not handled yet: Yarn Plug'n'Play at runtime, and Deno.
 
@@ -795,7 +805,10 @@ A JavaScript app's drain is one it names. A `queue:drain` script runs as
 the bundle runs a script's file (`bun scripts/drain.ts` is
 `scripts/drain.ts`); a script that needs a shell can't, and the plan's
 `note` says so. An rsc-kit app's command `src/commands/queue:drain.ts` runs
-as `./app queue:drain`. pg-boss has no drain of its own: `drain()` from
+as `./app queue:drain`, whatever builds it: a build command, output or kind
+you set (or `homeport.yaml`'s `build`) leaves its queue detected, since the
+binary is still the app's. A bundle's build command does too; a site has no
+queue. pg-boss has no drain of its own: `drain()` from
 `@homeport-sh/queue` is one.
 
 ```ts

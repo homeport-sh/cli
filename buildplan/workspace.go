@@ -211,11 +211,11 @@ type rootApp struct {
 // frameworks are packages that make a member an app.
 var frameworks = append(slices.Clone(servers), "astro", "vite", "@sveltejs/kit", "nuxt", "@react-router/dev", "@remix-run/dev")
 
-// workspaceApp: the app a workspace's root (r, the repository's root)
-// builds; nil when r isn't one, or is an app itself.
-func (r reader) workspaceApp() (*rootApp, error) {
+// workspaceMembers: the members of a workspace's root (r, the repository's
+// root); false when r isn't one, or is an app itself.
+func (r reader) workspaceMembers() ([]string, bool) {
 	if !r.exists("package.json") || !r.hasLockfile() {
-		return nil, nil
+		return nil, false
 	}
 	pm := ""
 	for _, l := range lockfiles {
@@ -226,9 +226,19 @@ func (r reader) workspaceApp() (*rootApp, error) {
 	patterns, _ := r.workspacePatterns(pm)
 	pkg, deps := r.pkg(), r.deps()
 	if len(patterns) == 0 || pkg.Scripts["start"] != "" || slices.ContainsFunc(frameworks, func(f string) bool { return deps[f] }) {
+		return nil, false
+	}
+	return r.members(patterns), true
+}
+
+// workspaceApp: the app a workspace's root (r, the repository's root)
+// builds; nil when r isn't one, or is an app itself.
+func (r reader) workspaceApp() (*rootApp, error) {
+	members, ok := r.workspaceMembers()
+	if !ok {
 		return nil, nil
 	}
-	members := r.members(patterns)
+	pkg := r.pkg()
 	if name, script, said := builtMember(pkg.Scripts["build"]); name != "" {
 		for _, m := range members {
 			mr := reader{fsys: r.fsys, root: m}
@@ -257,6 +267,31 @@ func (r reader) workspaceApp() (*rootApp, error) {
 		return &rootApp{dir: apps[0], why: "the repository's root is a workspace, and " + apps[0] + " is its one app"}, nil
 	}
 	return nil, fmt.Errorf("the repository's root is a workspace with more than one app (%s): set the root directory to the one this app is", strings.Join(apps, ", "))
+}
+
+// saidMember: the member a workspace's root (r, the repository's root) is,
+// when how it builds was said (its own folder is planned, and detection
+// reads that, not the app's): the member the output is in, else the one
+// workspaceApp finds. "" when r isn't a workspace's root, or none is. It
+// isn't planned as that member - the person's commands are written from
+// the root - only suggested as the root directory to set.
+func (r reader) saidMember(output string) string {
+	members, ok := r.workspaceMembers()
+	if !ok {
+		return ""
+	}
+	if output != "" {
+		out := clean(output)
+		for _, m := range members {
+			if strings.HasPrefix(out, m+"/") {
+				return m
+			}
+		}
+	}
+	if a, err := r.workspaceApp(); err == nil && a != nil {
+		return a.dir
+	}
+	return ""
 }
 
 // members: the workspace's folders with a package.json, sorted - not in

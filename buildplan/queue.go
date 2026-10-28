@@ -350,8 +350,8 @@ func (r reader) jsQueue(p *Plan) *Queue {
 		return nil
 	}
 	var notes []string
-	if p.RSCKit {
-		// ./app is the server: a command is all it runs
+	if p.rscKitApp {
+		// ./app is the server, whoever builds it: a command is all it runs
 		q.Drain, q.Retry = r.rscKitCommand(queueDrainName), r.rscKitCommand(queueRetryName)
 		if q.Worker = r.rscKitCommand(queueWorkName); q.Worker == "" {
 			q.Worker = r.rscKitCommand(rscKitWorkName)

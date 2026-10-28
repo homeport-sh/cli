@@ -1,6 +1,7 @@
 package buildplan_test
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -136,5 +137,43 @@ func TestQueueCommandFilesAreFetched(t *testing.T) {
 		if !slices.Contains(buildplan.Files(), f) {
 			t.Errorf("%s isn't in Files", f)
 		}
+	}
+}
+
+// What runs the build has nothing to do with which queue library the app
+// uses: a build command, output or kind the person sets (or homeport.yaml's
+// build) leaves its queue and its release command detected. An rsc-kit
+// app's binary is still its own, so its commands are what it runs.
+func TestAQueueIsDetectedWhateverBuildsIt(t *testing.T) {
+	kit := rscKitBoss("src/commands/queue:drain.ts", command, "src/commands/migrate.ts", command)
+	yaml := maps.Clone(kit)
+	yaml["homeport.yaml"] = "build:\n  command: bun run compile\n  artifact: dist/app\n"
+	for name, c := range map[string]struct {
+		files map[string]string
+		s     buildplan.Settings
+	}{
+		"a build command":       {kit, buildplan.Settings{Command: "SKIP_ENV_VALIDATION=1 bun run build"}},
+		"kind binary":           {kit, buildplan.Settings{Kind: buildplan.Binary}},
+		"an output":             {kit, buildplan.Settings{Command: "bun run compile", Output: "dist/app"}},
+		"homeport.yaml's build": {yaml, buildplan.Settings{}},
+		"an install, as before": {kit, buildplan.Settings{Install: "bun install"}},
+	} {
+		p := detect(t, c.files, c.s)
+		if p.Queue == nil || p.Queue.Framework != "pg-boss" || p.Queue.Drain != "queue:drain" || p.Queue.Timeout != "10m" {
+			t.Errorf("%s: queue %+v", name, p.Queue)
+		}
+		if p.ReleaseDetected != "migrate" {
+			t.Errorf("%s: release %q (%s)", name, p.ReleaseDetected, p.ReleaseReason)
+		}
+	}
+
+	// a bundle's build command is still a bundle's: its scripts run as before
+	p := detect(t, pgBoss(`,"queue:drain":"bun scripts/drain.ts"`), buildplan.Settings{Command: "bun run build:prod"})
+	if p.Queue == nil || p.Queue.Drain != "scripts/drain.ts" {
+		t.Errorf("a bundle's build command: %+v", p.Queue)
+	}
+	// a site makes nothing that runs: no queue
+	if p := detect(t, kit, buildplan.Settings{Kind: buildplan.Static}); p.Queue != nil {
+		t.Errorf("kind static: %+v", p.Queue)
 	}
 }
