@@ -1,6 +1,6 @@
 {
   "name": "@homeport-sh/queue",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "pg-boss on homeport.sh, drained on demand: drain(), retryFailed() and kick().",
   "homepage": "https://homeport.sh",
   "repository": {

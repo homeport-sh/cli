@@ -38,6 +38,11 @@ jobs:
         run: bun test
         working-directory: npm/queue
 
+      # its types: what a handler is given follows the boss (types.check.ts)
+      - name: "@homeport-sh/queue types"
+        run: bunx -p typescript@5.9.3 tsc --noEmit --strict --module nodenext --moduleResolution nodenext types.check.ts
+        working-directory: npm/queue
+
       # the release builds what a tag would, so a broken config fails here,
       # not at the tag
       - name: the release builds (GoReleaser snapshot)
