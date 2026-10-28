@@ -142,6 +142,10 @@ type Plan struct {
 	Build     string `json:"build,omitempty"`   // the app's own build: Command less homeport's bundling; empty when it has none
 	Artifact  string `json:"artifact"`          // the binary, or the site's or bundle's folder, relative to Root
 	Root      string `json:"root,omitempty"`    // the app's folder in the repository; "" is its root
+	// SuggestedRoot: at a workspace's root whose build was said, the member
+	// that's the app (workspace.go): the root directory to set, for
+	// detection to read the app's folder; "" when there's none to suggest
+	SuggestedRoot string `json:"suggested_root,omitempty"`
 	// StaticFallback: Artifact is a guess at a binary; if the build makes
 	// none, a site folder (build/, dist/ or out/ with an index.html) is
 	// taken instead
@@ -218,6 +222,10 @@ type Plan struct {
 	// laravelViews: the bundle has the release runner that compiles
 	// Laravel's views (laravel.go)
 	laravelViews bool
+	// rscKitApp: an rsc-kit app, whatever builds it (RSCKit is whether
+	// homeport's build does): its binary runs src/commands/<name> as
+	// ./app <name>, which its queue and release command are
+	rscKitApp bool
 }
 
 // Process is one of the app's processes beside the web. StopGrace is how
@@ -429,6 +437,12 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 			member, r.root, r.script = a, a.dir, a.script
 		}
 	}
+	// a workspace's root, with how it builds said: planned as said, but the
+	// app is a member, whose folder detection doesn't read
+	suggest := ""
+	if member == nil && r.root == "." {
+		suggest = r.saidMember(s.Output)
+	}
 	var cfg fileConfig
 	if b, err := r.read(ConfigFile); err == nil {
 		if err := yaml.Unmarshal(b, &cfg); err != nil {
@@ -459,6 +473,11 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	}
 	if member != nil {
 		p.Warnings = append(p.Warnings, member.why+": set the root directory to build another")
+	}
+	if suggest != "" {
+		p.SuggestedRoot = suggest
+		p.Warnings = append(p.Warnings, "the repository's root is a workspace, and its app is "+suggest+": set the root directory to "+suggest+
+			", with the build command and output relative to it, for detection to read the app's folder (its queue, its release command)")
 	}
 	if cfg.Run != "" {
 		p.Run = cfg.Run
@@ -593,7 +612,7 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	switch {
 	case php && r.requires("laravel/framework"):
 		p.Queue = r.laravelQueue(p.laravelViews && s.Command == "")
-	case p.RSCKit || (p.Kind == Bundle && (p.Toolchain == "node" || p.Toolchain == "bun")):
+	case p.rscKitApp || (p.Kind == Bundle && (p.Toolchain == "node" || p.Toolchain == "bun")):
 		p.Queue = r.jsQueue(&p)
 	}
 	if cfg.Queue != nil {
@@ -752,7 +771,7 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 // export (RSCKit), unless homeport.yaml said what it makes. Its default
 // binary, else a site in dist/, is what an older builder falls back to.
 func (r reader) rscKit(p *Plan, cfg fileConfig) {
-	p.Framework = "rsc-kit"
+	p.Framework, p.rscKitApp = "rsc-kit", true
 	if cfg.Static != "" || cfg.Build.Command != "" || cfg.Build.Artifact != "" {
 		return
 	}

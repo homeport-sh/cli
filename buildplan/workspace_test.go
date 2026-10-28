@@ -358,3 +358,41 @@ func TestAWorkspacesRootsManagedVarsAreItsApps(t *testing.T) {
 		t.Errorf("%q", names)
 	}
 }
+
+// A workspace's root with how it builds said - cloudtrain's settings, cd'ing
+// into its member - is planned as it was, but the app is still the member:
+// detection (its queue, its release command) reads the app's folder, so the
+// plan suggests the member as the root directory. The member is the one the
+// output is in, else the one the root's build script builds.
+func TestAWorkspacesRootThatsSaidSuggestsItsApp(t *testing.T) {
+	files := map[string]string{
+		"package.json": `{"name":"cloudtrain","workspaces":["apps/*","packages/*"],"scripts":{"build":"bun --filter web-rsc-kit compile"}}`,
+		"bun.lock":     bunLock, "apps/web-rsc-kit/package.json": rscKitApp("web-rsc-kit"),
+		"packages/logger/package.json": `{"name":"@repo/logger","dependencies":{"pino":"9"}}`,
+	}
+	for name, s := range map[string]buildplan.Settings{
+		"its output": {Install: "bun install --frozen-lockfile", Command: "cd apps/web-rsc-kit && SKIP_ENV_VALIDATION=1 bun run compile",
+			Output: "apps/web-rsc-kit/dist/app", Kind: buildplan.Binary},
+		"the root's build script": {Command: "bun run build", Kind: buildplan.Binary},
+	} {
+		p := detect(t, files, s)
+		if p.Root != "" || p.SuggestedRoot != "apps/web-rsc-kit" {
+			t.Errorf("%s: root %q, suggested %q", name, p.Root, p.SuggestedRoot)
+		}
+		if !slices.ContainsFunc(p.Warnings, func(w string) bool {
+			return strings.Contains(w, "apps/web-rsc-kit") && strings.Contains(w, "root directory")
+		}) {
+			t.Errorf("%s: no warning suggests the member: %q", name, p.Warnings)
+		}
+	}
+
+	// an app at the root, or the member set as the root: nothing to suggest
+	app := map[string]string{"package.json": `{"workspaces":["apps/*"],"scripts":{"build":"next build","start":"next start"},"dependencies":{"next":"16"}}`,
+		"bun.lock": bunLock, "apps/web/package.json": `{"name":"web","scripts":{"build":"next build","start":"next start"},"dependencies":{"next":"16"}}`}
+	if p := detect(t, app, buildplan.Settings{Command: "bun run build"}); p.SuggestedRoot != "" {
+		t.Errorf("an app at the root: %q", p.SuggestedRoot)
+	}
+	if p := detect(t, files, buildplan.Settings{Root: "apps/web-rsc-kit", Command: "bun run compile"}); p.SuggestedRoot != "" {
+		t.Errorf("the member as the root: %q", p.SuggestedRoot)
+	}
+}

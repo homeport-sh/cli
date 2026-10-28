@@ -52,7 +52,7 @@ func (r reader) detectRelease(p *Plan) (release, why, warning string) {
 		return "php-cli artisan migrate --force", "a Laravel app: its migrations (php artisan migrate --force)", ""
 	case p.Toolchain == "python" && p.Kind == Bundle:
 		return r.pyRelease(p)
-	case p.RSCKit:
+	case p.rscKitApp:
 		for _, f := range rscKitMigrate {
 			if r.exists(f) {
 				return "migrate", "rsc-kit runs " + f + " as ./app migrate", ""
