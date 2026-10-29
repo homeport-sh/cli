@@ -34,12 +34,19 @@ var reservedExact = map[string]bool{
 // homeport's own HOMEPORT_*/SANDBOX_* which steer the engine.
 var reservedPrefix = []string{"LD_", "BASH_FUNC_", "HOMEPORT_", "SANDBOX_"}
 
+// appFacing are HOMEPORT_* names homeport sets on an app for the app to read,
+// steering nothing in the engine: the queue's kick URL (design/queues.md).
+var appFacing = map[string]bool{"HOMEPORT_QUEUE_KICK_URL": true}
+
 // Reserved reports whether name is one homeportd must refuse however well
 // formed it is. The same denylist is enforced in homeportd itself; this is the
 // server-side guard, so a reserved name never reaches a host.
 func Reserved(n string) bool {
 	if reservedExact[n] {
 		return true
+	}
+	if appFacing[n] {
+		return false
 	}
 	for _, p := range reservedPrefix {
 		if strings.HasPrefix(n, p) {

@@ -27,8 +27,11 @@ func TestReservedNamesAreRefused(t *testing.T) {
 		"BASH_ENV": true, "ENV": true, "SHELLOPTS": true, "PS4": true, "IFS": true,
 		"GCONV_PATH": true, "LD_PRELOAD": true, "LD_LIBRARY_PATH": true,
 		"BASH_FUNC_x": true, "HOMEPORT_ROOT": true, "SANDBOX_CGROUP": true,
+		"HOMEPORT_QUEUE_KICK_URLX": true,
 		// legitimate, must stay allowed
 		"PATH": false, "DATABASE_URL": false, "NODE_ENV": false, "LDAP_URL": false, "ENVIRONMENT": false,
+		// homeport's own, set on the app for it to read: it steers nothing
+		"HOMEPORT_QUEUE_KICK_URL": false,
 	} {
 		if got := envfile.Reserved(name); got != reserved {
 			t.Errorf("Reserved(%q) = %v, want %v", name, got, reserved)
