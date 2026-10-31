@@ -443,7 +443,8 @@ func (f *fakeAPI) serveQueue(w http.ResponseWriter, r *http.Request) {
 func (f *fakeAPI) serveDomains(w http.ResponseWriter, r *http.Request) {
 	app, rest, _ := strings.Cut(strings.TrimPrefix(r.URL.EscapedPath(), "/v1/cli/teams/"+team1+"/apps/"), "/domains")
 	f.domainCalls = append(f.domainCalls, r.Method+" "+app+" "+rest+r.URL.Query().Get("after"))
-	name, _ := url.PathUnescape(strings.TrimPrefix(rest, "/"))
+	name, connect := strings.CutSuffix(rest, "/connect")
+	name, _ = url.PathUnescape(strings.TrimPrefix(name, "/"))
 	i := slices.IndexFunc(f.domains, func(d cloud.Domain) bool { return d.Domain == name })
 	switch {
 	case r.Method == "GET" && rest == "":
@@ -480,6 +481,10 @@ func (f *fakeAPI) serveDomains(w http.ResponseWriter, r *http.Request) {
 		f.write(w, 201, d)
 	case i < 0:
 		f.write(w, 404, map[string]string{"error": "no such domain"})
+	case connect && r.Method == "POST" && (f.domains[i].Connect == nil || !f.domains[i].Connect.Available):
+		f.write(w, 409, map[string]string{"error": "its DNS provider can't set its records itself"})
+	case connect && r.Method == "POST":
+		f.write(w, 200, map[string]string{"url": "https://dc.example/v2/domainTemplates/providers/homeport.sh?domain=" + name})
 	case r.Method == "GET":
 		f.write(w, 200, f.domains[i])
 	case r.Method == "DELETE":
