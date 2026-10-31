@@ -584,11 +584,25 @@ type Domain struct {
 	CheckedAt string      `json:"checked_at,omitempty"`
 	// DropsAt: a pending one is dropped then, unless it's proved
 	DropsAt string `json:"drops_at,omitempty"`
-	// Certificate: a wildcard's tenants are served its one certificate
-	// ("wildcard") or each their own ("per-name"; CertificateWhy says why);
-	// "" for anything else
+	// Certificate: a live wildcard's tenants are served its one certificate
+	// ("wildcard"), or the delegation that renews it was lost ("lapsing":
+	// it serves on until it expires; CertificateWhy says what's wrong); ""
+	// for anything else
 	Certificate    string `json:"certificate,omitempty"`
 	CertificateWhy string `json:"certificate_why,omitempty"`
+	// Unrouted: why no visitor reaches a live domain a TXT record proved -
+	// its DNS doesn't point at homeport ("" reached)
+	Unrouted string `json:"unrouted,omitempty"`
+	// Connect: its DNS provider, read for one domain alone, and whether it
+	// can set the records itself (ConnectDomain)
+	Connect *DomainConnect `json:"connect,omitempty"`
+}
+
+// DomainConnect is a domain's DNS provider as Domain Connect discovery
+// found it ("" none), and whether it has homeport's template.
+type DomainConnect struct {
+	Provider  string `json:"provider,omitempty"`
+	Available bool   `json:"available"`
 }
 
 // DNSRecord is a record to set: Name relative to the root domain, as DNS
@@ -636,6 +650,18 @@ func (c *Client) Domain(ctx context.Context, team, app, domain string) (*Domain,
 	var out Domain
 	err := c.call(ctx, "GET", appPath(team, app)+"/domains/"+url.PathEscape(domain), nil, &out)
 	return &out, err
+}
+
+// ConnectDomain is the link that sets one of an app's platform domains'
+// records at its DNS provider (Domain Connect): a person follows it, signs
+// in there, and confirms. Only a person's sign-in gets one, not an app's
+// domains token.
+func (c *Client) ConnectDomain(ctx context.Context, team, app, domain string) (string, error) {
+	var out struct {
+		URL string `json:"url"`
+	}
+	err := c.call(ctx, "POST", appPath(team, app)+"/domains/"+url.PathEscape(domain)+"/connect", nil, &out)
+	return out.URL, err
 }
 
 // RemoveDomain removes one of an app's platform domains.

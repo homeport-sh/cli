@@ -15,11 +15,13 @@ const domainsUsage = `usage: homeport domains ls
        homeport domains add <domain>
        homeport domains get <domain>
        homeport domains remove <domain> [--yes]
+       homeport domains connect <domain> [--no-browser]
   each [--env <environment>] [--team <slug> --app <name>]`
 
 // domains is `homeport domains`: an app's platform domains - its tenants'
 // own, on the Domains API (design/platforms.md in homeport cloud) -
-// listed, added with the DNS records to set, shown, and removed.
+// listed, added with the DNS records to set, shown, removed, and connected
+// (its records set at its DNS provider in one sign-in there).
 func (a *app) domains(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return usageErr("%s", domainsUsage)
@@ -33,6 +35,8 @@ func (a *app) domains(ctx context.Context, args []string) error {
 		return a.domainsGet(ctx, args[1:])
 	case "remove":
 		return a.domainsRemove(ctx, args[1:])
+	case "connect":
+		return a.domainsConnect(ctx, args[1:])
 	}
 	return usageErr("%s", domainsUsage)
 }
@@ -181,6 +185,37 @@ func (a *app) domainsRemove(ctx context.Context, args []string) error {
 	return nil
 }
 
+// domainsConnect is `homeport domains connect <domain>`: its DNS provider's
+// page that sets its records, opened in the browser (or said, without a
+// terminal or with --no-browser). The person signs in there and confirms.
+func (a *app) domainsConnect(ctx context.Context, args []string) error {
+	fs, f := a.envFlagSet("domains connect")
+	noBrowser := fs.Bool("no-browser", false, "say the link instead of opening it")
+	pos, err := parseMixed(fs, args)
+	if err != nil {
+		return err
+	}
+	name, err := domainArg(pos)
+	if err != nil {
+		return err
+	}
+	c, t, _, err := a.envTarget(ctx, f)
+	if err != nil {
+		return err
+	}
+	link, err := c.ConnectDomain(ctx, t.link.Team, t.link.App, name)
+	if err != nil {
+		return err
+	}
+	if a.tty && !*noBrowser && a.open(link) == nil {
+		fmt.Fprintf(a.out, "Opened %s - sign in at its DNS provider and confirm the records for %s.\n", link, name)
+	} else {
+		fmt.Fprintf(a.out, "Open %s in a browser, sign in at its DNS provider, and confirm the records for %s.\n", link, name)
+	}
+	fmt.Fprintf(a.out, "Then `homeport domains get %s` says when it's live.\n", name)
+	return nil
+}
+
 // sayDomain is a domain's status, why it isn't live, and the records to
 // set at its DNS provider.
 func sayDomain(out io.Writer, d *cloud.Domain) {
@@ -189,18 +224,21 @@ func sayDomain(out io.Writer, d *cloud.Domain) {
 		fmt.Fprintf(out, " (%s)", d.Why)
 	}
 	fmt.Fprintln(out)
+	if d.Unrouted != "" {
+		fmt.Fprintf(out, "Not reachable yet: %s.\n", d.Unrouted)
+	}
 	if d.Wildcard != "" {
 		fmt.Fprintf(out, "Under the app's wildcard %s: no DNS records to set.\n", d.Wildcard)
 	}
 	switch d.Certificate {
 	case "wildcard":
 		fmt.Fprintln(out, "Every name under it is served one wildcard certificate.")
-	case "per-name":
-		fmt.Fprint(out, "Each name under it gets its own certificate on its first visit")
+	case "lapsing":
+		fmt.Fprint(out, "Its wildcard certificate is lapsing: the certificate it has serves on until it expires, and isn't renewed")
 		if d.CertificateWhy != "" {
 			fmt.Fprintf(out, " (%s)", d.CertificateWhy)
 		}
-		fmt.Fprintln(out, ": its _acme-challenge record below gives them one, at once.")
+		fmt.Fprintln(out, ". Its _acme-challenge record below renews it.")
 	}
 	if len(d.Records) > 0 {
 		fmt.Fprintln(out, "Set these at its DNS provider:")
@@ -210,6 +248,9 @@ func sayDomain(out io.Writer, d *cloud.Domain) {
 			fmt.Fprintf(tw, "  %s\t%s\t%s\n", r.Type, r.Name, r.Value)
 		}
 		tw.Flush()
+	}
+	if c := d.Connect; c != nil && c.Available && (d.Status != "live" || d.Unrouted != "") {
+		fmt.Fprintf(out, "Its DNS is at %s, which can set these itself: `homeport domains connect %s`.\n", c.Provider, d.Domain)
 	}
 	if d.Status == "pending" && d.DropsAt != "" {
 		fmt.Fprintf(out, "It's dropped on %s unless its records are set by then.\n", day(d.DropsAt))

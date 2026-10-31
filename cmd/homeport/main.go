@@ -66,6 +66,8 @@ func (a *app) usage() {
                       one's status and DNS records
   homeport domains remove <domain>
                       removes one: it stops being served; asks first [--yes]
+  homeport domains connect <domain>
+                      opens its DNS provider to set its records in one sign-in [--no-browser]
                       each [--env <name>] [--team <slug> --app <name>]
   homeport queue status
                       how an environment's background jobs run, what the

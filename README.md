@@ -33,6 +33,7 @@ homeport deploy     # upload the working tree, build it, follow it live
 | `homeport domains add <domain>` | adds one, and says the DNS records to set at its provider (the same one again is the one there) |
 | `homeport domains get <domain>` | one's status, why it isn't live, and its DNS records |
 | `homeport domains remove <domain>` | removes one: it's no longer served (asks first; `--yes`) |
+| `homeport domains connect <domain>` | opens its DNS provider's page that sets its records (Domain Connect: Cloudflare and others); you sign in there and confirm. `domains get` says when its provider can. A person's sign-in only, not an app's domains token; `--no-browser` says the link |
 | `homeport queue status` | how an environment's background jobs run (on demand, always on), what the last drain said is waiting and when the next delayed job is due, and its recent drains |
 | `homeport queue drain` | runs the app's drain here, with its `.env`, against your local database; `--remote` starts one on homeport now |
 | `homeport queue retry-failed` | runs the queue's retry here; `--remote` on homeport |
