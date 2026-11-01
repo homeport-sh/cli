@@ -148,11 +148,11 @@ func (a *app) whoami(ctx context.Context, args []string) error {
 	return nil
 }
 
-// token makes a token for CI: `homeport token create --name <where>`, for
-// one environment - the flags', else this folder's link's, else asked for
-// as deploy asks. It acts there alone. It's printed once, to stdout alone,
-// for a CI secret; it's listed in Account → CLI sessions by its name and
-// revoked there.
+// token makes a team API token for CI: `homeport token create --name
+// <where>`, limited to one environment - the flags', else this folder's
+// link's, else asked for as deploy asks - with every app permission there.
+// It's printed once, to stdout alone, for a CI secret; it's listed on the
+// team's API tokens page by its name and revoked there.
 func (a *app) token(ctx context.Context, args []string) error {
 	if len(args) == 0 || args[0] != "create" {
 		return usageErr("usage: homeport token create --name <where it's used> [--team <team>] [--app <app>] [--env <environment>]")

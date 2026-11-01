@@ -374,8 +374,8 @@ type NewToken struct {
 	}
 }
 
-// CreateToken makes a named token for CI, as the signed-in person, for one
-// environment (app, by id) of team (by id): it acts there alone.
+// CreateToken makes a named team API token for CI, limited to one
+// environment (app, by id) of team (by id), with every app permission there.
 func (c *Client) CreateToken(ctx context.Context, name, team, app string) (*NewToken, error) {
 	var out NewToken
 	err := c.call(ctx, "POST", "/v1/cli/tokens", map[string]string{"name": name, "team": team, "app": app}, &out)
@@ -654,8 +654,8 @@ func (c *Client) Domain(ctx context.Context, team, app, domain string) (*Domain,
 
 // ConnectDomain is the link that sets one of an app's platform domains'
 // records at its DNS provider (Domain Connect): a person follows it, signs
-// in there, and confirms. Only a person's sign-in gets one, not an app's
-// domains token.
+// in there, and confirms. Only a person's sign-in gets one, not an API
+// token.
 func (c *Client) ConnectDomain(ctx context.Context, team, app, domain string) (string, error) {
 	var out struct {
 		URL string `json:"url"`

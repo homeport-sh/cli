@@ -79,8 +79,8 @@ func (a *app) usage() {
                       runs its retry here; --remote on homeport
                       each [--env <name>] [--team <slug> --app <name>]
   homeport token create --name <where>
-                      a token for CI (HOMEPORT_TOKEN), printed once: for
-                      one environment, and it acts there alone
+                      a team API token for CI (HOMEPORT_TOKEN), printed
+                      once: for one environment, every app permission there
                       [--team <slug>] [--app <name>] [--env <name>]
   homeport mcp        an MCP server on stdio, for your editor or agent:
                       claude mcp add homeport -- homeport mcp
