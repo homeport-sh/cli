@@ -17,7 +17,7 @@ homeport deploy     # upload the working tree, build it, follow it live
 | `homeport whoami` | who you're signed in as, and your teams |
 | `homeport link` | link this folder to an app's environment (`--team`, `--app`, `--env`); an `--app` the team hasn't is created, asked first (`--yes`) |
 | `homeport deploy` | upload the working tree, build and release it, follow it until it's live; in a folder nothing links, its app is created first, asked first (`--yes`) |
-| `homeport token create --name <where>` | a token for CI (`HOMEPORT_TOKEN`), printed once: for one environment - this folder's link's, or `--team`, `--app`, `--env` - and it acts there alone |
+| `homeport token create --name <where>` | a team API token for CI (`HOMEPORT_TOKEN`), printed once: limited to one environment - this folder's link's, or `--team`, `--app`, `--env` - with every app permission there. Team owners only |
 | `homeport rollback [<deploy\|commit>]` | lists the earlier releases you can roll back to; with one, ships its build again without building (asks first; `--yes`, `--run-release`) |
 | `homeport env set NAME=value…` | sets an environment's variables; the app restarts to get them (`--env`, `--team`, `--app`) |
 | `homeport env set [NAME] --from-file <path>` | a file variable: a certificate, key or any multi-line or binary value, read at `/run/secrets/NAME` |
@@ -33,7 +33,7 @@ homeport deploy     # upload the working tree, build it, follow it live
 | `homeport domains add <domain>` | adds one, and says the DNS records to set at its provider (the same one again is the one there) |
 | `homeport domains get <domain>` | one's status, why it isn't live, and its DNS records |
 | `homeport domains remove <domain>` | removes one: it's no longer served (asks first; `--yes`) |
-| `homeport domains connect <domain>` | opens its DNS provider's page that sets its records (Domain Connect: Cloudflare and others); you sign in there and confirm. `domains get` says when its provider can. A person's sign-in only, not an app's domains token; `--no-browser` says the link |
+| `homeport domains connect <domain>` | opens its DNS provider's page that sets its records (Domain Connect: Cloudflare and others); you sign in there and confirm. `domains get` says when its provider can. A person's sign-in only, not an API token; `--no-browser` says the link |
 | `homeport queue status` | how an environment's background jobs run (on demand, always on), what the last drain said is waiting and when the next delayed job is due, and its recent drains |
 | `homeport queue drain` | runs the app's drain here, with its `.env`, against your local database; `--remote` starts one on homeport now |
 | `homeport queue retry-failed` | runs the queue's retry here; `--remote` on homeport |
@@ -56,13 +56,14 @@ the token it receives is never printed.
   unused, and a year after it began whatever.
 - `homeport logout` revokes it on homeport.sh and forgets it here.
 - `homeport whoami` says who you are signed in as, and in which teams.
-- In CI, set `HOMEPORT_TOKEN` to a token made for it: `homeport token create
-  --name github-actions` prints one, once (or Account → CLI sessions →
-  Create a token for CI). It's made for one environment - this folder's
-  link's, the one `--team`/`--app`/`--env` name, or the one you pick when
-  asked - and acts as you there alone: a token leaked from one repository
-  can't touch your other apps or teams. It's listed and revoked like any
-  session.
+- In CI, set `HOMEPORT_TOKEN` to a team API token: `homeport token create
+  --name github-actions` prints one, once. It's limited to one environment -
+  this folder's link's, the one `--team`/`--app`/`--env` name, or the one
+  you pick when asked - with every app permission there: a token leaked from
+  one repository can't touch your other apps. It's the team's, not yours: it
+  keeps working whoever leaves, until it's revoked. Only a team owner makes
+  or revokes one. For other permissions, every app, or an expiry, make it on
+  the team's **API tokens** page, where each is listed and revoked.
 - A sign-in is sent only to the API that gave it. Pointing `HOMEPORT_API`
   elsewhere counts as signed out there, and the API must be https (or
   http on this computer).
