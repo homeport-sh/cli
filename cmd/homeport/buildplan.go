@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/homeport-sh/cli/buildplan"
 )
@@ -19,12 +20,15 @@ func cmdBuildPlan(args []string) error {
 	dir, settings := ".", ""
 	for len(args) > 0 {
 		switch {
+		case args[0] == "-h" || args[0] == "--help":
+			fmt.Println(buildPlanUsage)
+			return nil
 		case args[0] == "--settings" && len(args) > 1:
 			settings, args = args[1], args[2:]
 		case len(args) == 1:
 			dir, args = args[0], nil
 		default:
-			return errors.New("usage: homeport build-plan [--settings <file.json>] [dir]")
+			return errors.New(buildPlanUsage)
 		}
 	}
 	var s buildplan.Settings
@@ -40,13 +44,70 @@ func cmdBuildPlan(args []string) error {
 			return fmt.Errorf("build settings: %w", err)
 		}
 	}
-	p, err := planBuild(dir, s)
+	p, err := planFolder(dir, s)
 	if err != nil {
 		return err
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(p)
+}
+
+const buildPlanUsage = "usage: homeport build-plan [--settings <file.json>] [dir]"
+
+// planFolder plans the app in dir, a folder. A workspace member's folder
+// in a checkout (a package.json, its lockfile the workspace's) plans as
+// its hosted build does: from the checkout's top, with the root directory
+// set to it.
+func planFolder(dir string, s buildplan.Settings) (buildplan.Plan, error) {
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		return buildplan.Plan{}, fmt.Errorf("%s isn't a folder", dir)
+	}
+	if s.Root == "" {
+		if top, rel := checkoutMember(dir); top != "" {
+			s.Root = rel
+			p, err := planBuild(top, s)
+			if err == nil {
+				p.Warnings = append(p.Warnings, "planned from the repository's root with the root directory "+rel+", as its hosted build is: its lockfile is the workspace's - set "+rel+" as the app's root directory")
+			}
+			return p, err
+		}
+	}
+	return planBuild(dir, s)
+}
+
+// checkoutMember: dir has a package.json and no lockfile of its own, in a
+// git checkout - the checkout's top (the nearest folder above with .git)
+// and dir from it. Only files are read, nothing runs; a builder's checkout
+// has no .git (an upload never carries it), so nothing above it is.
+func checkoutMember(dir string) (top, rel string) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", ""
+	}
+	if st, err := os.Stat(filepath.Join(abs, "package.json")); err != nil || !st.Mode().IsRegular() {
+		return "", ""
+	}
+	for _, f := range buildplan.WorkspaceFiles() {
+		if f == "package.json" || f == "pnpm-workspace.yaml" {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(abs, f)); err == nil {
+			return "", ""
+		}
+	}
+	for d := filepath.Dir(abs); ; d = filepath.Dir(d) {
+		if _, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
+			r, err := filepath.Rel(d, abs)
+			if err != nil {
+				return "", ""
+			}
+			return d, filepath.ToSlash(r)
+		}
+		if filepath.Dir(d) == d {
+			return "", ""
+		}
+	}
 }
 
 // planBuild reads a repository and runs nothing from it: its files are

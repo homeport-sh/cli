@@ -215,3 +215,59 @@ func TestALaravelReleaseThroughBinIsStillRefused(t *testing.T) {
 		t.Fatalf("release: %q", p.Release)
 	}
 }
+
+// A workspace member's folder, inside its checkout, plans as its hosted
+// build does with the root directory set to it: the lockfile is the
+// workspace's, at the checkout's top - not "package.json without a lockfile".
+func TestBuildPlanInAWorkspaceMemberPlansItAsTheRootDirectory(t *testing.T) {
+	dir := repo(t, map[string]string{
+		".git/HEAD":                 "ref: refs/heads/main\n",
+		"package.json":              `{"workspaces":["apps/*","packages/*"]}`,
+		"bun.lock":                  "{}",
+		"apps/web/package.json":     `{"name":"web","scripts":{"build":"bun build --compile src/index.ts --outfile server"}}`,
+		"packages/lib/package.json": `{"name":"lib"}`,
+	})
+	p, err := planFolder(filepath.Join(dir, "apps", "web"), buildplan.Settings{})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	if p.Root != "apps/web" || p.Install != "(cd ../.. && bun install --frozen-lockfile --filter ./apps/web)" || p.Artifact != "server" {
+		t.Fatalf("%+v", p)
+	}
+	// the same as the checkout's top with the root directory set
+	want, err := planBuild(dir, buildplan.Settings{Root: "apps/web"})
+	if err != nil || want.Install != p.Install || want.Command != p.Command {
+		t.Fatalf("root directory: %+v, %v", want, err)
+	}
+	// a folder whose root directory is already set plans as told
+	if p, err := planFolder(filepath.Join(dir, "apps", "web"), buildplan.Settings{Root: "apps/web"}); err == nil {
+		t.Fatalf("a root directory inside the member: %+v", p)
+	}
+}
+
+// Outside a checkout (a builder's, which never has .git) nothing above the
+// folder is read: a member alone still needs its lockfile.
+func TestBuildPlanOutsideACheckoutReadsNothingAbove(t *testing.T) {
+	dir := repo(t, map[string]string{
+		"package.json":          `{"workspaces":["apps/*"]}`,
+		"bun.lock":              "{}",
+		"apps/web/package.json": `{"name":"web","scripts":{"build":"bun build --compile src/index.ts --outfile server"}}`,
+	})
+	if _, err := planFolder(filepath.Join(dir, "apps", "web"), buildplan.Settings{}); err == nil || !strings.Contains(err.Error(), "without a lockfile") {
+		t.Fatalf("err: %v", err)
+	}
+}
+
+// A folder that isn't one says so, rather than that it can't tell how the
+// app builds; and --help is the usage, not a folder.
+func TestBuildPlanOfNoFolderSaysSo(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "nope")
+	if _, err := planFolder(missing, buildplan.Settings{}); err == nil || !strings.Contains(err.Error(), "isn't a folder") {
+		t.Fatalf("missing: %v", err)
+	}
+	for _, h := range []string{"-h", "--help"} {
+		if err := cmdBuildPlan([]string{h}); err != nil {
+			t.Fatalf("%s: %v", h, err)
+		}
+	}
+}
