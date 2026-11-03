@@ -29,7 +29,7 @@ homeport deploy     # upload the working tree, build it, follow it live
 | `homeport env get NAME [--resolved]` | a variable's value as written (`${{APP_URL}}/app`), or with `--resolved` as the app gets it (`https://example.com/app`); never a secret's |
 | `homeport env rebuild` | builds the live commit again with the variables as they are now: a change the build sees needs one |
 | `homeport env pull [--env <name>]` | an environment's database and storage credentials into `.env.local`, never production's |
-| `homeport domains ls` | an app's platform domains (its tenants' own, which the app adds through the Domains API): each one's status and why it isn't live, how many are live, and how many the plan includes |
+| `homeport domains ls` | an app's own domains (its Domains tab's: live or pending, direct or behind Cloudflare's proxy, and where each redirects), then its platform domains (its tenants' own, which the app adds through the Domains API): each one's status and why it isn't live, how many are live, and how many the plan includes |
 | `homeport domains add <domain>` | adds one, and says the DNS records to set at its provider (the same one again is the one there) |
 | `homeport domains get <domain>` | one's status, why it isn't live, and its DNS records |
 | `homeport domains remove <domain>` | removes one: it's no longer served (asks first; `--yes`) |

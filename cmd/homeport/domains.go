@@ -20,7 +20,7 @@ const domainsUsage = `usage: homeport domains ls
 
 // domains is `homeport domains`: an app's platform domains - its tenants'
 // own, on the Domains API (design/platforms.md in homeport cloud) -
-// listed, added with the DNS records to set, shown, removed, and connected
+// listed (its own domains with them), added with the DNS records to set, shown, removed, and connected
 // (its records set at its DNS provider in one sign-in there).
 func (a *app) domains(ctx context.Context, args []string) error {
 	if len(args) == 0 {
@@ -55,14 +55,19 @@ func domainArg(pos []string) (string, error) {
 	return d, nil
 }
 
-// domainsLs is `homeport domains ls`: every platform domain, page by page,
-// with its status and why it isn't live; and how many the bill counts.
+// domainsLs is `homeport domains ls`: the app's own domains (its Domains
+// tab's), then every platform domain, page by page, with its status and
+// why it isn't live; and how many the bill counts.
 func (a *app) domainsLs(ctx context.Context, args []string) error {
 	fs, f := a.envFlagSet("domains ls")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
 	c, t, _, err := a.envTarget(ctx, f)
+	if err != nil {
+		return err
+	}
+	own, err := c.CustomDomains(ctx, t.link.Team, t.link.App)
 	if err != nil {
 		return err
 	}
@@ -77,15 +82,52 @@ func (a *app) domainsLs(ctx context.Context, args []string) error {
 			break
 		}
 	}
-	if len(all) == 0 {
-		fmt.Fprintf(a.out, "%s has no platform domains: `homeport domains add <domain>`, or the Domains API from the app.\n", envWhere(t))
+	if len(own) == 0 && len(all) == 0 {
+		fmt.Fprintf(a.out, "%s has no domains: add its own on its Domains tab, a tenant's with `homeport domains add <domain>` or the Domains API from the app.\n", envWhere(t))
 		return nil
 	}
+	if len(own) > 0 {
+		rows := [][]string{{"DOMAIN", "STATUS", "REACHED", "NOTE"}}
+		for _, d := range own {
+			reached, why := "", d.Why
+			if d.Status == "live" {
+				reached, why = "direct", d.Unrouted
+				if d.Proxied {
+					reached = "proxied"
+				}
+			}
+			if d.RedirectTo != "" {
+				why = "→ " + d.RedirectTo
+			}
+			rows = append(rows, []string{d.Domain, d.Status, reached, why})
+		}
+		if err := a.table(rows); err != nil {
+			return err
+		}
+	}
+	if len(all) == 0 {
+		return nil
+	}
+	if len(own) > 0 {
+		fmt.Fprintln(a.out, "\nPlatform domains (its tenants'):")
+	}
+	rows := [][]string{{"DOMAIN", "STATUS", "ADDED", "WHY"}}
+	for _, d := range all {
+		rows = append(rows, []string{d.Domain, d.Status, day(d.CreatedAt), d.Why})
+	}
+	if err := a.table(rows); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.out, "\n%d live of %d; the plan includes %d.\n", page.Live, page.Total, page.Included)
+	return nil
+}
+
+// table says rows in columns, no trailing spaces.
+func (a *app) table(rows [][]string) error {
 	var table strings.Builder
 	tw := tabwriter.NewWriter(&table, 0, 4, 2, ' ', 0)
-	fmt.Fprintf(tw, "DOMAIN\tSTATUS\tADDED\tWHY\t\n")
-	for _, d := range all {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t\n", d.Domain, d.Status, day(d.CreatedAt), d.Why)
+	for _, r := range rows {
+		fmt.Fprintf(tw, "%s\t\n", strings.Join(r, "\t"))
 	}
 	if err := tw.Flush(); err != nil {
 		return err
@@ -93,7 +135,6 @@ func (a *app) domainsLs(ctx context.Context, args []string) error {
 	for l := range strings.Lines(table.String()) {
 		fmt.Fprintln(a.out, strings.TrimRight(l, " \n"))
 	}
-	fmt.Fprintf(a.out, "\n%d live of %d; the plan includes %d.\n", page.Live, page.Total, page.Included)
 	return nil
 }
 

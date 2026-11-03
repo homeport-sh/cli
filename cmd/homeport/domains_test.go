@@ -162,3 +162,37 @@ func TestADomainConnectsAtItsDNSProvider(t *testing.T) {
 		t.Errorf("call %s", got)
 	}
 }
+
+// ls lists the app's own domains (its Domains tab's) too, before its
+// tenants': how each is reached and where it redirects.
+func TestDomainsLsListsTheAppsOwnDomains(t *testing.T) {
+	f, h := linkedHarness(t)
+	f.customDomains = []cloud.CustomDomain{
+		{Domain: "blog.example.com", Status: "live", Proxied: true},
+		{Domain: "www.blog.example.com", Status: "live", RedirectTo: "blog.example.com"},
+		{Domain: "new.example.com", Status: "pending", Why: "it points at 192.0.2.1, not 203.0.113.50"},
+	}
+	if code := h.run("domains", "ls"); code != 0 {
+		t.Fatalf("ls: %d %s", code, h.said())
+	}
+	said := h.said()
+	for _, want := range []string{
+		"blog.example.com      live     proxied",
+		"www.blog.example.com  live     direct   → blog.example.com",
+		"new.example.com       pending           it points at 192.0.2.1",
+	} {
+		if !strings.Contains(said, want) {
+			t.Errorf("ls didn't say %q: %s", want, said)
+		}
+	}
+	if strings.Contains(said, "no platform domains") {
+		t.Errorf("ls said it has no domains: %s", said)
+	}
+
+	// neither kind: what adds each
+	f.customDomains = nil
+	h.out.Reset()
+	if code := h.run("domains", "ls"); code != 0 || !strings.Contains(h.said(), "has no domains") {
+		t.Fatalf("ls of none: %d %s", code, h.said())
+	}
+}

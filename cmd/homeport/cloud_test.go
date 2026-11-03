@@ -58,37 +58,38 @@ type fakeAPI struct {
 	detail   string
 	buildGet int
 
-	tokenNames   []string                  // tokens made for CI, by name
-	tokenFor     []string                  // and the team/app each is for, by id
-	env          map[string]string         // an environment's variables, as set
-	files        map[string][]byte         // its file variables, as set
-	envApp       string                    // the environment the last set was for
-	envPosts     int                       // how many sets reached the platform
-	available    map[string]string         // who sees each variable, by name, as the platform holds it
-	availSent    map[string]string         // the availability the last set sent
-	rolesSent    map[string]fakeRoleChange // the values for one role the last set sent
-	setSent      map[string]string         // the values the last set sent
-	secret       map[string]bool           // which values are secrets, by name, as the platform holds it (unsaid: a secret)
-	secretSent   map[string]bool           // the kinds the last set sent
-	roles        map[string][]string       // the roles with a value of their own, by name
-	rolesOnly    map[string]bool           // names with no value for all
-	refs         map[string][]string       // the variables each value names, by name (a secret's too)
-	resolved     map[string]string         // each variable's value naming others, resolved, by name
-	homeport     map[string]string         // what homeport set, by name: why
-	rebuilds     int                       // env rebuilds asked for
-	builtChanged map[string]bool           // names whose change a build sees since the last rebuild
-	noLive       bool                      // nothing live to rebuild
-	dbCalls      []string
-	pulled       []string // the apps whose add-on credentials were pulled
-	pullValues   map[string]string
-	withheld     []string
-	created      []fakeCreate   // apps made (POST /v1/cli/teams/{team}/apps)
-	domains      []cloud.Domain // an app's platform domains, by name
-	domainCalls  []string       // each Domains API call: method, app and what follows /domains
-	queue        *cloud.Queue   // an app's queue (nil: it has none)
-	queueBusy    bool           // a drain is running: Drain now is refused
-	queueCalls   []string       // each Queue API call: method and what follows /queue
-	rollbacks    []struct {
+	tokenNames    []string                  // tokens made for CI, by name
+	tokenFor      []string                  // and the team/app each is for, by id
+	env           map[string]string         // an environment's variables, as set
+	files         map[string][]byte         // its file variables, as set
+	envApp        string                    // the environment the last set was for
+	envPosts      int                       // how many sets reached the platform
+	available     map[string]string         // who sees each variable, by name, as the platform holds it
+	availSent     map[string]string         // the availability the last set sent
+	rolesSent     map[string]fakeRoleChange // the values for one role the last set sent
+	setSent       map[string]string         // the values the last set sent
+	secret        map[string]bool           // which values are secrets, by name, as the platform holds it (unsaid: a secret)
+	secretSent    map[string]bool           // the kinds the last set sent
+	roles         map[string][]string       // the roles with a value of their own, by name
+	rolesOnly     map[string]bool           // names with no value for all
+	refs          map[string][]string       // the variables each value names, by name (a secret's too)
+	resolved      map[string]string         // each variable's value naming others, resolved, by name
+	homeport      map[string]string         // what homeport set, by name: why
+	rebuilds      int                       // env rebuilds asked for
+	builtChanged  map[string]bool           // names whose change a build sees since the last rebuild
+	noLive        bool                      // nothing live to rebuild
+	dbCalls       []string
+	pulled        []string // the apps whose add-on credentials were pulled
+	pullValues    map[string]string
+	withheld      []string
+	created       []fakeCreate         // apps made (POST /v1/cli/teams/{team}/apps)
+	domains       []cloud.Domain       // an app's platform domains, by name
+	customDomains []cloud.CustomDomain // an app's own domains
+	domainCalls   []string             // each Domains API call: method, app and what follows /domains
+	queue         *cloud.Queue         // an app's queue (nil: it has none)
+	queueBusy     bool                 // a drain is running: Drain now is refused
+	queueCalls    []string             // each Queue API call: method and what follows /queue
+	rollbacks     []struct {
 		Deploy     string `json:"deploy"`
 		RunRelease bool   `json:"run_release"`
 	}
@@ -391,6 +392,8 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 		f.serveQueue(w, r)
 	case strings.HasSuffix(p, "/logs"):
 		f.write(w, 200, map[string]any{"Cursor": "c2", "Lines": []map[string]any{{"Time": "2026-10-08T12:00:00Z", "Level": "error", "Message": "panic: boom", "Process": "web"}}})
+	case strings.HasSuffix(p, "/custom-domains"):
+		f.write(w, 200, map[string]any{"domains": append([]cloud.CustomDomain{}, f.customDomains...)})
 	case strings.Contains(p, "/domains"):
 		f.serveDomains(w, r)
 	case strings.Contains(p, "/database"):

@@ -637,6 +637,27 @@ func (c *Client) Domains(ctx context.Context, team, app, after string) (*Domains
 	return &out, err
 }
 
+// CustomDomain is one of an app's own domains (its Domains tab's, not its
+// tenants'): pending or live, behind Cloudflare's proxy or not, and the
+// domain it redirects to ("" none).
+type CustomDomain struct {
+	Domain     string `json:"domain"`
+	Status     string `json:"status"`
+	Proxied    bool   `json:"proxied"`
+	RedirectTo string `json:"redirect_to,omitempty"`
+	Why        string `json:"why,omitempty"`
+	Unrouted   string `json:"unrouted,omitempty"`
+}
+
+// CustomDomains is an app's own domains.
+func (c *Client) CustomDomains(ctx context.Context, team, app string) ([]CustomDomain, error) {
+	var out struct {
+		Domains []CustomDomain `json:"domains"`
+	}
+	err := c.call(ctx, "GET", appPath(team, app)+"/custom-domains", nil, &out)
+	return out.Domains, err
+}
+
 // AddDomain adds an app a platform domain; the same one again is the one
 // it has.
 func (c *Client) AddDomain(ctx context.Context, team, app, domain string) (*Domain, error) {
