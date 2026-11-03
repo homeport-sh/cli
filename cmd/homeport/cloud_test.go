@@ -86,6 +86,7 @@ type fakeAPI struct {
 	domains       []cloud.Domain       // an app's platform domains, by name
 	customDomains []cloud.CustomDomain // an app's own domains
 	domainCalls   []string             // each Domains API call: method, app and what follows /domains
+	proxyCalls    []string             // each proxy switch: method, domain and on
 	queue         *cloud.Queue         // an app's queue (nil: it has none)
 	queueBusy     bool                 // a drain is running: Drain now is refused
 	queueCalls    []string             // each Queue API call: method and what follows /queue
@@ -392,6 +393,8 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 		f.serveQueue(w, r)
 	case strings.HasSuffix(p, "/logs"):
 		f.write(w, 200, map[string]any{"Cursor": "c2", "Lines": []map[string]any{{"Time": "2026-10-08T12:00:00Z", "Level": "error", "Message": "panic: boom", "Process": "web"}}})
+	case strings.Contains(p, "/custom-domains/") && strings.HasSuffix(p, "/proxy"):
+		f.serveProxy(w, r)
 	case strings.HasSuffix(p, "/custom-domains"):
 		f.write(w, 200, map[string]any{"domains": append([]cloud.CustomDomain{}, f.customDomains...)})
 	case strings.Contains(p, "/domains"):
@@ -439,6 +442,31 @@ func (f *fakeAPI) serveQueue(w http.ResponseWriter, r *http.Request) {
 	default:
 		f.t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
 		w.WriteHeader(404)
+	}
+}
+
+// serveProxy is a custom domain's proxy switch: the link for a live one
+// not that way already, as the API refuses the rest.
+func (f *fakeAPI) serveProxy(w http.ResponseWriter, r *http.Request) {
+	_, rest, _ := strings.Cut(r.URL.EscapedPath(), "/custom-domains/")
+	name, _ := url.PathUnescape(strings.TrimSuffix(rest, "/proxy"))
+	var in struct {
+		On bool `json:"on"`
+	}
+	json.NewDecoder(r.Body).Decode(&in)
+	f.proxyCalls = append(f.proxyCalls, fmt.Sprintf("%s %s on=%v", r.Method, name, in.On))
+	i := slices.IndexFunc(f.customDomains, func(d cloud.CustomDomain) bool { return d.Domain == name })
+	switch {
+	case i < 0:
+		f.write(w, 404, map[string]string{"error": "not found"})
+	case f.customDomains[i].Status != "live":
+		f.write(w, 400, map[string]string{"error": "only a live domain's proxy can be switched", "field": "domain"})
+	case in.On == f.customDomains[i].Proxied && in.On:
+		f.write(w, 400, map[string]string{"error": "it's behind its DNS provider's proxy already", "field": "domain"})
+	case in.On == f.customDomains[i].Proxied:
+		f.write(w, 400, map[string]string{"error": "it isn't behind its DNS provider's proxy", "field": "domain"})
+	default:
+		f.write(w, 200, map[string]string{"url": "https://dc.example/v2/domainTemplates/providers/homeport.sh/services/subdomain-proxied/apply?domain=example.com&host=blog"})
 	}
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -194,5 +195,45 @@ func TestDomainsLsListsTheAppsOwnDomains(t *testing.T) {
 	h.out.Reset()
 	if code := h.run("domains", "ls"); code != 0 || !strings.Contains(h.said(), "has no domains") {
 		t.Fatalf("ls of none: %d %s", code, h.said())
+	}
+}
+
+// `domains proxy <domain> on|off` switches one of the app's own live
+// domains into its DNS provider's proxy or out of it: the provider's page
+// opened (or said), and on says first what the proxy needs. One that can't
+// be switched is the API's refusal.
+func TestADomainsProxyIsSwitched(t *testing.T) {
+	f, h := linkedHarness(t)
+	f.customDomains = []cloud.CustomDomain{
+		{Domain: "blog.example.com", Status: "live"},
+		{Domain: "new.example.com", Status: "pending"},
+	}
+	link := "https://dc.example/v2/domainTemplates/providers/homeport.sh/services/subdomain-proxied/apply?domain=example.com&host=blog"
+	if code := h.run("domains", "proxy", "blog.example.com", "on"); code != 0 || len(h.opened) != 0 ||
+		!strings.Contains(h.said(), link) || !strings.Contains(h.said(), "Full (strict)") {
+		t.Fatalf("on, without a terminal: %d %v %s", code, h.opened, h.said())
+	}
+	h.a.tty = true
+	if code := h.run("domains", "proxy", "Blog.Example.com", "on"); code != 0 || len(h.opened) != 1 || h.opened[0] != link || !strings.Contains(h.said(), "Opened") {
+		t.Fatalf("on, with one: %d %v %s", code, h.opened, h.said())
+	}
+	if code := h.run("domains", "proxy", "blog.example.com", "off", "--no-browser"); code == 0 || len(h.opened) != 1 ||
+		!strings.Contains(h.said(), "it isn't behind its DNS provider's proxy") {
+		t.Fatalf("off, direct already: %d %v %s", code, h.opened, h.said())
+	}
+	if code := h.run("domains", "proxy", "new.example.com", "on"); code == 0 || !strings.Contains(h.said(), "only a live domain's proxy can be switched") {
+		t.Fatalf("pending: %d %s", code, h.said())
+	}
+	want := []string{"POST blog.example.com on=true", "POST blog.example.com on=true", "POST blog.example.com on=false", "POST new.example.com on=true"}
+	if !slices.Equal(f.proxyCalls, want) {
+		t.Errorf("calls %v", f.proxyCalls)
+	}
+	for _, args := range [][]string{{"blog.example.com"}, {"blog.example.com", "maybe"}, {"on"}} {
+		if code := h.run(append([]string{"domains", "proxy"}, args...)...); code == 0 {
+			t.Errorf("%v: %d", args, code)
+		}
+	}
+	if len(f.proxyCalls) != len(want) {
+		t.Errorf("a bad call reached the API: %v", f.proxyCalls)
 	}
 }

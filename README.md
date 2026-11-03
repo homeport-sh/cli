@@ -34,6 +34,7 @@ homeport deploy     # upload the working tree, build it, follow it live
 | `homeport domains get <domain>` | one's status, why it isn't live, and its DNS records |
 | `homeport domains remove <domain>` | removes one: it's no longer served (asks first; `--yes`) |
 | `homeport domains connect <domain>` | opens its DNS provider's page that sets its records (Domain Connect: Cloudflare and others); you sign in there and confirm. `domains get` says when its provider can. A person's sign-in only, not an API token; `--no-browser` says the link |
+| `homeport domains proxy <domain> on\|off` | puts one of the app's own live domains behind its DNS provider's proxy, or takes it out, through the same provider page as `domains connect`. Before turning it on, set the provider's SSL/TLS encryption mode to Full (strict); with Flexible the site redirects in a loop. A person's sign-in only; `--no-browser` says the link |
 | `homeport queue status` | how an environment's background jobs run (on demand, always on), what the last drain said is waiting and when the next delayed job is due, and its recent drains |
 | `homeport queue drain` | runs the app's drain here, with its `.env`, against your local database; `--remote` starts one on homeport now |
 | `homeport queue retry-failed` | runs the queue's retry here; `--remote` on homeport |
