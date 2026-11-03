@@ -16,12 +16,14 @@ const domainsUsage = `usage: homeport domains ls
        homeport domains get <domain>
        homeport domains remove <domain> [--yes]
        homeport domains connect <domain> [--no-browser]
+       homeport domains proxy <domain> on|off [--no-browser]
   each [--env <environment>] [--team <slug> --app <name>]`
 
 // domains is `homeport domains`: an app's platform domains - its tenants'
 // own, on the Domains API (design/platforms.md in homeport cloud) -
 // listed (its own domains with them), added with the DNS records to set, shown, removed, and connected
-// (its records set at its DNS provider in one sign-in there).
+// (its records set at its DNS provider in one sign-in there); and one of
+// its own live domains switched into its DNS provider's proxy or out.
 func (a *app) domains(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return usageErr("%s", domainsUsage)
@@ -37,6 +39,8 @@ func (a *app) domains(ctx context.Context, args []string) error {
 		return a.domainsRemove(ctx, args[1:])
 	case "connect":
 		return a.domainsConnect(ctx, args[1:])
+	case "proxy":
+		return a.domainsProxy(ctx, args[1:])
 	}
 	return usageErr("%s", domainsUsage)
 }
@@ -254,6 +258,45 @@ func (a *app) domainsConnect(ctx context.Context, args []string) error {
 		fmt.Fprintf(a.out, "Open %s in a browser, sign in at its DNS provider, and confirm the records for %s.\n", link, name)
 	}
 	fmt.Fprintf(a.out, "Then `homeport domains get %s` says when it's live.\n", name)
+	return nil
+}
+
+// domainsProxy is `homeport domains proxy <domain> on|off`: one of the
+// app's own live domains put behind its DNS provider's proxy, or taken
+// out - the provider's page that sets its records again, opened (or said)
+// as `domains connect` does. On says first what the proxy needs.
+func (a *app) domainsProxy(ctx context.Context, args []string) error {
+	fs, f := a.envFlagSet("domains proxy")
+	noBrowser := fs.Bool("no-browser", false, "say the link instead of opening it")
+	pos, err := parseMixed(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 2 || (pos[1] != "on" && pos[1] != "off") {
+		return usageErr("%s", domainsUsage)
+	}
+	name, err := domainArg(pos[:1])
+	if err != nil {
+		return err
+	}
+	on := pos[1] == "on"
+	c, t, _, err := a.envTarget(ctx, f)
+	if err != nil {
+		return err
+	}
+	link, err := c.SwitchDomainProxy(ctx, t.link.Team, t.link.App, name, on)
+	if err != nil {
+		return err
+	}
+	if on {
+		fmt.Fprintln(a.out, "First, in its DNS provider's SSL/TLS settings, set the encryption mode to Full (strict): with Flexible, the site redirects in a loop.")
+	}
+	if a.tty && !*noBrowser && a.open(link) == nil {
+		fmt.Fprintf(a.out, "Opened %s - sign in at its DNS provider and confirm the records for %s.\n", link, name)
+	} else {
+		fmt.Fprintf(a.out, "Open %s in a browser, sign in at its DNS provider, and confirm the records for %s.\n", link, name)
+	}
+	fmt.Fprintln(a.out, "Then `homeport domains ls` says how it's reached.")
 	return nil
 }
 

@@ -658,6 +658,17 @@ func (c *Client) CustomDomains(ctx context.Context, team, app string) ([]CustomD
 	return out.Domains, err
 }
 
+// SwitchDomainProxy is the link that puts one of an app's own live domains
+// behind its DNS provider's proxy (on), or takes it out: a person follows
+// it, signs in there, and confirms. Only a person's sign-in gets one.
+func (c *Client) SwitchDomainProxy(ctx context.Context, team, app, domain string, on bool) (string, error) {
+	var out struct {
+		URL string `json:"url"`
+	}
+	err := c.call(ctx, "POST", appPath(team, app)+"/custom-domains/"+url.PathEscape(domain)+"/proxy", map[string]bool{"on": on}, &out)
+	return out.URL, err
+}
+
 // AddDomain adds an app a platform domain; the same one again is the one
 // it has.
 func (c *Client) AddDomain(ctx context.Context, team, app, domain string) (*Domain, error) {
