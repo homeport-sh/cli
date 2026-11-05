@@ -246,9 +246,12 @@ func (r reader) pmHere(name string, pkg pkgJSON, pinnedBun bool) pm {
 		"corepack enable --install-directory /tmp/homeport/bin " + name
 	switch name {
 	case "pnpm":
-		// hoisted: a flat node_modules, not pnpm's links
-		return pm{name: name, setup: corepack, install: "pnpm install --frozen-lockfile --config.node-linker=hoisted",
-			prune: "pnpm prune --prod --config.node-linker=hoisted", run: "pnpm run"}
+		// hoisted: a flat node_modules, not pnpm's links - for the whole
+		// build, where every pnpm reads it (pnpm 11 pnpm_config_*, 8 to 10
+		// npm_config_*): pnpm 11's run reinstalls what it finds out of
+		// date, and a flag on the install alone it undoes
+		return pm{name: name, setup: corepack + " && export npm_config_node_linker=hoisted pnpm_config_node_linker=hoisted",
+			install: "pnpm install --frozen-lockfile", prune: "pnpm prune --prod", run: "pnpm run"}
 	case "yarn":
 		if r.yarnBerry(pkg) {
 			// a node_modules, not Plug'n'Play
