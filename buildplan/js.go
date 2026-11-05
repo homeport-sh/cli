@@ -1378,6 +1378,13 @@ func assemble(layout string, m pm, rt, bin string, sums map[string]string, binNa
 			// its cache (the image optimizer's, ISR's) starts empty, in a
 			// writable folder: the release is read-only
 			"mkdir -p "+b+at+"/.next/cache && echo "+strings.TrimPrefix(at+"/", "/")+".next/cache >> "+b+"/.homeport/writable")
+		// and the folders ISR writes a revalidated page to, where the
+		// build put its prerendered ones (the app router's, the pages
+		// router's): writable in place, so those stay, and a revalidated
+		// page outlives a sleep
+		for _, d := range []string{".next/server/app", ".next/server/pages"} {
+			steps = append(steps, "{ [ ! -d "+b+at+"/"+d+" ] || echo "+strings.TrimPrefix(at+"/", "/")+d+" >> "+b+"/.homeport/writable; }")
+		}
 	case "output":
 		steps = append(steps,
 			`{ [ -f .output/server/index.mjs ] || { echo 'homeport: the build made no .output/server/index.mjs' >&2; exit 1; }; }`,
