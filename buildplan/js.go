@@ -666,6 +666,9 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		// not the deploy
 		p.assemble = join(`{ [ -f `+entry+` ] || { echo 'homeport: the build made no `+entry+` - is the adapter in the config the one installed, and its out this?' >&2; exit 1; }; }`, p.assemble)
 	}
+	if layout == "standalone" && binName == "" {
+		p.assemble = join(p.assemble, standaloneExports(r.ws))
+	}
 	if kind, dir := publicTree(pr, layout, entry, binName, args, r.ws); kind != "" {
 		p.assemble = join(p.assemble, prerendered(kind, dir, settingsRun != "" || cfg.Run != ""))
 	}
@@ -730,6 +733,24 @@ func publicTree(pr *preset, layout, entry, binName string, args []string, w *wor
 
 //go:embed embed/public.mjs
 var publicMJS string
+
+// standaloneExports is the bundle step that puts back, whole, a package
+// Next.js standalone's trace shipped only part of: the files of its exports
+// it followed, not the "module-sync" one Node 22.12 and later require()
+// (embed/exports.mjs, run by the bundle's own bin). One it can't put back
+// from what the build installed fails the build, not the app's start. w:
+// the app's workspace, when it's a member - the trace is from its root.
+func standaloneExports(w *workspace) string {
+	const b = BundleDir
+	installed := "."
+	if w != nil {
+		installed = w.up
+	}
+	return "{ printf '%s' '" + base64.StdEncoding.EncodeToString([]byte(exportsMJS)) + "' | base64 -d > .homeport-exports.mjs && ./" + b + "/bin .homeport-exports.mjs " + b + " " + installed + "; s=$?; rm -f .homeport-exports.mjs; [ $s = 0 ]; }"
+}
+
+//go:embed embed/exports.mjs
+var exportsMJS string
 
 func cmpOr(a, b string) string {
 	if a != "" {

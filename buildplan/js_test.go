@@ -47,7 +47,7 @@ func TestEachFrameworkIsAPreset(t *testing.T) {
 		"Next.js standalone": {js(`{"scripts":{"build":"next build","start":"next start"},"dependencies":{"next":"16.4.0","react":"19"}}`,
 			"next.config.ts", "export default { output: \"standalone\" }\n"),
 			"Next.js", "node", "--import ./.homeport/boot.mjs server.js",
-			[]string{"npm run build", ".next/standalone", ".next/static", "public"}},
+			[]string{"npm run build", ".next/standalone", ".next/static", "public", ".homeport-exports.mjs"}},
 		"Nuxt": {js(`{"scripts":{"build":"nuxt build","preview":"nuxt preview"},"dependencies":{"nuxt":"^4"}}`),
 			"Nuxt", "node", "--import ./.homeport/boot.mjs server/index.mjs", []string{"npm run build", ".output"}},
 		"SvelteKit adapter-node": {js(`{"scripts":{"build":"vite build"},"devDependencies":{"@sveltejs/kit":"^2","@sveltejs/adapter-node":"^5","vite":"^7"}}`),
