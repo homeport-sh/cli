@@ -207,6 +207,11 @@ type Plan struct {
 	// Packages: the system packages the builder unpacks into the release
 	// (PackagesDir), by name
 	Packages []PlanPackage `json:"packages,omitempty"`
+	// Assets: a server's fingerprinted files that ship inside it (a
+	// compiled binary's, rsc-kit's), by folder and URL path: the builder
+	// keeps them beside it, for the release after it to answer a tab
+	// opened before that deploy
+	Assets []PlanAsset `json:"assets,omitempty"`
 	// Headers: the app's response headers - homeport.yaml's, or the
 	// settings' when they have any (headers.go); a static site's too
 	Headers []HeaderRule `json:"headers,omitempty"`
@@ -772,10 +777,19 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 // binary, else a site in dist/, is what an older builder falls back to.
 func (r reader) rscKit(p *Plan, cfg fileConfig) {
 	p.Framework, p.rscKitApp = "rsc-kit", true
+	// what its server embeds, as its build left it
+	p.Assets = []PlanAsset{{From: ".output/public/assets", At: "/assets"}}
 	if cfg.Static != "" || cfg.Build.Command != "" || cfg.Build.Artifact != "" {
 		return
 	}
 	p.RSCKit, p.Artifact, p.StaticFallback = true, "dist/app", true
+}
+
+// PlanAsset is a folder of fingerprinted files the build makes, in the
+// app's folder (From), and the URL path they're served at (At).
+type PlanAsset struct {
+	From string `json:"from"`
+	At   string `json:"at"`
 }
 
 // servers are packages that mean the app runs a server, not a site.
