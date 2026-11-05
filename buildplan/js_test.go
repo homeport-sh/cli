@@ -354,6 +354,13 @@ func TestNextJSShipsItsStandaloneOutput(t *testing.T) {
 		!strings.Contains(p.Command, "echo homeport-cache >> "+b+"/.homeport/writable") {
 		t.Fatalf("cache not writable: %s", p.Command)
 	}
+	// so are the folders ISR writes a revalidated page to, those the build
+	// made: the release's own, its prerendered pages kept
+	for _, d := range []string{".next/server/app", ".next/server/pages"} {
+		if !strings.Contains(p.Command, "{ [ ! -d "+b+"/"+d+" ] || echo "+d+" >> "+b+"/.homeport/writable; }") {
+			t.Fatalf("%s not writable: %s", d, p.Command)
+		}
+	}
 	p = detect(t, js(pkg, "next.config.js", "module.exports = { output: 'standalone' }\n"), buildplan.Settings{})
 	if strings.Contains(p.Command, "NEXT_PRIVATE_STANDALONE") {
 		t.Fatalf("set: %s", p.Command)
