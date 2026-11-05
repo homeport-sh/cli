@@ -197,7 +197,7 @@ func TestInstallsUseTheProjectsPackageManager(t *testing.T) {
 		prune   string
 	}{
 		"npm":                   {js(with("")), "npm", "npm ci", "npm prune --omit=dev"},
-		"pnpm":                  {js(with(""), "pnpm-lock.yaml", "lockfileVersion: '9.0'\n"), "pnpm", "pnpm install --frozen-lockfile --config.node-linker=hoisted", "pnpm prune --prod --config.node-linker=hoisted"},
+		"pnpm":                  {js(with(""), "pnpm-lock.yaml", "lockfileVersion: '9.0'\n"), "pnpm", "pnpm install --frozen-lockfile", "pnpm prune --prod"},
 		"yarn classic":          {js(with(""), "yarn.lock", "# yarn lockfile v1\n"), "yarn", "yarn install --frozen-lockfile", "yarn install --frozen-lockfile --production"},
 		"yarn berry":            {js(with(""), "yarn.lock", "__metadata:\n  version: 8\n"), "yarn", "YARN_NODE_LINKER=node-modules yarn install --immutable", "yarn workspaces focus --all --production"},
 		"bun":                   {js(with(""), "bun.lock", "{}"), "bun", "bun install --frozen-lockfile --linker=hoisted", "bun install --frozen-lockfile --production --linker=hoisted"},
@@ -208,6 +208,18 @@ func TestInstallsUseTheProjectsPackageManager(t *testing.T) {
 		p := detect(t, c.files, buildplan.Settings{})
 		if p.PackageManager != c.pm || !strings.Contains(p.Install, c.install) || !strings.Contains(p.Command, c.prune) {
 			t.Errorf("%s: %s\ninstall: %s\ncommand: %s", name, p.PackageManager, p.Install, p.Command)
+		}
+	}
+	// pnpm hoisted for the whole build, not one command: pnpm 11's run
+	// reinstalls what it finds out of date - with its own linker, unless
+	// it's said where every pnpm reads it (pnpm 11 pnpm_config_*, 8 to 10
+	// npm_config_*). Its links in a Next.js standalone bundle, copied as
+	// files, left next requiring @swc/helpers from a copy missing a file
+	// (clinicq-dashboard, 2026-11-04).
+	for _, lock := range [][]string{{"pnpm-lock.yaml", "x"}, {"pnpm-lock.yaml", "x", "pnpm-workspace.yaml", "packages:\n  - functions\n"}} {
+		p := detect(t, js(`{"scripts":{"build":"next build"},"dependencies":{"next":"16.4.4"},"packageManager":"pnpm@11.24.0"}`, lock...), buildplan.Settings{})
+		if !strings.Contains(p.Install, "export npm_config_node_linker=hoisted pnpm_config_node_linker=hoisted") || strings.Contains(p.Install+p.Command, "--config.node-linker") {
+			t.Errorf("%v: install: %s\ncommand: %s", lock, p.Install, p.Command)
 		}
 	}
 	// pnpm and Yarn through corepack, which Node 26 no longer ships

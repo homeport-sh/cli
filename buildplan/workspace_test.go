@@ -41,7 +41,7 @@ func TestAWorkspaceMemberInstallsAtTheWorkspacesRoot(t *testing.T) {
 		"npm": {map[string]string{"package.json": `{"workspaces":{"packages":["apps/*"]}}`, "package-lock.json": npmLock},
 			"npm", "(cd ../.. && npm ci --workspace=apps/web --include-workspace-root)", "(cd ../.. && npm prune --omit=dev)", ""},
 		"pnpm": {map[string]string{"package.json": `{}`, "pnpm-workspace.yaml": "packages:\n  - 'apps/*'\n", "pnpm-lock.yaml": "x"},
-			"pnpm", "(cd ../.. && pnpm install --frozen-lockfile --config.node-linker=hoisted)", "(cd ../.. && pnpm prune --prod", ""},
+			"pnpm", "(cd ../.. && pnpm install --frozen-lockfile)", "(cd ../.. && pnpm prune --prod", ""},
 		"yarn": {map[string]string{"package.json": `{"workspaces":["apps/web"]}`, "yarn.lock": "x"},
 			"yarn", "(cd ../.. && yarn install --frozen-lockfile)", "(cd ../.. && yarn install --frozen-lockfile --production", ""},
 		"yarn berry": {map[string]string{"package.json": `{"packageManager":"yarn@4.5.0","workspaces":["apps/**"]}`, "yarn.lock": "__metadata:\n"},
