@@ -346,6 +346,14 @@ func TestNextJSShipsItsStandaloneOutput(t *testing.T) {
 	if !strings.Contains(p.Command, "NEXT_PRIVATE_STANDALONE=1 npm run build") || !strings.Contains(p.Command, `output: "standalone"`) {
 		t.Fatalf("unset: %s", p.Command)
 	}
+	// its cache (the image optimizer's, ISR's) is a writable folder of the
+	// release, beside Node's compile cache: the bundle holds none of the
+	// build's, and the release is otherwise read-only
+	b := buildplan.BundleDir
+	if !strings.Contains(p.Command, "mkdir -p "+b+"/.next/cache && echo .next/cache >> "+b+"/.homeport/writable") ||
+		!strings.Contains(p.Command, "echo homeport-cache >> "+b+"/.homeport/writable") {
+		t.Fatalf("cache not writable: %s", p.Command)
+	}
 	p = detect(t, js(pkg, "next.config.js", "module.exports = { output: 'standalone' }\n"), buildplan.Settings{})
 	if strings.Contains(p.Command, "NEXT_PRIVATE_STANDALONE") {
 		t.Fatalf("set: %s", p.Command)
