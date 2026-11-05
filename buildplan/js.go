@@ -1374,7 +1374,10 @@ func assemble(layout string, m pm, rt, bin string, sums map[string]string, binNa
 			`{ [ -f .next/standalone`+at+`/server.js ] || { echo 'homeport: the build made no .next/standalone`+at+`/server.js - set output: "standalone" in next.config' >&2; exit 1; }; }`,
 			put(".next/standalone", b, cache),
 			"mkdir -p "+b+at+"/.next/static && "+put(".next/static", b+at+"/.next/static"),
-			"{ [ ! -d public ] || { mkdir -p "+b+at+"/public && "+put("public", b+at+"/public")+"; }; }")
+			"{ [ ! -d public ] || { mkdir -p "+b+at+"/public && "+put("public", b+at+"/public")+"; }; }",
+			// its cache (the image optimizer's, ISR's) starts empty, in a
+			// writable folder: the release is read-only
+			"mkdir -p "+b+at+"/.next/cache && echo "+strings.TrimPrefix(at+"/", "/")+".next/cache >> "+b+"/.homeport/writable")
 	case "output":
 		steps = append(steps,
 			`{ [ -f .output/server/index.mjs ] || { echo 'homeport: the build made no .output/server/index.mjs' >&2; exit 1; }; }`,
@@ -1414,7 +1417,7 @@ func assemble(layout string, m pm, rt, bin string, sums map[string]string, binNa
 	}
 	steps = append(steps, "printf '%s' '"+boot(env)+"' > "+b+"/"+bootFile)
 	if rt == "node" {
-		steps = append(steps, "mkdir -p "+b+"/"+CacheDir+" && echo "+CacheDir+" > "+b+"/.homeport/writable")
+		steps = append(steps, "mkdir -p "+b+"/"+CacheDir+" && echo "+CacheDir+" >> "+b+"/.homeport/writable")
 	}
 	return join(steps...)
 }
