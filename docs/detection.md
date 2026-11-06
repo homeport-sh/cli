@@ -746,6 +746,64 @@ The release is read-only, so everything is compiled at build. Data goes to
 a database or object storage, never into the app's folder. An app with a
 top-level `bin/` folder is refused, because `bin` is the interpreter.
 
+## Assets kept for the next release
+
+A tab opened before a deploy still asks for the old release's
+fingerprinted files (`/_app/immutable/start.Ab12.js`). The plan names the
+folder the build leaves them in and the URL path they're served at
+(`assets: [{from, at}]`). The builder keeps a copy with the release. For a
+day after the next deploy, a request the new release answers with a 404 is
+answered from that copy instead.
+
+| Framework | Folder | URL path |
+| --- | --- | --- |
+| SvelteKit, adapter-node or adapter-bun | `<out>/client/<appDir>/immutable` | `<paths.base>/<appDir>/immutable` |
+| SvelteKit, adapter-bun compiled | `<outDir>/output/client/<appDir>/immutable` | `<paths.base>/<appDir>/immutable` |
+| Astro, `@astrojs/node` | `dist/client/_astro` | `/_astro` |
+| React Router 7, Remix 2 (Vite) | `build/client/assets` | `/assets` |
+| Remix, classic compiler | `public/build` | `/build` |
+| Next.js (standalone, next-bun-compile) | `.next/static` | `/_next/static` |
+| Nuxt | `.output/public/_nuxt` | `/_nuxt` |
+| TanStack Start on Nitro | `.output/public/assets` | `/assets` |
+| rsc-kit | `.output/public/assets` | `/assets` |
+| Laravel, `laravel-vite-plugin` | `<publicDirectory>/<buildDirectory>/assets` | `/<buildDirectory>/assets` |
+| Django, `STATIC_ROOT` under `BASE_DIR` | `STATIC_ROOT` | `STATIC_URL` (`/static`) |
+
+SvelteKit's `outDir`, `appDir` and `paths.base` are read from
+`svelte.config.js`, or from the `sveltekit()` plugin's options in the Vite
+config, and the adapter's `out` from its call. Laravel's `buildDirectory`
+and `publicDirectory` are read from the `laravel()` plugin's options. Each
+defaults to the framework's own default when it isn't a plain string there.
+Django's files are named only when `collectstatic` collects them into the
+app's folder and `STATIC_URL` is a path, not another host. This holds whether
+or not the app starts with a command of its own, and whether or not the
+bundle has a tree of prerendered files. A folder the build didn't make is
+skipped.
+
+An app whose framework has no folder the build knows (Express, Hono, Go,
+Flask), or that builds its files somewhere else, names them in
+`homeport.yaml` or in the build settings (the dashboard's). The build
+settings' list, when it has any, replaces the file's, and either replaces
+the detected one:
+
+```yaml
+assets:
+  - from: public/dist/assets   # a folder in the app's folder, after the build
+    at: /assets                # the URL path it's served at
+```
+
+Each `from` is a plain folder in the app's folder (no `..`, not
+`.homeport`), and each `at` a URL path from `/`, at most eight entries. Name
+only fingerprinted files, whose names change when their content does: an
+old copy is served only for a file the new release doesn't have. A static
+site can't have any: its files are served as they are, with no server to
+keep old ones beside.
+
+Old files are served only when the app answers 404. An app with a
+catch-all route that answers 200 for every path (Laravel's
+`Route::fallback`, a SvelteKit `[...rest]` route) answers an old file's
+request itself.
+
 ## Your visitor's IP
 
 Every request reaches your app through homeport's proxy, so the socket's
