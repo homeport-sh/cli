@@ -41,6 +41,7 @@ used, else `/`.
 | `go.mod` | Go (`golang:<go.mod's version>`) | a binary |
 | `composer.json` + `composer.lock` | PHP on homeport's FrankenPHP base | a bundle, FrankenPHP as `bin` |
 | `package.json` + a lockfile | Node or Bun (see below) | a bundle, a static site, or a binary when the build compiles one |
+| `Cargo.toml` (with a binary) + `Cargo.lock` | Rust (`rust:<version>-bookworm`) | a bundle, the binary as `bin` |
 | `pyproject.toml` + `uv.lock`, or `requirements.txt` | Python, installed with uv | a bundle, the interpreter as `bin` |
 | `index.html` alone | none | the folder, as a static site |
 
@@ -653,6 +654,45 @@ out.
 
 Each process has a port of its own. Like the start command, a process
 may name `$PORT` and `$HOST`, and no other variable.
+
+## Rust apps
+
+A crate with a binary (`src/main.rs` or a `[[bin]]`) and its committed
+`Cargo.lock` is built with `cargo build --release --locked` in the
+official Rust image, Debian bookworm (its glibc is older than the boxes',
+which the binary links at run time). It ships as a **bundle**: the binary
+as `bin`, beside the app's own files (`static/`, `templates/`, `config/`;
+not `target/` or `.git`), run from that folder. A top-level `bin/` folder
+fails the build: rename it.
+
+- **Which Rust:** `rust-toolchain.toml` (or `rust-toolchain`) in the app's
+  folder or above it: `stable` or nothing is homeport's pinned Rust
+  (1.99.1), `1.x` or `1.x.y` that version's image (1.67 and newer).
+  Without one, a `rust-version` newer than the pinned Rust (the crate's,
+  or its workspace's) picks that version. `nightly` and `beta` build, but
+  rustup downloads them in every build.
+- **Which binary:** `default-run`; else the only binary; else, for Loco,
+  `<package>-cli`; else the one named like the package. Several, none of
+  them that: set `default-run`.
+- **Workspaces:** set the root directory to the member that's the app
+  (`crates/api`); its workspace's `Cargo.lock` and toolchain file are used.
+- **Caching:** the registry and the compiled dependencies are kept in the
+  builder's cache, so a build that changed only the app's code compiles
+  only its own crates. Past 2 GiB the compiled dependencies are dropped
+  and rebuilt. The build uses two jobs, the builder's share of cores.
+- **Listening:** like a Go app, it must listen on `$PORT` (and `0.0.0.0`,
+  `$HOST`). Run arguments (`run:` in `homeport.yaml`) can pass them:
+  `run: --port $PORT`.
+- **Frameworks:** Axum, Actix Web, Poem, Salvo and Warp are named, and
+  run as they are. **Loco** runs `start --environment production
+  --binding $HOST --port $PORT` (its `config/production.yaml`), with
+  `db migrate --environment production` as its release command when it has
+  its `migration` crate. **Rocket** listens on `ROCKET_ADDRESS` and
+  `ROCKET_PORT`, not `PORT`: the app must read `PORT` itself.
+- **Native libraries:** the binary runs against the boxes' libraries
+  (glibc, libgcc, OpenSSL 3). Prefer rustls over native-tls and bundled
+  SQLite (`bundled` features); a library the boxes don't have (libpq) is
+  missing at run time.
 
 ## Python apps
 

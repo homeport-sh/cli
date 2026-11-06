@@ -298,7 +298,7 @@ var SiteFolders = []string{"build", "dist", "out"}
 func Files() []string {
 	return slices.Concat([]string{ConfigFile, "go.mod", "composer.json", "composer.lock", "package.json", "bun.lock", "bun.lockb",
 		"package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", ".nvmrc", ".node-version", ".bun-version", "index.html",
-		"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"}, svelteConfigs, nextConfigs, nuxtConfigs, nitroConfigs, releaseFiles(), pythonFiles(), queueFiles())
+		"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"}, svelteConfigs, nextConfigs, nuxtConfigs, nitroConfigs, releaseFiles(), pythonFiles(), rustFiles(), queueFiles())
 }
 
 var (
@@ -520,7 +520,7 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	if s.Command != "" {
 		p.Command = join(s.Command, p.assemble) // a bundle is still made from what it leaves
 		if p.Toolchain == "none" {
-			return Plan{}, errors.New("a build command needs a toolchain: there's no package.json, go.mod or composer.json in the app's folder")
+			return Plan{}, errors.New("a build command needs a toolchain: there's no package.json, go.mod, Cargo.toml or composer.json in the app's folder")
 		}
 	}
 	if s.Output != "" {
@@ -675,10 +675,10 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 
 	// nothing in the folder says how it builds, and a Go module is above it
 	goAbove := cfg.Build.Image == "" && !r.exists("go.mod") && !r.exists("composer.json") && !r.python() &&
-		!r.exists("package.json") && !r.exists("index.html") && r.goModuleAbove()
+		!r.exists("package.json") && !r.exists("index.html") && !r.exists("Cargo.toml") && r.goModuleAbove()
 
 	// a workspace member: its lockfile is its workspace's, above it
-	if cfg.Build.Image == "" && !r.exists("composer.json") && !r.exists("go.mod") && r.exists("package.json") && !r.hasLockfile() && !r.python() {
+	if cfg.Build.Image == "" && !r.exists("composer.json") && !r.exists("go.mod") && r.exists("package.json") && !r.hasLockfile() && !r.python() && !r.rustApp() {
 		w, err := r.findWorkspace()
 		if err != nil {
 			return Plan{}, err
@@ -744,6 +744,11 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 		if p.Command == "" {
 			p.Command = `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ` + p.Artifact + " ."
 		}
+	case r.rustApp():
+		// Rust: cargo builds its binary, bundled with the app's files (rust.go)
+		if err := r.rs(&p, cfg); err != nil {
+			return Plan{}, err
+		}
 	case r.python():
 		// Python: its interpreter in the bundle, as bin (python.go)
 		if err := r.py(&p, cfg, cmpOr(s.Run, cfg.Run), s.Python); err != nil {
@@ -765,8 +770,10 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 		if cfg.Static != "" {
 			p.Artifact = clean(cfg.Static)
 		}
+	case r.exists("Cargo.toml") && !r.exists("package.json"):
+		return Plan{}, errors.New(r.rustNotAnApp())
 	default:
-		return Plan{}, errors.New("can't tell how to build this app: no go.mod, composer.json, bun or npm lockfile, pyproject.toml, requirements.txt or index.html in its folder - " +
+		return Plan{}, errors.New("can't tell how to build this app: no go.mod, composer.json, Cargo.toml, bun or npm lockfile, pyproject.toml, requirements.txt or index.html in its folder - " +
 			"set the build and output in the app's build settings")
 	}
 	return p, nil
