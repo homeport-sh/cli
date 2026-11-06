@@ -137,9 +137,6 @@ func (r reader) pyFramework() string {
 var (
 	pyNameRe    = regexp.MustCompile(`^\s*([A-Za-z0-9][A-Za-z0-9._-]*)`)
 	pyNormRe    = regexp.MustCompile(`[-_.]+`)
-	tomlHeadRe  = regexp.MustCompile(`(?m)^\s*\[[^\]\n]+\]\s*(#.*)?$`)
-	tomlKeyRe   = func(k string) *regexp.Regexp { return regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(k) + `\s*=\s*`) }
-	tomlStrRe   = regexp.MustCompile(`^"([^"\n]*)"|^'([^'\n]*)'`)
 	djangoMod   = regexp.MustCompile(`DJANGO_SETTINGS_MODULE["']\s*,\s*["']([A-Za-z_][A-Za-z0-9_.]*)\.settings["']`)
 	pyVersionRe = regexp.MustCompile(`^(?:cpython-|python-?)?(3)\.([0-9]{1,2})(?:\.[0-9]+)?(?:[-+].*)?$`)
 )
@@ -153,64 +150,10 @@ func pyName(s string) string {
 	return pyNormRe.ReplaceAllString(strings.ToLower(m[1]), "-")
 }
 
-// tomlSection is a pyproject.toml table's body, from its header to the next.
-func tomlSection(b []byte, header string) string {
-	s := string(b)
-	for _, loc := range tomlHeadRe.FindAllStringIndex(s, -1) {
-		if strings.TrimSpace(strings.SplitN(s[loc[0]:loc[1]], "#", 2)[0]) != header {
-			continue
-		}
-		rest := s[loc[1]:]
-		if next := tomlHeadRe.FindStringIndex(rest); next != nil {
-			rest = rest[:next[0]]
-		}
-		return rest
-	}
-	return ""
-}
-
-// tomlString is a key's string value in a table's body.
-func tomlString(section, key string) (string, bool) {
-	loc := tomlKeyRe(key).FindStringIndex(section)
-	if loc == nil {
-		return "", false
-	}
-	m := tomlStrRe.FindStringSubmatch(section[loc[1]:])
-	if m == nil {
-		return "", false
-	}
-	return m[1] + m[2], true
-}
-
-// tomlStrings are a key's array of strings in a table's body.
-func tomlStrings(section, key string) []string {
-	loc := tomlKeyRe(key).FindStringIndex(section)
-	if loc == nil {
-		return nil
-	}
-	s := section[loc[1]:]
-	if !strings.HasPrefix(s, "[") {
-		return nil
-	}
-	var out []string
-	for i := 1; i < len(s); i++ {
-		switch c := s[i]; c {
-		case ']':
-			return out
-		case '#':
-			for i < len(s) && s[i] != '\n' {
-				i++
-			}
-		case '"', '\'':
-			end := strings.IndexByte(s[i+1:], c)
-			if end < 0 {
-				return out
-			}
-			out = append(out, s[i+1:i+1+end])
-			i += end + 1
-		}
-	}
-	return out
+// noBinFolder fails a bundle's build when the app has a top-level bin/
+// folder: the bundle's bin is what it runs (a kind's interpreter or binary).
+func noBinFolder(kind, bin string) string {
+	return "{ [ ! -d bin ] || { echo 'homeport: the app has a bin/ folder, and a " + kind + " bundle'\"'\"'s bin is its " + bin + ": rename the folder' >&2; exit 1; }; }"
 }
 
 // pyDeps are the app's dependencies, by normalised name: pyproject.toml's
@@ -594,7 +537,7 @@ func pyAssemble(b string, rel pythonRelease, conf bool) string {
 		writeConf = "printf '%s\\n' '" + strings.Join(gunicornConf, "' '") + "' > " + b + "/" + gunicornConfPath
 	}
 	return join(
-		"{ [ ! -d bin ] || { echo 'homeport: the app has a bin/ folder, and a Python bundle'\"'\"'s bin is its interpreter: rename the folder' >&2; exit 1; }; }",
+		noBinFolder("Python", "interpreter"),
 		"rm -rf "+b+" && mkdir -p "+b+"/.homeport",
 		copyTree("r=$(pwd -P)", ".", b, "./.git", "./"+b, "./"+pyBuild, "./.venv", "./venv", "./node_modules", "./.mypy_cache", "./.pytest_cache",
 			"./.ruff_cache"),

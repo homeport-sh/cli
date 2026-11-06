@@ -20,9 +20,9 @@ import (
 // the output is relative to it.
 
 // WorkspaceFiles are the files Detect reads in each folder above the app's,
-// to find its workspace or its Go module: a control plane fetches these too.
+// to find its workspace, its Go module or its Cargo workspace and Rust: a control plane fetches these too.
 func WorkspaceFiles() []string {
-	out := []string{"package.json", "pnpm-workspace.yaml", "go.mod"}
+	out := []string{"package.json", "pnpm-workspace.yaml", "go.mod", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rust-toolchain"}
 	for _, l := range lockfiles {
 		out = append(out, l.file)
 	}
