@@ -212,6 +212,12 @@ type Plan struct {
 	SSR    string `json:"ssr,omitempty"`
 	Reverb bool   `json:"reverb,omitempty"`
 
+	// Env: the app's default environment, NAME=value - what its framework
+	// reads that homeport would otherwise have the app set (Rocket's
+	// ROCKET_PORT=$PORT); the bundle carries it (env.go), and the app's
+	// own variables win. Nil when it has none, or no bundle to carry it.
+	Env map[string]string `json:"env,omitempty"`
+
 	// Packages: the system packages the builder unpacks into the release
 	// (PackagesDir), by name
 	Packages []PlanPackage `json:"packages,omitempty"`
@@ -669,6 +675,9 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 		// frankenphp-bundle, and Laravel's caches: homeport's
 	default:
 		p.Build = p.Command
+	}
+	if err := shipEnv(&p); err != nil {
+		return Plan{}, err
 	}
 	if cfg.Health != "" {
 		p.Health = cfg.Health // whatever runs, the file's: a site's cleared below

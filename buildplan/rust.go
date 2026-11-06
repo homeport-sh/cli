@@ -16,7 +16,7 @@ import (
 // links the boxes' glibc (2.39, Ubuntu 24.04), which the sandbox lends it
 // read-only with their other libraries (libssl, libgcc_s): the image is
 // Debian bookworm's, glibc 2.36, never newer. Like a Go app's, it must
-// listen on $PORT.
+// listen on $PORT (Rocket's default environment says it: RocketEnv).
 //
 // Its compiled dependencies are kept with its other dependencies, in the
 // builder's cache ($CARGO_HOME, which the builder sets): a build whose
@@ -47,6 +47,10 @@ const rustJobs = 2
 // LocoRun is how a Loco app's CLI serves it: on homeport's address and
 // port, in production (its config/production.yaml).
 const LocoRun = "start --environment production --binding $HOST --port $PORT"
+
+// RocketEnv: Rocket listens on ROCKET_ADDRESS and ROCKET_PORT
+// (127.0.0.1:8000), not on HOST and PORT - by default, on homeport's.
+var RocketEnv = map[string]string{"ROCKET_ADDRESS": "$HOST", "ROCKET_PORT": "$PORT"}
 
 var (
 	crateNameRe   = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$`)
@@ -239,8 +243,7 @@ func (r reader) rs(p *Plan, cfg fileConfig) error {
 	case "Loco":
 		p.Run = LocoRun
 	case "Rocket":
-		p.Warnings = append(p.Warnings, "Rocket listens on ROCKET_ADDRESS and ROCKET_PORT (127.0.0.1:8000), not on homeport's HOST and PORT: "+
-			"the app must listen on $PORT (rocket::Config's port from PORT, address 0.0.0.0)")
+		p.Env = RocketEnv
 	}
 	built := `"$CARGO_TARGET_DIR/release/` + bin + `"`
 	p.setup = rustSetup(own)

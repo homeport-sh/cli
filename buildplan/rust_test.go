@@ -1,6 +1,9 @@
 package buildplan_test
 
 import (
+	"maps"
+	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -238,9 +241,44 @@ func TestRustFrameworks(t *testing.T) {
 			t.Errorf("%s: %q", dep, p.Framework)
 		}
 	}
-	p = detect(t, rustApp("[package]\nname = \"x\"\n\n[dependencies]\nrocket = \"0.5\"\n"), buildplan.Settings{})
-	if p.Framework != "Rocket" || !slices.ContainsFunc(p.Warnings, func(w string) bool { return strings.Contains(w, "ROCKET_PORT") }) {
+}
+
+// Rocket listens on ROCKET_ADDRESS and ROCKET_PORT (127.0.0.1:8000), not
+// HOST and PORT: its plan's default environment says them, the bundle
+// carries it (.homeport/env), and homeportd sets each the app's own
+// variables don't. A build that doesn't make homeport's bundle carries
+// none, and says what to set.
+func TestRocketListensOnHomeportsPortByDefault(t *testing.T) {
+	rocket := rustApp("[package]\nname = \"x\"\n\n[dependencies]\nrocket = \"0.5\"\n")
+	p := detect(t, rocket, buildplan.Settings{})
+	if p.Framework != "Rocket" || !maps.Equal(p.Env, map[string]string{"ROCKET_ADDRESS": "$HOST", "ROCKET_PORT": "$PORT"}) || len(p.Warnings) > 0 {
 		t.Fatalf("rocket: %+v", p)
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(dir+"/.homeport-bundle", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, step, ok := strings.Cut(p.Command, `cp "$CARGO_TARGET_DIR/release/x" .homeport-bundle/bin && `)
+	if !ok {
+		t.Fatalf("no step after the bundle's bin:\n%s", p.Command)
+	}
+	cmd := exec.Command("sh", "-c", step)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%s: %v %s", step, err, out)
+	}
+	if b, err := os.ReadFile(dir + "/.homeport-bundle/" + buildplan.BundleEnvFile); err != nil || string(b) != "ROCKET_ADDRESS=$HOST\nROCKET_PORT=$PORT\n" {
+		t.Fatalf("%q %v", b, err)
+	}
+	// they said it's a binary: nothing carries the defaults
+	p = detect(t, rocket, buildplan.Settings{Kind: buildplan.Binary})
+	if p.Env != nil || strings.Contains(p.Command, buildplan.BundleEnvFile) ||
+		!slices.ContainsFunc(p.Warnings, func(w string) bool { return strings.Contains(w, "ROCKET_ADDRESS=$HOST, ROCKET_PORT=$PORT") }) {
+		t.Fatalf("rocket, a binary: %+v", p)
+	}
+	// an app without defaults writes none
+	if p = detect(t, rustApp(axumToml), buildplan.Settings{}); p.Env != nil || strings.Contains(p.Command, buildplan.BundleEnvFile) {
+		t.Fatalf("axum: %+v", p)
 	}
 }
 
