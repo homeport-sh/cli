@@ -45,6 +45,18 @@ used, else `/`.
 | `pyproject.toml` + `uv.lock`, or `requirements.txt` | Python, installed with uv | a bundle, the interpreter as `bin` |
 | `index.html` alone | none | the folder, as a static site |
 
+**Libraries:** an app's executable (a binary, or a bundle's `bin`) runs
+against the server's own libraries, lent read-only: glibc, libgcc,
+libstdc++, OpenSSL 3, zlib, zstd, xz and bzip2. After the build, its
+loader and the libraries it needs are read (`artifact.CheckLibraries`),
+and the build fails, naming them, when one isn't there and the bundle
+doesn't carry it (found through a `RUNPATH` of `$ORIGIN/...` inside the
+bundle): a library such as libpq or a system SQLite, or musl's loader (a
+binary built on Alpine). Without the check it would fail only as it
+started, after the deploy. Link such a library in statically (a crate's
+`bundled` feature), or use one that needs none (rustls; a pure-Go or
+pure-Rust database driver; Go with `CGO_ENABLED=0`).
+
 ## JavaScript apps
 
 A JavaScript app runs what its build produces. A server ships as a
@@ -691,10 +703,10 @@ fails the build: rename it.
   `ROCKET_PORT` (`127.0.0.1:8000`), not `HOST` and `PORT`, so its bundle
   sets them by default: `ROCKET_ADDRESS=$HOST` and `ROCKET_PORT=$PORT` (see
   *Default environment* below). Your own values win.
-- **Native libraries:** the binary runs against the boxes' libraries
-  (glibc, libgcc, OpenSSL 3). Prefer rustls over native-tls and bundled
-  SQLite (`bundled` features); a library the boxes don't have (libpq) is
-  missing at run time.
+- **Native libraries:** the binary runs against the servers' libraries
+  (see *Libraries* above). Prefer rustls over native-tls, and bundled SQLite
+  (`bundled` features); a library the servers don't have (libpq) fails the
+  build, saying what to use instead.
 
 ## Default environment
 
