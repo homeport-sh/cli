@@ -207,10 +207,9 @@ type Plan struct {
 	// Packages: the system packages the builder unpacks into the release
 	// (PackagesDir), by name
 	Packages []PlanPackage `json:"packages,omitempty"`
-	// Assets: a server's fingerprinted files that ship inside it (a
-	// compiled binary's, rsc-kit's), by folder and URL path: the builder
-	// keeps them beside it, for the release after it to answer a tab
-	// opened before that deploy
+	// Assets: the framework's fingerprinted files, by folder and URL path
+	// (assets.go): the builder keeps them beside the server, for the
+	// release after it to answer a tab opened before that deploy
 	Assets []PlanAsset `json:"assets,omitempty"`
 	// Headers: the app's response headers - homeport.yaml's, or the
 	// settings' when they have any (headers.go); a static site's too
@@ -711,6 +710,7 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 		// Inertia's SSR: built with the rest, run beside the web (laravel.go)
 		ssr := cfg.Build.Command == "" && cfg.Static == "" && r.inertiaSSR()
 		p.Install = join(p.Install, r.frontEnd(ssr))
+		p.Assets = r.laravelAssets()
 		if cfg.Static == "" {
 			p.Kind = Bundle
 			if cfg.Build.Artifact == "" {

@@ -301,6 +301,7 @@ func (r reader) py(p *Plan, cfg fileConfig, run, python string) error {
 	}
 	p.Run = web
 	if framework == "Django" {
+		p.Assets = r.djangoAssets()
 		p.build = "{ " + py + " manage.py collectstatic --noinput || echo \"homeport: built without collectstatic (manage.py collectstatic failed here:" +
 			" is STATIC_ROOT set, and does the build have the variables the settings read?)\" >&2; }"
 	}

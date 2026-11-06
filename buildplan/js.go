@@ -487,7 +487,7 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		if runtime == "node" {
 			return fmt.Errorf("the runtime is node (%s), but %s: a compiled app runs on the Bun it was compiled with - set the runtime to bun, or leave it to detection", runtimeFrom, c.reason)
 		}
-		p.Compiled, p.Assets = true, c.assets
+		p.Compiled, p.Assets = true, r.frameworkAssets(pr, true)
 		if err := r.bunVersion(pkg); err != nil {
 			return err
 		}
@@ -683,6 +683,7 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 	if entry != "" {
 		p.Run = runArgs(rt, entry, flags, args)
 	}
+	p.Assets = r.frameworkAssets(pr, false)
 	return nil
 }
 
@@ -1052,9 +1053,8 @@ func (r reader) nextExport(p *Plan, cfg fileConfig, deps map[string]bool) bool {
 // compiledServer is a build that compiles the app's server.
 type compiledServer struct {
 	kind, artifact, framework, reason string
-	build                             string      // its build command, when it isn't the build script's
-	assets                            []PlanAsset // its fingerprinted files, which it embeds
-	err                               error       // it compiles, but what it makes can't run here
+	build                             string // its build command, when it isn't the build script's
+	err                               error  // it compiles, but what it makes can't run here
 }
 
 var (
@@ -1076,8 +1076,7 @@ func (r reader) compiled(pkg pkgJSON, deps map[string]bool, pr *preset, build st
 			}
 		}
 		if said {
-			return compiledServer{kind: Binary, artifact: "server", framework: "Next.js", reason: "its build compiles it with next-bun-compile (Bun)",
-				assets: []PlanAsset{{From: ".next/static", At: "/_next/static"}}}
+			return compiledServer{kind: Binary, artifact: "server", framework: "Next.js", reason: "its build compiles it with next-bun-compile (Bun)"}
 		}
 	}
 	if deps["@sveltejs/adapter-bun"] && pr != nil && pr.only && pr.name == "SvelteKit" {
@@ -1121,9 +1120,6 @@ func (r reader) compiled(pkg pkgJSON, deps map[string]bool, pr *preset, build st
 	c := compiledServer{kind: Binary, artifact: name, framework: framework, reason: "its build script compiles it with bun build --compile"}
 	if pr != nil && pr.layout == "output" {
 		c.err = r.nitroInline(pr.name)
-		if pr.name == "Nuxt" {
-			c.assets = []PlanAsset{{From: ".output/public/_nuxt", At: "/_nuxt"}}
-		}
 	}
 	return c
 }
