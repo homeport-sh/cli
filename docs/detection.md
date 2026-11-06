@@ -700,11 +700,29 @@ fails the build: rename it.
   --binding $HOST --port $PORT` (its `config/production.yaml`), with
   `db migrate --environment production` as its release command when it has
   its `migration` crate. **Rocket** listens on `ROCKET_ADDRESS` and
-  `ROCKET_PORT`, not `PORT`: the app must read `PORT` itself.
+  `ROCKET_PORT` (`127.0.0.1:8000`), not `HOST` and `PORT`, so its bundle
+  sets them by default: `ROCKET_ADDRESS=$HOST` and `ROCKET_PORT=$PORT` (see
+  *Default environment* below). Your own values win.
 - **Native libraries:** the binary runs against the servers' libraries
   (see *Libraries* above). Prefer rustls over native-tls, and bundled SQLite
   (`bundled` features); a library the servers don't have (libpq) fails the
   build, saying what to use instead.
+
+## Default environment
+
+Some frameworks read their address or port from variables of their own
+rather than `HOST` and `PORT` (Rocket's `ROCKET_ADDRESS` and
+`ROCKET_PORT`). For those, detection gives the plan a default environment
+(`env` in `homeport build-plan`'s output), and the bundle carries it in
+`.homeport/env`, a `NAME=value` line each. When an instance starts,
+homeport sets each of them that neither homeport itself (`PORT`,
+`NODE_ENV`, …) nor your app's environment variables already set: your own
+value always wins. A value may name `$PORT` and `$HOST`, which become the
+instance's port and address, as in a start command; no other variable.
+
+Only a bundle that homeport makes carries it. If the build settings say
+the build makes a binary, or where its output is, the plan carries none
+and its warning names the variables to set yourself.
 
 ## Python apps
 
