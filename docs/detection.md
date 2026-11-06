@@ -782,7 +782,9 @@ skipped.
 
 An app whose framework has no folder the build knows (Express, Hono, Go,
 Flask), or that builds its files somewhere else, names them in
-`homeport.yaml`. Its list replaces the detected one:
+`homeport.yaml` or in the build settings (the dashboard's). The build
+settings' list, when it has any, replaces the file's, and either replaces
+the detected one:
 
 ```yaml
 assets:

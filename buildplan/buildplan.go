@@ -84,18 +84,22 @@ type Settings struct {
 	// Headers: the app's response headers, replacing homeport.yaml's when
 	// there are any (headers.go)
 	Headers []HeaderRule `json:"headers,omitempty"`
+	// Assets: the folders of fingerprinted files kept for the next release
+	// (CheckAssets), replacing homeport.yaml's and the detected ones when
+	// there are any
+	Assets []PlanAsset `json:"assets,omitempty"`
 }
 
 // IsZero says whether nothing is set.
 func (s Settings) IsZero() bool {
 	return s.Root == "" && s.Kind == "" && s.Install == "" && s.Command == "" && s.Output == "" &&
 		s.Run == "" && len(s.Release) == 0 && !s.NoRelease && s.StopGrace == "" && len(s.Processes) == 0 && s.Octane == nil && s.Runtime == "" &&
-		s.Python == "" && len(s.Packages) == 0 && len(s.Headers) == 0
+		s.Python == "" && len(s.Packages) == 0 && len(s.Headers) == 0 && len(s.Assets) == 0
 }
 
 // With is s with what o sets in its place: one deploy's settings over the
-// app's saved ones. What o leaves empty is s's; processes, packages and
-// headers, when o has any, are o's alone.
+// app's saved ones. What o leaves empty is s's; processes, packages,
+// headers and assets, when o has any, are o's alone.
 func (s Settings) With(o Settings) Settings {
 	pick := func(a, b string) string {
 		if b != "" {
@@ -107,7 +111,8 @@ func (s Settings) With(o Settings) Settings {
 		Command: pick(s.Command, o.Command), Output: pick(s.Output, o.Output), Run: pick(s.Run, o.Run),
 		Release: slices.Clone(s.Release), NoRelease: s.NoRelease, StopGrace: pick(s.StopGrace, o.StopGrace),
 		Processes: slices.Clone(s.Processes), Octane: s.Octane,
-		Runtime: pick(s.Runtime, o.Runtime), Python: pick(s.Python, o.Python), Packages: slices.Clone(s.Packages), Headers: slices.Clone(s.Headers)}
+		Runtime: pick(s.Runtime, o.Runtime), Python: pick(s.Python, o.Python), Packages: slices.Clone(s.Packages), Headers: slices.Clone(s.Headers),
+		Assets: slices.Clone(s.Assets)}
 	// a release command and none are one setting: o's, when it says either
 	// (its commands, whole)
 	if o.NoRelease {
@@ -123,6 +128,9 @@ func (s Settings) With(o Settings) Settings {
 	}
 	if len(o.Headers) > 0 {
 		out.Headers = slices.Clone(o.Headers)
+	}
+	if len(o.Assets) > 0 {
+		out.Assets = slices.Clone(o.Assets)
 	}
 	if o.Octane != nil {
 		v := *o.Octane
@@ -400,6 +408,9 @@ func (s Settings) Check() error {
 	if err := CheckPackages(s.Packages); err != nil {
 		return err
 	}
+	if _, err := CheckAssets(s.Assets); err != nil {
+		return err
+	}
 	return CheckProcesses(s.Processes)
 }
 
@@ -570,6 +581,12 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 			return Plan{}, fmt.Errorf("%s: assets: a static site's files are served as they are, with no server to keep old ones beside", ConfigFile)
 		}
 		p.Assets = fileAssets
+	}
+	if len(s.Assets) > 0 {
+		if p.Kind == Static {
+			return Plan{}, errors.New("assets: a static site's files are served as they are, with no server to keep old ones beside")
+		}
+		p.Assets, _ = CheckAssets(s.Assets) // the person's, in place of the file's (checked with the settings)
 	}
 	p.Headers = cfg.Headers
 	if len(s.Headers) > 0 {

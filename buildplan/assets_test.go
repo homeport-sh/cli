@@ -178,3 +178,31 @@ func TestHomeportYAMLsAssetsAreTheApps(t *testing.T) {
 		t.Errorf("a static site: %v", err)
 	}
 }
+
+// The build settings' assets (the dashboard's) replace homeport.yaml's and
+// the detected ones, checked as the file's are; a deploy's replace the
+// saved ones when it has any.
+func TestTheBuildSettingsAssetsAreTheApps(t *testing.T) {
+	files := js(`{"scripts":{"build":"vite build","start":"node server.js"},"dependencies":{"express":"^5","vite":"^7"}}`, "bun.lock", "{}",
+		"server.js", "app.listen()\n", "homeport.yaml", "assets:\n  - from: public/dist\n    at: /dist\n")
+	p := detect(t, files, buildplan.Settings{Assets: []buildplan.PlanAsset{{From: "./out/assets/", At: "/assets/"}}})
+	if want := []buildplan.PlanAsset{{From: "out/assets", At: "/assets"}}; !reflect.DeepEqual(p.Assets, want) {
+		t.Errorf("the settings': %+v", p.Assets)
+	}
+	if err := (buildplan.Settings{Assets: []buildplan.PlanAsset{{From: "../x", At: "/x"}}}).Check(); err == nil || !strings.Contains(err.Error(), "assets") {
+		t.Errorf("one outside the app: %v", err)
+	}
+	if (buildplan.Settings{Assets: []buildplan.PlanAsset{{From: "a", At: "/a"}}}).IsZero() {
+		t.Error("settings with assets are zero")
+	}
+	saved := buildplan.Settings{Assets: []buildplan.PlanAsset{{From: "a", At: "/a"}}}
+	if got := saved.With(buildplan.Settings{}).Assets; !reflect.DeepEqual(got, saved.Assets) {
+		t.Errorf("a deploy without any: %+v", got)
+	}
+	if got := saved.With(buildplan.Settings{Assets: []buildplan.PlanAsset{{From: "b", At: "/b"}}}).Assets; !reflect.DeepEqual(got, []buildplan.PlanAsset{{From: "b", At: "/b"}}) {
+		t.Errorf("a deploy's: %+v", got)
+	}
+	if b, _ := json.Marshal(saved); !strings.Contains(string(b), `"assets":[{"from":"a","at":"/a"}]`) {
+		t.Errorf("json: %s", b)
+	}
+}
