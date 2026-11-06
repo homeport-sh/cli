@@ -238,7 +238,7 @@ func TestAPHPAppShipsAsABundle(t *testing.T) {
 	// on the base with the static FrankenPHP and Bun 1.4.4, pinned by
 	// digest, whose bundles' opcache skips timestamp checks and keeps its
 	// compiled scripts across wakes; homeport's php.ini survives an app's own
-	if p.Image != "ghcr.io/homeport-sh/frankenphp:8.5-1.13.4-bun1.4.4@sha256:51160bc21fe13dc62291fb7d13f036c61b97afddfb964134616cd53c78e536c1" {
+	if p.Image != "ghcr.io/homeport-sh/frankenphp:8.5-1.13.5-bun1.4.4@sha256:06172101e86cbdac22a0a074488d1e8fce152340c5fcaf6172abaefdd2628a43" {
 		t.Fatalf("image: %s", p.Image)
 	}
 	if b, _ := json.Marshal(p); !strings.Contains(string(b), `"kind":"bundle"`) {
