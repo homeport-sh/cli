@@ -1,6 +1,7 @@
 package buildplan
 
 import (
+	"fmt"
 	"path"
 	"regexp"
 	"slices"
@@ -38,23 +39,51 @@ var (
 	staticURLRe  = regexp.MustCompile(`(?m)^STATIC_URL\s*=\s*['"]([^'"]*)['"]`)
 )
 
+// assetsMax is homeportd's PlanAssetsMax: a plan with more is refused.
+const assetsMax = 8
+
 // planAssets is the entries of from, at pairs, each cleaned, leaving out
 // one the builder wouldn't take; nil without any.
 func planAssets(pairs ...string) []PlanAsset {
 	var out []PlanAsset
 	for i := 0; i+1 < len(pairs); i += 2 {
-		from, at := pairs[i], pairs[i+1]
-		if !relPath(from) || strings.HasPrefix(from, "/") {
-			continue
+		if a, ok := asset(pairs[i], pairs[i+1]); ok {
+			out = append(out, a)
 		}
-		from, at = clean(from), path.Clean("/"+at)
-		if !assetFromRe.MatchString(from) || slices.Contains(strings.Split(from, "/"), "..") || from == ".homeport" || strings.HasPrefix(from, ".homeport/") ||
-			!assetAtRe.MatchString(at) {
-			continue
-		}
-		out = append(out, PlanAsset{From: from, At: at})
 	}
 	return out
+}
+
+// asset is from and at cleaned, and whether the builder takes them: a
+// plain folder of the app's (not homeport's own), a plain URL path below /.
+func asset(from, at string) (PlanAsset, bool) {
+	if strings.HasPrefix(from, "/") {
+		return PlanAsset{}, false
+	}
+	from, at = clean(from), path.Clean("/"+at)
+	if !relPath(from) || from == "." || !assetFromRe.MatchString(from) || slices.Contains(strings.Split(from, "/"), "..") || from == ".homeport" || strings.HasPrefix(from, ".homeport/") ||
+		!assetAtRe.MatchString(at) {
+		return PlanAsset{}, false
+	}
+	return PlanAsset{From: from, At: at}, true
+}
+
+// CheckAssets is homeport.yaml's assets cleaned, or what's wrong with one:
+// each a folder of the app's and the URL path (from /) it's served at, at
+// most assetsMax.
+func CheckAssets(as []PlanAsset) ([]PlanAsset, error) {
+	if len(as) > assetsMax {
+		return nil, fmt.Errorf("assets: at most %d", assetsMax)
+	}
+	out := make([]PlanAsset, 0, len(as))
+	for _, a := range as {
+		c, ok := asset(a.From, a.At)
+		if !ok || !strings.HasPrefix(a.At, "/") {
+			return nil, fmt.Errorf("assets: {from: %q, at: %q}: from is a folder in the app's (no .., not .homeport), at the URL path below / it's served at", a.From, a.At)
+		}
+		out = append(out, c)
+	}
+	return out, nil
 }
 
 // frameworkAssets: the fingerprinted files of the framework's build (pr's),

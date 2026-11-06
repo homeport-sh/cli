@@ -780,6 +780,28 @@ or not the app starts with a command of its own, and whether or not the
 bundle has a tree of prerendered files. A folder the build didn't make is
 skipped.
 
+An app whose framework has no folder the build knows (Express, Hono, Go,
+Flask), or that builds its files somewhere else, names them in
+`homeport.yaml`. Its list replaces the detected one:
+
+```yaml
+assets:
+  - from: public/dist/assets   # a folder in the app's folder, after the build
+    at: /assets                # the URL path it's served at
+```
+
+Each `from` is a plain folder in the app's folder (no `..`, not
+`.homeport`), and each `at` a URL path from `/`, at most eight entries. Name
+only fingerprinted files, whose names change when their content does: an
+old copy is served only for a file the new release doesn't have. A static
+site can't have any: its files are served as they are, with no server to
+keep old ones beside.
+
+Old files are served only when the app answers 404. An app with a
+catch-all route that answers 200 for every path (Laravel's
+`Route::fallback`, a SvelteKit `[...rest]` route) answers an old file's
+request itself.
+
 ## Your visitor's IP
 
 Every request reaches your app through homeport's proxy, so the socket's

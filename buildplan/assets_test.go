@@ -127,3 +127,54 @@ func TestEveryFrameworksFingerprintedFilesAreNamed(t *testing.T) {
 		}
 	}
 }
+
+// homeport.yaml's assets name the fingerprinted files of an app whose
+// framework has no folder the build knows (Express, Go, Flask), or another
+// folder than the detected one: they replace what's detected.
+func TestHomeportYAMLsAssetsAreTheApps(t *testing.T) {
+	const expressPkg = `{"scripts":{"build":"vite build","start":"node server.js"},"dependencies":{"express":"^5","vite":"^7"}}`
+	yml := func(body string) map[string]string {
+		return js(expressPkg, "bun.lock", "{}", "server.js", "app.listen()\n", "homeport.yaml", body)
+	}
+	for name, c := range map[string]struct {
+		files map[string]string
+		want  []buildplan.PlanAsset
+	}{
+		"Express": {yml("assets:\n  - from: public/dist/assets\n    at: /assets\n  - from: ./static/\n    at: /static/\n"),
+			[]buildplan.PlanAsset{{From: "public/dist/assets", At: "/assets"}, {From: "static", At: "/static"}}},
+		"Next.js, another folder than the detected one": {js(`{"scripts":{"build":"next build"},"dependencies":{"next":"16"}}`,
+			"homeport.yaml", "assets:\n  - from: build/hashed\n    at: /hashed\n"),
+			[]buildplan.PlanAsset{{From: "build/hashed", At: "/hashed"}}},
+		"Go": {map[string]string{"go.mod": "module example.com/app\n\ngo 1.27\n", "main.go": "package main\n",
+			"homeport.yaml": "assets:\n  - from: web/dist\n    at: /dist\n"},
+			[]buildplan.PlanAsset{{From: "web/dist", At: "/dist"}}},
+	} {
+		p := detect(t, c.files, buildplan.Settings{})
+		if !reflect.DeepEqual(p.Assets, c.want) {
+			t.Errorf("%s: %+v", name, p.Assets)
+		}
+	}
+
+	// one the builder wouldn't take is said, not left out
+	for name, body := range map[string]string{
+		"outside the app":         "assets:\n  - from: ../shared\n    at: /shared\n",
+		"an absolute folder":      "assets:\n  - from: /srv/assets\n    at: /assets\n",
+		"homeport's own":          "assets:\n  - from: .homeport/x\n    at: /x\n",
+		"a URL path that isn't":   "assets:\n  - from: dist\n    at: assets\n",
+		"the site's root":         "assets:\n  - from: dist\n    at: /\n",
+		"without a folder":        "assets:\n  - at: /assets\n",
+		"the whole app":           "assets:\n  - from: .\n    at: /x\n",
+		"a space":                 "assets:\n  - from: my assets\n    at: /assets\n",
+		"more than the builder's": "assets:\n" + strings.Repeat("  - from: a\n    at: /a\n", 9),
+	} {
+		if _, err := buildplan.Detect(repo(yml(body)), buildplan.Settings{}); err == nil || !strings.Contains(err.Error(), "homeport.yaml: assets") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// a static site's files are served as they are: nothing to keep beside a server
+	site := map[string]string{"package.json": `{"scripts":{"build":"vite build"},"devDependencies":{"vite":"^7"}}`, "bun.lock": "{}",
+		"homeport.yaml": "assets:\n  - from: dist/assets\n    at: /assets\n"}
+	if _, err := buildplan.Detect(repo(site), buildplan.Settings{}); err == nil || !strings.Contains(err.Error(), "static site") {
+		t.Errorf("a static site: %v", err)
+	}
+}

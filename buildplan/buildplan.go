@@ -326,6 +326,7 @@ type fileConfig struct {
 	Packages  []string                 `yaml:"packages"`
 	Headers   []HeaderRule             `yaml:"headers"`
 	Queue     *queueConfig             `yaml:"queue"`
+	Assets    []PlanAsset              `yaml:"assets"` // in place of the detected ones (CheckAssets)
 }
 
 type processConfig struct {
@@ -465,6 +466,10 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	if err := CheckHeaders(cfg.Headers); err != nil {
 		return Plan{}, fmt.Errorf("%s: %w", ConfigFile, err)
 	}
+	fileAssets, err := CheckAssets(cfg.Assets)
+	if err != nil {
+		return Plan{}, fmt.Errorf("%s: %w", ConfigFile, err)
+	}
 	if err := checkFileHealth(cfg.Health); err != nil {
 		return Plan{}, err
 	}
@@ -559,6 +564,12 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	}
 	if s.StopGrace != "" {
 		p.StopGrace = s.StopGrace
+	}
+	if cfg.Assets != nil {
+		if p.Kind == Static {
+			return Plan{}, fmt.Errorf("%s: assets: a static site's files are served as they are, with no server to keep old ones beside", ConfigFile)
+		}
+		p.Assets = fileAssets
 	}
 	p.Headers = cfg.Headers
 	if len(s.Headers) > 0 {
@@ -795,8 +806,8 @@ func (r reader) rscKit(p *Plan, cfg fileConfig) {
 // PlanAsset is a folder of fingerprinted files the build makes, in the
 // app's folder (From), and the URL path they're served at (At).
 type PlanAsset struct {
-	From string `json:"from"`
-	At   string `json:"at"`
+	From string `json:"from" yaml:"from"`
+	At   string `json:"at" yaml:"at"`
 }
 
 // servers are packages that mean the app runs a server, not a site.
