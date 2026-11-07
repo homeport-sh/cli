@@ -97,6 +97,8 @@ func (a *app) run(args []string) int {
 		err = a.domains(ctx, rest)
 	case "queue":
 		err = a.queue(ctx, rest)
+	case "dev":
+		err = a.dev(ctx, rest)
 	case "build-plan":
 		err = cmdBuildPlan(rest)
 	case "mcp":

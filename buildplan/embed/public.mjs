@@ -17,10 +17,15 @@
 //   bin public.mjs next <standalone app folder> <marker>
 //   bin public.mjs react-router <server build> <marker>
 //   bin public.mjs remix <server build> <marker>
+//   bin public.mjs site <site folder> <marker> <immutable>
 //
 // Next.js, react-router-serve and remix-serve: their content-hashed assets
 // alone (immutable/), which their servers answer from files with the same
 // year-long immutable Cache-Control.
+//
+// The site: the frontend an api/ folder's server keeps (api-server.mjs),
+// which it answers as a static site's host does - <immutable> is the URL
+// paths cached a year, the static site's rule (buildplan.StaticImmutableRe).
 //
 // <marker> is the app's .output/edge.json (the edge contract, v2), written
 // from the same tree for the edge to keep its pages: "static" lists the
@@ -355,6 +360,27 @@ function reactRouter(server) {
 	return t;
 }
 
+// site: the frontend of an api/ folder's server, which answers a URL with
+// its file, else its .html, else its folder's index.html - in that order,
+// as a static site's host does - and nothing under /api (the handlers')
+function site(dir, immutable) {
+	if (!isDir(dir)) throw new Error("no site at " + dir);
+	const re = new RegExp(immutable);
+	const t = new Tree("/.well-known/");
+	const files = walk(dir).filter((f) => !f.startsWith("api/")).sort();
+	const put = (u, f) => t.put(u, path.join(dir, f), re.test(u));
+	for (const f of files) put("/" + f, f);
+	const index = (f) => f === "index.html" || f.endsWith("/index.html");
+	for (const f of files) if (f.endsWith(".html") && !index(f)) put("/" + f.slice(0, -".html".length), f);
+	for (const f of files) {
+		if (!index(f)) continue;
+		const d = f.slice(0, -"index.html".length); // "" or "x/"
+		put("/" + d, f);
+		if (d) put("/" + d.slice(0, -1), f);
+	}
+	return t;
+}
+
 // jsonAt: the JSON value starting at i in s
 function jsonAt(s, i) {
 	if (s[i] !== "{") return null;
@@ -399,12 +425,12 @@ function edgeMarker(t, marker) {
 	return { listed: m.static.length, of: pages.length };
 }
 
-const [kind, dir, marker] = process.argv.slice(2);
-const servers = { sveltekit: "adapter-node", astro: "Astro's node adapter", next: "Next.js standalone", "react-router": "react-router-serve", remix: "remix-serve" };
+const [kind, dir, marker, immutable] = process.argv.slice(2);
+const servers = { sveltekit: "adapter-node", astro: "Astro's node adapter", next: "Next.js standalone", "react-router": "react-router-serve", remix: "remix-serve", site: "the API server" };
 let wrote = false;
 try {
-	const kinds = { sveltekit, astro, next, "react-router": reactRouter, remix: reactRouter };
-	const t = Object.hasOwn(kinds, kind) ? kinds[kind](dir) : null;
+	const kinds = { sveltekit, astro, next, "react-router": reactRouter, remix: reactRouter, site };
+	const t = Object.hasOwn(kinds, kind) ? kinds[kind](dir, immutable) : null;
 	if (!t) throw new Error("no framework " + kind);
 	const n = t.write();
 	const e = edgeMarker(t, marker);

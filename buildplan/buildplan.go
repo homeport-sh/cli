@@ -88,13 +88,16 @@ type Settings struct {
 	// (CheckAssets), replacing homeport.yaml's and the detected ones when
 	// there are any
 	Assets []PlanAsset `json:"assets,omitempty"`
+	// API: false leaves an api/ folder alone (api.go); nil is "build its
+	// handlers when it has some"
+	API *bool `json:"api,omitempty"`
 }
 
 // IsZero says whether nothing is set.
 func (s Settings) IsZero() bool {
 	return s.Root == "" && s.Kind == "" && s.Install == "" && s.Command == "" && s.Output == "" &&
 		s.Run == "" && len(s.Release) == 0 && !s.NoRelease && s.StopGrace == "" && len(s.Processes) == 0 && s.Octane == nil && s.Runtime == "" &&
-		s.Python == "" && len(s.Packages) == 0 && len(s.Headers) == 0 && len(s.Assets) == 0
+		s.Python == "" && len(s.Packages) == 0 && len(s.Headers) == 0 && len(s.Assets) == 0 && s.API == nil
 }
 
 // With is s with what o sets in its place: one deploy's settings over the
@@ -135,6 +138,11 @@ func (s Settings) With(o Settings) Settings {
 	if o.Octane != nil {
 		v := *o.Octane
 		out.Octane = &v
+	}
+	out.API = s.API
+	if o.API != nil {
+		v := *o.API
+		out.API = &v
 	}
 	return out
 }
@@ -231,6 +239,9 @@ type Plan struct {
 	// Queue: the app's background jobs, detected or homeport.yaml's
 	// (queue.go); nil when it has none
 	Queue *Queue `json:"queue,omitempty"`
+	// API: the api/ folder's handlers, built into the app's server
+	// (api.go); nil when it has none, or is left alone
+	API *PlanAPI `json:"api,omitempty"`
 
 	// a bundle's build, and what makes the bundle from what it left
 	// (Command is both): a build command someone sets replaces the first;
@@ -305,13 +316,14 @@ const LaravelCaches = "php artisan event:cache && php artisan route:cache" +
 var SiteFolders = []string{"build", "dist", "out"}
 
 // Files are the files Detect reads, relative to the app's folder: a control
-// plane fetches just these to show what a build will do. Not a Laravel
+// plane fetches just these to show what a build will do, and an api/
+// folder's (APIFiles). Not a Laravel
 // app's app/ and database/migrations, which its queue's detection scans
 // (queue.go): the builder's plan says what that found.
 func Files() []string {
 	return slices.Concat([]string{ConfigFile, "go.mod", "composer.json", "composer.lock", "package.json", "bun.lock", "bun.lockb",
 		"package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", ".nvmrc", ".node-version", ".bun-version", "index.html",
-		"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"}, svelteConfigs, nextConfigs, nuxtConfigs, nitroConfigs, releaseFiles(), pythonFiles(), rustFiles(), queueFiles())
+		"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"}, svelteConfigs, nextConfigs, nuxtConfigs, nitroConfigs, releaseFiles(), pythonFiles(), rustFiles(), queueFiles(), apiForeign)
 }
 
 var (
@@ -341,6 +353,7 @@ type fileConfig struct {
 	Headers   []HeaderRule             `yaml:"headers"`
 	Queue     *queueConfig             `yaml:"queue"`
 	Assets    []PlanAsset              `yaml:"assets"` // in place of the detected ones (CheckAssets)
+	API       *bool                    `yaml:"api"`    // false: api/ is left alone
 }
 
 type processConfig struct {
@@ -465,6 +478,7 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	if member == nil && r.root == "." {
 		suggest = r.saidMember(s.Output)
 	}
+	r.wsRoot = member != nil || suggest != ""
 	var cfg fileConfig
 	if b, err := r.read(ConfigFile); err == nil {
 		if err := yaml.Unmarshal(b, &cfg); err != nil {
@@ -496,6 +510,9 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	}
 	if s.Root != "" || member != nil {
 		p.Root = r.root
+	}
+	if p.Toolchain == "node" || p.Toolchain == "bun" || p.Toolchain == "none" {
+		p.Warnings = append(p.Warnings, r.apiWarnings(&p, cfg, s)...)
 	}
 	if member != nil {
 		p.Warnings = append(p.Warnings, member.why+": set the root directory to build another")
@@ -792,24 +809,42 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 			return Plan{}, err
 		}
 	case r.exists("package.json") && (r.hasLockfile() || r.ws != nil):
-		runtime, from := s.Runtime, "the build settings"
-		if runtime == "" && cfg.Runtime != "" {
-			runtime, from = cfg.Runtime, ConfigFile
-		}
-		if err := r.js(&p, cfg, runtime, from, s.Run); err != nil {
+		runtime, from := saidRuntime(cfg, s)
+		if err := r.js(&p, cfg, s, runtime, from); err != nil {
 			return Plan{}, err
 		}
 	case r.exists("package.json") && !r.exists("index.html"):
+		// handlers, with nothing to install: nothing to lock (api.go)
+		if len(r.deps()) == 0 {
+			if ok, err := r.apiOnly(&p, cfg, s); ok || err != nil {
+				return p, err
+			}
+		}
 		return Plan{}, errors.New("package.json without a lockfile: commit the lockfile (package-lock.json, pnpm-lock.yaml, yarn.lock or bun.lock), so the build installs what you tested")
 	case r.exists("index.html"):
-		// plain HTML: nothing to build, the folder is the site
+		// plain HTML: nothing to build, the folder is the site - and the
+		// server of its api/ folder's handlers, when there are some
 		p.Toolchain, p.Framework, p.Kind, p.Artifact, p.StaticFallback = "none", "HTML", Static, ".", false
 		if cfg.Static != "" {
 			p.Artifact = clean(cfg.Static)
 		}
+		if !r.exists("package.json") || len(r.deps()) == 0 {
+			a, err := r.apiAt(cfg, s, ".")
+			if err != nil {
+				return Plan{}, err
+			}
+			if a != nil {
+				rt, from := saidRuntime(cfg, s)
+				return p, r.apiApp(&p, a, cfg, ".", "", rt, from)
+			}
+		}
 	case r.exists("Cargo.toml") && !r.exists("package.json"):
 		return Plan{}, errors.New(r.rustNotAnApp())
 	default:
+		// api/ alone: the app is its handlers (api.go)
+		if ok, err := r.apiOnly(&p, cfg, s); ok || err != nil {
+			return p, err
+		}
 		return Plan{}, errors.New("can't tell how to build this app: no go.mod, composer.json, Cargo.toml, bun or npm lockfile, pyproject.toml, requirements.txt or index.html in its folder - " +
 			"set the build and output in the app's build settings")
 	}
@@ -890,6 +925,9 @@ type reader struct {
 	// script is the app's build script, when its workspace's root runs
 	// another (workspace.go): "" is build
 	script string
+	// wsRoot: the app is a workspace's root, or a member it picked, with
+	// no root directory set: its api/ folder is left alone (api.go)
+	wsRoot bool
 }
 
 // buildScript is the package.json script that builds the app.

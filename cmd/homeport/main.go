@@ -89,6 +89,10 @@ func (a *app) usage() {
                       every change is asked of you through the editor
                       [--allow-changes] makes changes with nobody asked -
                       production included; only for an editor that can't ask
+  homeport dev        serves this folder's api/ handlers on :3000, as a
+                      deploy builds them, reloading as they change; prints
+                      the line that sends the frontend's /api to it
+                      [--port 3000]
   homeport build-plan [--settings file.json] [dir]
                       what a hosted build runs for this repository (JSON):
                       detected without a homeport.yaml, or from one
