@@ -90,6 +90,9 @@ type fakeAPI struct {
 	queue         *cloud.Queue         // an app's queue (nil: it has none)
 	queueBusy     bool                 // a drain is running: Drain now is refused
 	queueCalls    []string             // each Queue API call: method and what follows /queue
+	logPages      []cloud.Logs         // runtime logs, read by read (nil: one line, panic: boom)
+	logReads      []string             // each logs read: the app and the cursor it sent
+	logRefuse     *cloud.Error         // a logs read's answer, when it's refused
 	rollbacks     []struct {
 		Deploy     string `json:"deploy"`
 		RunRelease bool   `json:"run_release"`
@@ -392,7 +395,7 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 	case strings.Contains(p, "/queue"):
 		f.serveQueue(w, r)
 	case strings.HasSuffix(p, "/logs"):
-		f.write(w, 200, map[string]any{"Cursor": "c2", "Lines": []map[string]any{{"Time": "2026-10-08T12:00:00Z", "Level": "error", "Message": "panic: boom", "Process": "web"}}})
+		f.serveLogs(w, r)
 	case strings.Contains(p, "/custom-domains/") && strings.HasSuffix(p, "/proxy"):
 		f.serveProxy(w, r)
 	case strings.HasSuffix(p, "/custom-domains"):
@@ -442,6 +445,24 @@ func (f *fakeAPI) serveQueue(w http.ResponseWriter, r *http.Request) {
 	default:
 		f.t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
 		w.WriteHeader(404)
+	}
+}
+
+// serveLogs is an environment's runtime logs: logPages, a page a read,
+// then nothing new (the cursor sent back).
+func (f *fakeAPI) serveLogs(w http.ResponseWriter, r *http.Request) {
+	app := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/cli/teams/"+team1+"/apps/"), "/logs")
+	cursor := r.URL.Query().Get("cursor")
+	f.logReads = append(f.logReads, app+" "+cursor)
+	switch {
+	case f.logRefuse != nil:
+		f.write(w, f.logRefuse.Status, map[string]string{"error": f.logRefuse.Message})
+	case f.logPages == nil:
+		f.write(w, 200, map[string]any{"Cursor": "c2", "Lines": []map[string]any{{"Time": "2026-10-08T12:00:00Z", "Level": "error", "Message": "panic: boom", "Process": "web"}}})
+	case len(f.logReads) <= len(f.logPages):
+		f.write(w, 200, f.logPages[len(f.logReads)-1])
+	default:
+		f.write(w, 200, cloud.Logs{Cursor: cursor, Lines: []cloud.LogLine{}})
 	}
 }
 

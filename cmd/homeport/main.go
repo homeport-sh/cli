@@ -45,6 +45,11 @@ func (a *app) usage() {
                       build, as the dashboard's Roll back to this; asks
                       first [--yes] [--run-release] [--env <name>]
                       [--detach] [--timeout 30m]
+  homeport logs       an environment's runtime logs (what the app printed):
+                      its newest lines; --follow (-f) keeps reading
+                      what's new until Ctrl-C
+                      [--process <name>] [--errors]
+                      [--env <name>] [--team <slug> --app <name>]
   homeport env set    sets an environment's variables: NAME=value…, or a
                       file variable (a certificate, a key, any multi-line
                       or binary value) the app reads at /run/secrets/NAME:

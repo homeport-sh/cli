@@ -19,6 +19,7 @@ homeport deploy     # upload the working tree, build it, follow it live
 | `homeport deploy` | upload the working tree, build and release it, follow it until it's live; in a folder nothing links, its app is created first, asked first (`--yes`) |
 | `homeport token create --name <where>` | a team API token for CI (`HOMEPORT_TOKEN`), printed once: limited to one environment - this folder's link's, or `--team`, `--app`, `--env` - with every app permission there. Team owners only |
 | `homeport rollback [<deploy\|commit>]` | lists the earlier releases you can roll back to; with one, ships its build again without building (asks first; `--yes`, `--run-release`) |
+| `homeport logs` | an environment's runtime logs (what the app printed): its newest lines, up to 500; `-f`/`--follow` keeps reading what's new every 2s until Ctrl-C. `--process <name>` (`web`, or a process by name) and `--errors` narrow what's printed, as the dashboard's panel does (`--env`, `--team`, `--app`) |
 | `homeport env set NAME=value…` | sets an environment's variables; the app restarts to get them (`--env`, `--team`, `--app`) |
 | `homeport env set [NAME] --from-file <path>` | a file variable: a certificate, key or any multi-line or binary value, read at `/run/secrets/NAME` |
 | `homeport env unset NAME…` | removes variables, plain or file |
