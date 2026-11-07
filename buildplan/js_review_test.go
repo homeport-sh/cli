@@ -259,3 +259,27 @@ func TestAPackagesCommandRunsAsTheMainModule(t *testing.T) {
 		t.Fatalf("%s", p.Command)
 	}
 }
+
+// A repository whose app is in a folder below the root isn't "unknown": the
+// refusal names the folder to set as the app's folder. With nothing below
+// either, it names every kind of project file looked for.
+func TestAnAppInAFolderBelowTheRootIsNamed(t *testing.T) {
+	for name, c := range map[string]struct {
+		files map[string]string
+		says  []string
+	}{
+		"Next.js in web/": {map[string]string{"README.md": "x", "web/package.json": `{"dependencies":{"next":"16"}}`, "web/pnpm-lock.yaml": "x"},
+			[]string{`"web"`, "app's folder"}},
+		"Go in api/":     {map[string]string{"api/go.mod": "module x", "api/main.go": "package main"}, []string{`"api"`}},
+		"two candidates": {map[string]string{"web/package.json": "{}", "server/go.mod": "module x"}, []string{`"server"`, `"web"`}},
+		"nothing anywhere": {map[string]string{"README.md": "x", "docs/notes.md": "x"},
+			[]string{"package.json", "go.mod", "composer.json", "Cargo.toml", "pyproject.toml", "requirements.txt", "index.html"}},
+	} {
+		_, err := buildplan.Detect(repo(c.files), buildplan.Settings{})
+		for _, s := range c.says {
+			if err == nil || !strings.Contains(err.Error(), s) {
+				t.Errorf("%s: want %q in %v", name, s, err)
+			}
+		}
+	}
+}

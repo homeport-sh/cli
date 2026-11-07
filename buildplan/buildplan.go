@@ -810,8 +810,7 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 	case r.exists("Cargo.toml") && !r.exists("package.json"):
 		return Plan{}, errors.New(r.rustNotAnApp())
 	default:
-		return Plan{}, errors.New("can't tell how to build this app: no go.mod, composer.json, Cargo.toml, bun or npm lockfile, pyproject.toml, requirements.txt or index.html in its folder - " +
-			"set the build and output in the app's build settings")
+		return Plan{}, errors.New(r.unknown())
 	}
 	return p, nil
 }
@@ -893,6 +892,33 @@ type reader struct {
 }
 
 // buildScript is the package.json script that builds the app.
+// projectFiles: what tells an app apart, any one of them in its folder
+var projectFiles = []string{"package.json", "go.mod", "composer.json", "Cargo.toml", "pyproject.toml", "requirements.txt", "index.html"}
+
+// unknown is why a folder with no project in it can't be built: the
+// folders just below it that hold one, to set as the app's folder, when
+// there are any (the app is in web/ of its repository), else what was
+// looked for.
+func (r reader) unknown() string {
+	var below []string
+	entries, _ := fs.ReadDir(r.fsys, cmpOr(r.root, "."))
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || e.Name() == "node_modules" {
+			continue
+		}
+		sub := reader{fsys: r.fsys, root: path.Join(r.root, e.Name())}
+		if slices.ContainsFunc(projectFiles, sub.exists) {
+			below = append(below, strconv.Quote(path.Join(r.root, e.Name())))
+		}
+	}
+	if len(below) > 0 {
+		return "can't tell how to build this app: its folder has no project, but " + strings.Join(below, ", ") +
+			" does - set it as the app's folder in the build settings"
+	}
+	return "can't tell how to build this app: no package.json, go.mod, composer.json, Cargo.toml, pyproject.toml, requirements.txt or index.html in its folder - " +
+		"set the app's folder, or the build and output, in the app's build settings"
+}
+
 func (r reader) buildScript() string { return cmpOr(r.script, "build") }
 
 func (r reader) name(n string) string { return path.Join(r.root, n) }
