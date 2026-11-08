@@ -120,7 +120,8 @@ func TestANextWorkspaceMembersStandaloneIsNested(t *testing.T) {
 	if !strings.HasSuffix(p.Run, " apps/web/server.js") || !strings.Contains(p.Command, "[ -f .next/standalone/apps/web/server.js ]") ||
 		!strings.Contains(p.Command, buildplan.BundleDir+"/apps/web/.next/static") ||
 		!strings.Contains(p.Command, "mkdir -p "+buildplan.BundleDir+"/apps/web/.next/cache && echo apps/web/.next/cache >> "+buildplan.BundleDir+"/.homeport/writable") ||
-		!strings.Contains(p.Command, "{ [ ! -d "+buildplan.BundleDir+"/apps/web/.next/server/app ] || echo apps/web/.next/server/app >> "+buildplan.BundleDir+"/.homeport/writable; }") {
+		!strings.Contains(p.Command, "{ [ ! -d "+buildplan.BundleDir+"/apps/web/.next/server/app ] || echo apps/web/.next/server/app >> "+buildplan.BundleDir+"/.homeport/writable; }") ||
+		!strings.Contains(p.Command, "mkdir -p "+buildplan.BundleDir+"/apps/web/.next/server/route-cache && echo apps/web/.next/server/route-cache >> "+buildplan.BundleDir+"/.homeport/writable") {
 		t.Errorf("run: %s\ncommand: %s", p.Run, p.Command)
 	}
 }

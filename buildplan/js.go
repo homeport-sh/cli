@@ -1386,6 +1386,9 @@ func assemble(layout string, m pm, rt, bin string, sums map[string]string, binNa
 		for _, d := range []string{".next/server/app", ".next/server/pages"} {
 			steps = append(steps, "{ [ ! -d "+b+at+"/"+d+" ] || echo "+strings.TrimPrefix(at+"/", "/")+d+" >> "+b+"/.homeport/writable; }")
 		}
+		// and the one Next.js 16.4 writes every revalidated response to
+		// (its ROUTE_CACHE_DIRECTORY), which no build makes: made, empty
+		steps = append(steps, "mkdir -p "+b+at+"/.next/server/route-cache && echo "+strings.TrimPrefix(at+"/", "/")+".next/server/route-cache >> "+b+"/.homeport/writable")
 	case "output":
 		steps = append(steps,
 			`{ [ -f .output/server/index.mjs ] || { echo 'homeport: the build made no .output/server/index.mjs' >&2; exit 1; }; }`,
