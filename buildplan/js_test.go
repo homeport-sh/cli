@@ -361,6 +361,12 @@ func TestNextJSShipsItsStandaloneOutput(t *testing.T) {
 			t.Fatalf("%s not writable: %s", d, p.Command)
 		}
 	}
+	// and the one Next 16.4 writes every revalidated response to
+	// (.next/server/route-cache, its ROUTE_CACHE_DIRECTORY), which no build
+	// makes: clinicq-website's ISR failed on each revalidation with ENOENT
+	if !strings.Contains(p.Command, "mkdir -p "+b+"/.next/server/route-cache && echo .next/server/route-cache >> "+b+"/.homeport/writable") {
+		t.Fatalf("route-cache not writable: %s", p.Command)
+	}
 	p = detect(t, js(pkg, "next.config.js", "module.exports = { output: 'standalone' }\n"), buildplan.Settings{})
 	if strings.Contains(p.Command, "NEXT_PRIVATE_STANDALONE") {
 		t.Fatalf("set: %s", p.Command)
