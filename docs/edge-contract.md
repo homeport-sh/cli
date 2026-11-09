@@ -15,7 +15,9 @@ Two kinds of page can be served this way:
   **shell**, and parts rendered per request, the **holes**. The edge sends
   the shell the moment a visitor asks, then asks the app to **resume** the
   page: to render only the holes, which the edge streams in behind the
-  shell.
+  shell. A shell whose Content-Security-Policy allows scripts by a nonce
+  is a **nonce shell**: the edge puts a new nonce in each response's policy
+  and hands it to the resume.
 
 The contract names no platform. homeport's edge implements it, and any
 platform can. This page is the whole contract: a framework that does what
@@ -68,7 +70,7 @@ revision of v2 can add optional fields without breaking older edges.
 ### `build`
 
 The build's id. 1-128 bytes of `[A-Za-z0-9._-]`. It may be `""` only when
-both `shells` and `static` are empty.
+`shells`, `nonceShells` and `static` are all empty.
 
 **It must change whenever any listed page, or any shell's state, can
 change.** That includes a change only to server code, if that code changes
@@ -103,6 +105,23 @@ The paths whose page the edge may answer from a shell, then a resume.
   `/docs/a` and `/docs/b` may have different shells.
 - At most 200 entries, each at most 200 bytes, no duplicates.
 
+### `nonceShells`
+
+The paths whose page the edge may answer from a shell, then a resume, with
+a new script nonce in each response's Content-Security-Policy. List here,
+not in `shells`, a page whose policy allows its scripts (or styles) by a
+nonce: such a page has no shell the same for every visitor until the edge
+supplies the nonce (sections 4 and 5).
+
+- **The rules of `shells`:** patterns allowed, at most 200 entries (separate
+  from `shells`' and `static`'s 200), each at most 200 bytes, no
+  duplicates.
+- **A path is in at most one** of `shells`, `nonceShells` and `static`.
+- **Optional:** a missing `nonceShells` is an empty list. Never `null`.
+- **An edge that doesn't mint nonces ignores it** and sends these paths to
+  the app, which renders them with its own nonce, as with no edge. So a
+  framework may write it whatever edge it runs behind.
+
 ### `static`
 
 The paths whose whole document the edge may serve. The rules of `shells`
@@ -112,7 +131,8 @@ apply, with two more:
   document per path; a pattern would ask the edge to fetch paths the build
   never rendered. A static page with a parameter is listed as each of its
   prerendered paths.
-- **Never also in `shells`.** A path in both lists fails the marker.
+- **Never also in `shells` or `nonceShells`.** A path in two lists fails
+  the marker.
 
 At most 200 entries, each at most 200 bytes, no duplicates (separate from
 `shells`' 200). Optional: a missing `static` is an empty list.
@@ -137,7 +157,7 @@ listed path.
 Over a limit, leave paths out (keep the shallowest) and say so in the build
 output. Leaving a path out is always safe: the page is served by the app as
 usual. A marker that breaks a rule above (bad JSON, a bad path, a
-duplicate, a path in both lists, too many entries) fails the deploy, with
+duplicate, a path in two lists, too many entries) fails the deploy, with
 the reason.
 
 **When a list comes out empty, say why in the build output.** A catch-all
@@ -224,6 +244,12 @@ carries **no cookies** and nothing from a visitor. The edge allows it 5
 seconds and does not follow redirects. It may add `If-None-Match`
 (below).
 
+**`Edge-Accept`** lists what the edge can do with the answer: a
+comma-separated list of capabilities, matched case-insensitively, unknown
+ones ignored. v2 defines one, `nonce` (below). An edge that mints nonces
+sends `Edge-Accept: nonce` on every request for a `nonceShells` path,
+revalidations included.
+
 ### 200: a shell
 
 For a path listed in `shells`, or matched by one of its patterns:
@@ -248,6 +274,30 @@ ETag: "…"            (optional, see below)
 - **`build`:** equals the marker's `build`, as does `Edge-Build`.
 - **`complete`:** omitted, or `false`.
 - **`headers`:** optional, as for a static page below.
+
+### 200: a nonce shell
+
+For a path listed in `nonceShells`, or matched by one of its patterns,
+**when the request carries `Edge-Accept: nonce`:** a shell as above, plus
+
+```json
+{ "v": 2, "build": "…", "html": "<!DOCTYPE html>…", "state": "…", "nonce": "{edge-nonce}",
+  "headers": { "Content-Security-Policy": "script-src 'nonce-{edge-nonce}' 'strict-dynamic'; …" } }
+```
+
+- **`nonce`:** always the literal `{edge-nonce}`, the placeholder. v2
+  defines no other value.
+- **The placeholder appears only in the values of
+  `Content-Security-Policy`, `Content-Security-Policy-Report-Only` or
+  both,** at least once (typically as `'nonce-{edge-nonce}'`). Never in
+  `html`, `state` or any other header: a script or style in the shell
+  itself is allowed by a hash, not by the nonce.
+- **Never `complete`.**
+- **Without `Edge-Accept: nonce`, the path is 404,** as an unlisted one.
+
+An edge keeps nothing from an answer that breaks any of this, and the path
+goes to the app. An answer for a `shells` path or a static page carries no
+`nonce`; an edge rejects one that does.
 
 ### 200: a static page
 
@@ -274,7 +324,8 @@ what your server sends** on the page, and each fixed for the build. Only
 these names are allowed:
 
 `Content-Language`, `Link`, `Cache-Control`, `X-Robots-Tag`,
-`Content-Security-Policy`, `Permissions-Policy`, `Referrer-Policy`,
+`Content-Security-Policy`, `Content-Security-Policy-Report-Only`,
+`Permissions-Policy`, `Referrer-Policy`,
 `Strict-Transport-Security`, `X-Frame-Options`, `X-Content-Type-Options`,
 `Cross-Origin-Opener-Policy`, `Cross-Origin-Embedder-Policy`,
 `Cross-Origin-Resource-Policy`, `X-DNS-Prefetch-Control`.
@@ -300,11 +351,16 @@ documents must be UTF-8.
   304** with no body. The edge revalidates this way.
 - Answer 200 with the new page when it no longer matches, and 404 when the
   path is no longer one the edge may serve.
+- **On a nonce shell, the `ETag` is of the answer with its placeholder,**
+  never of a nonce, so it does not change per request; a 304 keeps the
+  edge's copy as it is. A revalidation carries `Edge-Accept: nonce` like
+  any other request for the path.
 
 ### 404
 
-For any path that is not listed here: not in either list, guarded, or not
-a page of this kind at this path. An edge forgets a path that answers 404,
+For any path that is not listed here: in no list, guarded, not a page of
+this kind at this path, or a `nonceShells` path asked without
+`Edge-Accept: nonce`. An edge forgets a path that answers 404,
 and doesn't ask for it again for some minutes. Any other status is an
 error: the edge keeps nothing and the visitor's request goes to the app.
 
@@ -327,6 +383,7 @@ Accept-Encoding: identity
 Content-Type: application/octet-stream
 Edge-Token: <EDGE_TOKEN>
 Edge-Build: <the shell's build>
+Edge-Nonce: <this response's nonce; nonce shells only>
 
 <the shell's state, raw; empty if it was "">
 ```
@@ -340,6 +397,13 @@ Edge-Build: <the shell's build>
 - **`Accept-Encoding: identity`.** The edge compresses the shell and the
   holes as one stream.
 - **`Edge-Build`:** the build of the shell the visitor already has.
+- **`Edge-Nonce`:** for a nonce shell only, the nonce the edge put in this
+  visitor's policy headers. **Render every script and style in the holes
+  with it.** The edge makes 16 bytes from a CSPRNG for each response
+  (`HEAD` included), encoded as standard base64 with padding: 24
+  characters, `[A-Za-z0-9+/]{22}==`. It never stores, logs or reuses one.
+  Accept base64 or base64url of at least 128 bits, bounded: 22-128
+  characters of `[A-Za-z0-9+/_-]`, then at most two `=`.
 
 ### 200: the holes
 
@@ -370,7 +434,11 @@ status from the resume can't reach the visitor; a `Set-Cookie` is dropped.
 That is why a page whose holes need any of these is guarded (section 2).
 
 A resume on a path that isn't a shell here (a static page included), or
-with a missing or wrong token, is a 404.
+with a missing or wrong token, is a 404. **A resume for a `nonceShells`
+path without a valid `Edge-Nonce` is a 400,** answered before rendering,
+and only for such a path; check the token and the path first. A 400 is a
+bug in the edge or the framework, never a visitor's doing: the page ends
+at the shell, and the edge drops that shell and reports it.
 
 A resume should be safe to send twice: if the connection to the app is
 reset or refused before any answer, the edge sends it once more.
@@ -400,8 +468,8 @@ the release changes, so its URL must change whenever its content does
 (a content hash in the name).
 
 **Fetched before the first visitor.** When a release goes live, the edge
-fetches each `static` path and each concrete `shells` path, and then the
-assets each document links with:
+fetches each `static` path and each concrete `shells` and `nonceShells`
+path, and then the assets each document links with:
 
 - `<script src="…">`
 - `<link rel="stylesheet" href="…">`
@@ -437,7 +505,8 @@ What a framework can rely on from an edge that speaks this contract.
 listed path:
 
 - method `GET` or `HEAD`;
-- the decoded path matches `static` or `shells` (a path whose encoded form
+- the decoded path matches `static`, `shells` or `nonceShells` (a path
+  whose encoded form
   contains an encoded `/`, `%2F`, never does);
 - `Accept` includes `text/html`;
 - no `Range`;
@@ -462,6 +531,14 @@ the headers alone and never wakes the app. If the resume fails (a non-200,
 another build, no first byte in time), the response ends cleanly at the
 shell, and on an error or another build the edge drops that shell and
 fetches it again.
+
+**A nonce shell** is served as a shell, with a new nonce in place of every
+`{edge-nonce}` in its `Content-Security-Policy` and
+`Content-Security-Policy-Report-Only` (the same nonce in both), and that
+nonce sent to the resume as `Edge-Nonce`. What the edge keeps is the
+answer with the placeholder. It adds no policy of its own and changes no
+other header. A response carrying a nonce is never cached: the shell goes
+out `private, no-store`.
 
 **One copy serves every hostname.** A page is fetched once through one of
 the app's own hostnames and served on all of them. That is why a page
@@ -491,7 +568,8 @@ its requests to the app.
 **Isolation.** A visitor's request for `/_edge/*` is answered 404 by the
 edge and never reaches the app, on a site with listed pages. Every request
 header starting with `Edge-` is removed from a visitor's request before it
-is proxied, so only the edge can send `Edge-Token` or `Edge-Build`. The
+is proxied, so only the edge can send `Edge-Token`, `Edge-Build`,
+`Edge-Accept` or `Edge-Nonce`. The
 token check in your endpoints is still required: on a site with nothing
 listed, a visitor's request for `/_edge/*` reaches the app.
 
@@ -506,6 +584,10 @@ to the app's answers. (On homeport, those are [`headers:`](headers.md).)
   is a new version.
 - Within v2, new fields are optional and ignored by those that don't know
   them. Don't rely on an edge reading a field this page doesn't list.
+- **Nonce shells** (`nonceShells`, `Edge-Accept`, `nonce`, `Edge-Nonce`)
+  are such an addition. A framework that doesn't write `nonceShells`, and
+  an edge that doesn't read it, behave exactly as before; an edge that
+  doesn't read it sends those paths to the app.
 - **v1** used `.output/ppr.json`, `/_ppr/shell`, `/_ppr/resume`,
   `PPR_TOKEN` and `PPR-*` headers, and had no `static`. It is retired: an
   edge that speaks v2 ignores a build that has only `ppr.json`, and serves
@@ -526,8 +608,8 @@ example app, run as it would be deployed with `EDGE_TOKEN` set.
 - [ ] `v` is 2; `build` is 1-128 bytes of `[A-Za-z0-9._-]` (or `""` with
       both lists empty).
 - [ ] Every path is absolute, decoded, at most 200 bytes; patterns only in
-      `shells`; at most 200 per list; no duplicates; no path in both
-      lists; at most 32 names per `bypass` list.
+      `shells` and `nonceShells`; at most 200 per list; no duplicates;
+      no path in two lists; at most 32 names per `bypass` list.
 - [ ] Rebuilding with only a server-rendered change to a listed page gives
       a new `build`.
 - [ ] A guarded page (under middleware, say) is in neither list, and an
@@ -555,6 +637,23 @@ pattern:
       served directly.
 - [ ] The holes render for the visitor's query (resume a URL with a query
       parameter the page prints).
+
+**Nonce shells**, for every concrete `nonceShells` path and a sample path
+for each pattern:
+
+- [ ] `/_edge/page` with `Edge-Accept: nonce` is 200, as a shell, with
+      `nonce: "{edge-nonce}"`, no `complete`, and the placeholder in
+      `Content-Security-Policy` or `Content-Security-Policy-Report-Only`
+      and nowhere else (not `html`, `state` or another header).
+- [ ] Without `Edge-Accept: nonce`, `/_edge/page` is 404.
+- [ ] With an `ETag`, `If-None-Match` with it (and `Edge-Accept: nonce`)
+      is 304.
+- [ ] The resume with a 24-character base64 `Edge-Nonce` is 200 as for a
+      shell, and every `<script>` in its body carries that nonce.
+- [ ] The resume without `Edge-Nonce`, or with an invalid one, is 400.
+- [ ] `html` plus the resume's body, with the placeholder replaced by the
+      nonce in the policy, is the page served directly (nonce aside).
+- [ ] Shells' and static pages' answers carry no `nonce`.
 
 **Static pages**, for every listed path:
 
