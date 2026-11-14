@@ -39,7 +39,7 @@ used, else `/`.
 | Files | Toolchain | Produces |
 |---|---|---|
 | `go.mod` | Go (`golang:<go.mod's version>`) | a binary |
-| `composer.json` + `composer.lock` | PHP on homeport's FrankenPHP base | a bundle, FrankenPHP as `bin` |
+| `composer.json` + `composer.lock`, or `index.php` (at the top or in `public/`) | PHP on homeport's FrankenPHP base | a bundle, FrankenPHP as `bin` |
 | `package.json` + a lockfile | Node or Bun (see below) | a bundle, a static site, or a binary when the build compiles one |
 | `Cargo.toml` (with a binary) + `Cargo.lock` | Rust (`rust:<version>-bookworm`) | a bundle, the binary as `bin` |
 | `pyproject.toml` + `uv.lock`, or `requirements.txt` | Python, installed with uv | a bundle, the interpreter as `bin` |
@@ -464,12 +464,52 @@ Not handled yet: Yarn Plug'n'Play at runtime, and Deno.
 
 ## PHP and Laravel apps
 
+A PHP app is a Laravel app, or plain PHP with no framework. It has a
+`composer.json` (and its `composer.lock`), or an `index.php` at its top or in
+`public/`. An `index.php` beside a `go.mod`, a `Cargo.toml` or a Python
+project leaves that app what it is. An `index.php` beside an `index.html` or
+a `package.json` makes it a PHP app.
+
 A PHP app ships as a **bundle**: its files, installed with Composer
-(`--no-dev`), its front-end assets built with Bun (`bun run build`), and
+(`--no-dev`) when it has a `composer.json`, its front-end assets built with
+Bun (`bun run build`) when its `package.json` has a build script, and
 FrankenPHP as `bin`. Nothing is compiled per app. It's served by the
 bundle's own config for FrankenPHP (`run --config .homeport/web.caddyfile
---adapter caddyfile`: `public/` on `$PORT`), or, when it requires
+--adapter caddyfile`: its document root on `$PORT`), or, when it requires
 `laravel/octane`, through Octane's worker in FrankenPHP's worker mode.
+
+| The app | Document root |
+|---|---|
+| `public/index.php` (Laravel, and many plain apps) | `public/` |
+| `index.php` at its top, no `public/index.php` | the app's folder |
+| `composer.json`, no `index.php` anywhere | `public/` |
+
+Requests are served as PHP's built-in server and Apache serve them:
+`/about.php` runs `about.php`, a folder's `index.php` answers for it, a
+static file (CSS, images) is served as it is, and a path that's no file
+goes to the root's `index.php` (a front controller), when there is one.
+
+Whatever the document root, these are never served from it (404):
+`composer.json`, `composer.lock`, `auth.json`, `vendor/`, dotfiles and
+dot folders (`.env`, `.git/`, `.homeport/`), `homeport.yaml`, `php.ini`
+and the bundle's own FrankenPHP (`bin`, `frankenphp`). `/.well-known/` is
+served: a file there, else the app's own route. Any other file in the
+document root is served, so with the app's folder as the root, keep files
+that aren't for visitors (`.sql` dumps, logs, `.inc` files) out of it, or
+move the site into `public/`.
+
+PHP's version is homeport's, 8.5. A `composer.json`'s `require.php` must
+allow it, or the build stops and says so.
+
+Every PHP app runs with homeport's `php.ini`, and its own `php.ini`, if it
+has one, after it (what it sets wins). Errors are logged on stderr and never
+shown to a visitor. PHP's version is never sent (`X-Powered-By`). opcache
+doesn't recheck the release's files, which never change while it runs, and
+keeps what it compiled across wakes, in the release's own
+`storage/framework/opcache` (Laravel) or `.homeport/opcache`. The release is
+read-only except for those, and for a Laravel app `storage/` and
+`bootstrap/cache`. Anything that must last (uploads, a database) goes to a
+database or object storage.
 
 Either way the app sees its visitor as homeport's proxy says - the
 visitor's address (`REMOTE_ADDR`, so `request()->ip()`) and https
