@@ -336,8 +336,9 @@ function reactRouter(server) {
 	} catch {
 		throw new Error("no server build at " + server);
 	}
+	// Vite 7 declares them with const, Vite 8's Rolldown with var
 	const str = (name) => {
-		const m = new RegExp("^const " + name + ' = ("(?:[^"\\\\]|\\\\.)*");$', "m").exec(s);
+		const m = new RegExp("^(?:const|var) " + name + ' = ("(?:[^"\\\\]|\\\\.)*");$', "m").exec(s);
 		try {
 			return m ? JSON.parse(m[1]) : null;
 		} catch {
