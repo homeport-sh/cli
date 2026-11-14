@@ -83,6 +83,32 @@ const (
 //go:embed embed/release.php
 var releasePHP string
 
+// laravel adds what a Laravel app's bundle needs to a PHP app's (php.go):
+// its fingerprinted assets kept for the next release; and when homeport's
+// build makes the bundle (bundling), Inertia's SSR (ssr) built beside it,
+// and Laravel's caches, its views compiled as each release runs, and its
+// queue's runner.
+func (r reader) laravel(p *Plan, cfg fileConfig, s Settings, bundling, ssr bool) error {
+	p.Assets = r.laravelAssets()
+	if !bundling {
+		return nil // homeport.yaml's build command makes the bundle
+	}
+	if ssr {
+		x, err := r.ssrFor(cfg, s)
+		if err != nil {
+			return fmt.Errorf("Inertia's SSR: %w", err)
+		}
+		p.SSR, p.Runtime, p.RuntimeVersion, p.RuntimeReason = SSRInertia, x.rt, x.version, x.why
+		p.Warnings = append(p.Warnings, ssrMemoryNote)
+		p.Command = join(p.Command, ssrAssemble(p.Artifact, x))
+	}
+	if r.requires("laravel/framework") {
+		p.Command = LaravelCaches + " && " + join(p.Command, releaseViewCache(p.Artifact), queueRunner(p.Artifact))
+		p.laravelViews = true
+	}
+	return nil
+}
+
 // releaseViewCache puts the release runner in the bundle b.
 func releaseViewCache(b string) string {
 	return join("mkdir -p "+b+"/.homeport",
