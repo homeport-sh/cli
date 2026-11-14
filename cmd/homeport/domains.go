@@ -103,6 +103,9 @@ func (a *app) domainsLs(ctx context.Context, args []string) error {
 			if d.RedirectTo != "" {
 				why = "→ " + d.RedirectTo
 			}
+			if d.MissingCompanion != "" {
+				why = strings.TrimPrefix(why+"; ", "; ") + d.MissingCompanion + " points here but isn't added (HTTPS fails there): add it as a redirect on the Domains tab"
+			}
 			rows = append(rows, []string{d.Domain, d.Status, reached, why})
 		}
 		if err := a.table(rows); err != nil {

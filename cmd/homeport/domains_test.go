@@ -165,13 +165,15 @@ func TestADomainConnectsAtItsDNSProvider(t *testing.T) {
 }
 
 // ls lists the app's own domains (its Domains tab's) too, before its
-// tenants': how each is reached and where it redirects.
+// tenants': how each is reached and where it redirects - and the www. (or root)
+// that reaches it but isn't added: no certificate there.
 func TestDomainsLsListsTheAppsOwnDomains(t *testing.T) {
 	f, h := linkedHarness(t)
 	f.customDomains = []cloud.CustomDomain{
 		{Domain: "blog.example.com", Status: "live", Proxied: true},
 		{Domain: "www.blog.example.com", Status: "live", RedirectTo: "blog.example.com"},
 		{Domain: "new.example.com", Status: "pending", Why: "it points at 192.0.2.1, not 203.0.113.50"},
+		{Domain: "clinic.example", Status: "live", MissingCompanion: "www.clinic.example"},
 	}
 	if code := h.run("domains", "ls"); code != 0 {
 		t.Fatalf("ls: %d %s", code, h.said())
@@ -181,6 +183,7 @@ func TestDomainsLsListsTheAppsOwnDomains(t *testing.T) {
 		"blog.example.com      live     proxied",
 		"www.blog.example.com  live     direct   → blog.example.com",
 		"new.example.com       pending           it points at 192.0.2.1",
+		"clinic.example        live     direct   www.clinic.example points here but isn't added (HTTPS fails there): add it as a redirect on the Domains tab",
 	} {
 		if !strings.Contains(said, want) {
 			t.Errorf("ls didn't say %q: %s", want, said)

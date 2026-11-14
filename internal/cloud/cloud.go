@@ -647,6 +647,9 @@ type CustomDomain struct {
 	RedirectTo string `json:"redirect_to,omitempty"`
 	Why        string `json:"why,omitempty"`
 	Unrouted   string `json:"unrouted,omitempty"`
+	// MissingCompanion: a live one's www. (or root) that reaches us but
+	// isn't added - no certificate there
+	MissingCompanion string `json:"missing_companion,omitempty"`
 }
 
 // CustomDomains is an app's own domains.
