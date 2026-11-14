@@ -86,6 +86,7 @@ type fakeAPI struct {
 	domains       []cloud.Domain       // an app's platform domains, by name
 	customDomains []cloud.CustomDomain // an app's own domains
 	domainCalls   []string             // each Domains API call: method, app and what follows /domains
+	noWWW         []bool               // each add's no_www
 	proxyCalls    []string             // each proxy switch: method, domain and on
 	queue         *cloud.Queue         // an app's queue (nil: it has none)
 	queueBusy     bool                 // a drain is running: Drain now is refused
@@ -519,8 +520,10 @@ func (f *fakeAPI) serveDomains(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "POST" && rest == "":
 		var in struct {
 			Domain string `json:"domain"`
+			NoWWW  bool   `json:"no_www"`
 		}
 		json.NewDecoder(r.Body).Decode(&in)
+		f.noWWW = append(f.noWWW, in.NoWWW)
 		if !strings.Contains(in.Domain, ".") {
 			f.write(w, 400, map[string]string{"error": "that isn't a domain", "field": "domain"})
 			return
@@ -529,6 +532,16 @@ func (f *fakeAPI) serveDomains(w http.ResponseWriter, r *http.Request) {
 			Records: []cloud.DNSRecord{{Type: "CNAME", Name: "shop", FullName: in.Domain, Value: "blog.homeport.app"},
 				{Type: "TXT", Name: "_homeport.shop", FullName: "_homeport." + in.Domain, Value: "homeport-verify=abc123"}}}
 		f.domains = append(f.domains, d)
+		// a root's www. (a www.'s root) comes with it, redirecting to it
+		other := "www." + in.Domain
+		if root, ok := strings.CutPrefix(in.Domain, "www."); ok {
+			other = root
+		}
+		if strings.Count(strings.TrimPrefix(in.Domain, "www."), ".") == 1 && !in.NoWWW {
+			c := cloud.Domain{Domain: other, Status: "pending", RedirectTo: in.Domain, CreatedAt: d.CreatedAt, Records: []cloud.DNSRecord{}}
+			f.domains = append(f.domains, c)
+			d.Companion = &c
+		}
 		slices.SortFunc(f.domains, func(a, b cloud.Domain) int { return strings.Compare(a.Domain, b.Domain) })
 		f.write(w, 201, d)
 	case i < 0:

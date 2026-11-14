@@ -596,6 +596,12 @@ type Domain struct {
 	// Connect: its DNS provider, read for one domain alone, and whether it
 	// can set the records itself (ConnectDomain)
 	Connect *DomainConnect `json:"connect,omitempty"`
+	// RedirectTo: a root's www. (a www.'s root) added with it - the
+	// domain it redirects to (a 308, the path and query kept), unbilled
+	RedirectTo string `json:"redirect_to,omitempty"`
+	// Companion: an add's answer alone - that www. (or root), when one was
+	// added with it
+	Companion *Domain `json:"companion,omitempty"`
 }
 
 // DomainConnect is a domain's DNS provider as Domain Connect discovery
@@ -672,11 +678,12 @@ func (c *Client) SwitchDomainProxy(ctx context.Context, team, app, domain string
 	return out.URL, err
 }
 
-// AddDomain adds an app a platform domain; the same one again is the one
+// AddDomain adds an app a platform domain - a root's www. (a www.'s root)
+// with it, as its Companion, unless noWWW; the same one again is the one
 // it has.
-func (c *Client) AddDomain(ctx context.Context, team, app, domain string) (*Domain, error) {
+func (c *Client) AddDomain(ctx context.Context, team, app, domain string, noWWW bool) (*Domain, error) {
 	var out Domain
-	err := c.call(ctx, "POST", appPath(team, app)+"/domains", map[string]string{"domain": domain}, &out)
+	err := c.call(ctx, "POST", appPath(team, app)+"/domains", map[string]any{"domain": domain, "no_www": noWWW}, &out)
 	return &out, err
 }
 
