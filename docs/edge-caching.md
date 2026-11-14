@@ -20,7 +20,7 @@ release. The app doesn't wake for them and never sees the request.
 | SvelteKit, `@sveltejs/adapter-node` 5 and 6 | yes | prerendered pages (`export const prerender = true`), prerendered endpoints (`/api/data.json`), `static/` files, `_app/immutable/` assets |
 | Astro, `@astrojs/node` with `mode: 'standalone'` | yes | prerendered pages, `public/` files, `_astro/` assets |
 | Astro, `@astrojs/node` with `staticHeaders: true` | assets only | `_astro/` assets. The adapter adds headers of its own to each page (a CSP), so the pages stay with the app. |
-| Next.js, `output: 'standalone'` | assets only | `/_next/static/` assets. A URL your middleware (or proxy) matches, or that your config's `headers`, `redirects` or `beforeFiles` rewrites match, stays with the app. With `assetPrefix` or `i18n` set, everything goes to the app. |
+| Next.js, `output: 'standalone'` | assets and redirects | `/_next/static/` assets, with the headers your config's `headers()` gives them, and your config's `redirects()` (see [Next.js headers and redirects](#nextjs-headers-and-redirects)). A URL your middleware (or proxy), a `headers()` rule with `has` or `missing`, or a `beforeFiles` rewrite matches stays with the app. With `assetPrefix` or `i18n` set, everything goes to the app. |
 | React Router 7 and Remix 2 (Vite), started with `react-router-serve` or `remix-serve` | assets only | `assets/` under the build's `publicPath`. Remix's classic compiler and React Router's RSC build go to the app. |
 | SvelteKit, `@sveltejs/adapter-bun` | no | everything goes to the app |
 | Nuxt, Nitro, TanStack Start, Express and other servers | no | everything goes to the app. Their request hooks or route rules can run before any file. |
@@ -83,7 +83,61 @@ page. Any other form goes to the app, which redirects it as it always has.
   - Pages and every other file get `no-cache`. A browser or CDN may keep them but asks again every time, so a deploy shows at once.
 - `ETag` and `Last-Modified` are sent. A request with `If-None-Match` or `If-Modified-Since` that still matches gets a 304 with no body.
 - Responses are compressed, as the app's are. The build writes each text file's Brotli (quality 11) and gzip copies once, on the builder, and the host sends the copy the browser accepts, with `Vary: Accept-Encoding` and an `ETag` of its own. The edge keeps the same copies, so neither the host nor the edge compresses these files again. A file too small or one that doesn't shrink has no copy and is compressed as it's sent (zstd or gzip). `Range` requests work.
-- The response headers you set in `homeport.yaml` (`headers:`, see [headers.md](headers.md)) apply to these answers as they do to the app's.
+- Headers the framework's server adds to a file (Next.js's `headers()`) are sent with it, from the release's `routes.json` (see [The public tree's routes](#the-public-trees-routes)). A `Cache-Control` among them replaces the one above, as the framework's does.
+- The response headers you set in `homeport.yaml` (`headers:`, see [headers.md](headers.md)) apply to these answers as they do to the app's, and win over the framework's.
+
+### Next.js headers and redirects
+
+Next.js applies your config's `headers()` and `redirects()` before
+middleware and before its files, without any of your code running. The
+host does the same from the release, so a security-headers rule doesn't
+send your assets to the app, and a redirect like `/` to `/dashboard`
+doesn't wake it:
+
+```js
+// next.config.mjs
+export default {
+  output: "standalone",
+  async headers() {
+    return [{ source: "/(.*)", headers: [{ key: "X-Frame-Options", value: "DENY" }, { key: "X-Content-Type-Options", value: "nosniff" }] }];
+  },
+  async redirects() {
+    return [{ source: "/", destination: "/dashboard", permanent: false }];
+  },
+};
+```
+
+```
+homeport:   with the headers its config gives them: 42 of them
+homeport:   and its config's redirects, answered without the app: /:path+/ -> /:path+ (308), / -> /dashboard (307)
+```
+
+- **Headers.** Each asset gets exactly the headers Next.js sends with it:
+  every rule that matches, in order, a later rule's value replacing an
+  earlier one's, `:param`s filled in. A `Cache-Control` from your config
+  replaces Next.js's year, as it does in Next.js. A rule with `has` or
+  `missing` that matches an asset leaves that asset to the app, and so do
+  `Set-Cookie`, a header homeport sets itself (`Vary`, `ETag`, `Location`
+  and the others refused in [headers.md](headers.md)), and a value with
+  `` ` ``, `{` or `}`.
+- **Redirects.** The host answers them as Next.js does: the status
+  (`permanent`, or `statusCode`), `Location` with the `:param`s filled in,
+  the destination as the body, and `Refresh` on a 308. Paths match in any
+  case, and a path with or without one trailing slash, as Next.js's do. The
+  trailing-slash redirect Next.js adds (`/about/` to `/about`) is one of
+  them.
+- **Left to the app.** Redirects are taken in order, up to the first the
+  host can't answer the way Next.js would. That one and every one after it
+  stay with the app, which tries them in the same order:
+  - a redirect with `has` or `missing`
+  - a `:param` with a pattern of its own (`/:id(\d+)`), an optional one, or
+    one first in the path (it could match `/_next/`)
+  - a destination with a query string, a port, or a `:param` the source
+    doesn't have
+  - `trailingSlash: true` (its own trailing-slash redirects are patterns)
+  - `caseSensitiveRoutes`
+- A request with a query string, or with characters other than letters,
+  digits and `-._~` in its path, goes to the app, which redirects it.
 
 ### Deploys
 
@@ -129,6 +183,55 @@ If your framework writes its own `.output/edge.json` (see
 the build keeps it as it is and the host still answers the prerendered
 files.
 
+### The public tree's routes
+
+A framework's server can do more before any of the app's code than answer
+files: add headers to them, and answer redirects. The build writes what it
+does as data, in `.homeport/public/routes.json` beside the files, and the
+host applies it. The format is the same for every framework:
+
+```json
+{
+  "v": 1,
+  "headers": [
+    { "set": [["X-Frame-Options", "DENY"], ["X-Content-Type-Options", "nosniff"]], "urls": ["/_next/static/chunks/a1b2.js", "/_next/static/css/c3d4.css"] }
+  ],
+  "redirects": [
+    { "from": "/:path+/", "to": "/:path+", "status": 308 },
+    { "from": "/", "to": "/dashboard", "status": 307 },
+    { "from": "/docs/:path*", "to": "/guide/:path*", "status": 301 }
+  ]
+}
+```
+
+- **`headers`.** Each set's headers are added to the answers for its URLs,
+  which are URLs of the tree's files, of letters, digits and `-._~`. A URL
+  is in at most one set. A header replaces one of the same name the host
+  would send (`Cache-Control`). The names and values follow
+  [headers.md](headers.md)'s rules. At most 64 sets, 32 headers in a set,
+  and 1 MiB for the whole file: past it, the build leaves the files with
+  headers to the app.
+- **`redirects`.** Tried in order for any request the host would pass to
+  the app, any method, before the files. The first whose `from` matches
+  answers with its `status` (301, 302, 303, 307 or 308), `Location: <to>`
+  with the params filled in, `<to>` as the body, and `Refresh: 0;url=<to>`
+  on a 308. At most 128.
+  - `from` is a path of segments: a literal (letters, digits, `-._~`),
+    `:name` (one segment), or last, `:name*` (zero or more) or `:name+`
+    (one or more). Literals match in any case. A `from` that doesn't end in
+    `/` also matches the path with one `/` added, and one that does needs
+    it.
+  - `to` is a path or an `http(s)://host/path` URL, with `:name`,
+    `:name*` or `:name+` written as in `from`. A `:name*` that matched
+    nothing takes its `/` with it.
+  - Only a request with no query string, and a path of letters, digits and
+    `-._~` with no empty, `.` or `..` segment, is redirected. Any other goes
+    to the app.
+- A `routes.json` the host can't read (another version, past a limit, a
+  name or value it refuses) leaves the whole release's tree to the app, so
+  nothing is ever answered without the headers or redirect the app would
+  give it.
+
 ## Security
 
 **A prerendered page is answered without the app only where the framework's
@@ -162,9 +265,11 @@ sources, in the versions the build detects:
   - `:63-75` adds headers from `_headers.json` (`staticHeaders`, `dist/server.js:9`) to pages. When that file exists, the build copies only the immutable assets.
   - Middleware ran for a prerendered page at build time, and its result is the file.
   - `mode: 'middleware'` needs a server of yours, so the build refuses it.
-- **Next.js 16.4.3 (standalone).**
-  - `dist/server/lib/router-utils/resolve-routes.js:50-82` orders a request's routes: the config's `headers` and `redirects`, then middleware (its matchers), then `beforeFiles` rewrites, then the files (`check_fs`). The build reads the same lists (`.next/routes-manifest.json`, `.next/server/middleware-manifest.json`, `.next/server/functions-config-manifest.json`) and leaves any asset URL one of them matches to the app. A matcher with `has` or `missing` counts as a match.
-  - `dist/server/lib/router-server.js:483-494` sends `public, max-age=31536000, immutable` for `/_next/static/`, except `/_next/static/service-worker/` (`max-age=0`), which stays with the app.
+- **Next.js 16.4.5 (standalone).**
+  - `dist/server/lib/router-utils/resolve-routes.js:50-82` orders a request's routes: the config's `headers` and `redirects`, then middleware (its matchers), then `beforeFiles` rewrites, then the files (`check_fs`). The build reads the same lists (`.next/routes-manifest.json`, `.next/server/middleware-manifest.json`, `.next/server/functions-config-manifest.json`) and leaves any asset URL middleware, a redirect or a rewrite matches to the app. A matcher with `has` or `missing` counts as a match.
+  - `resolve-routes.js:546-567` adds each matching `headers` rule's headers to the response (`compileNonPath` fills in `:params`; `res.setHeader`, so a later rule's value replaces an earlier one's). The build works out each asset's headers the same way, from the same regexes, and puts them in `routes.json`. A rule with `has` or `missing` that matches an asset leaves it to the app.
+  - A `redirects` rule ends the request there, before middleware: `resolve-routes.js` answers `Location`, and `router-server.js` writes the destination as the body and `Refresh` for a 308. The build checks each redirect's pattern against the regex Next.js built from it (`(?!/_next)` and the optional trailing `/` included) before the host answers it.
+  - `dist/server/lib/router-server.js:483-494` sends `public, max-age=31536000, immutable` for `/_next/static/` when the config's headers set no `Cache-Control` (`!res.getHeader('cache-control')`), except `/_next/static/service-worker/` (`max-age=0`), which stays with the app.
   - `public/` files get `max-age=0` from Next.js, so they stay with the app.
 - **React Router 7.18.4 (`react-router-serve`) and Remix 2.17.5 (`remix-serve`).**
   - `dist/cli.js` runs `express.static(<assetsBuildDirectory>/assets, { immutable: true, maxAge: "1y" })` at `<publicPath>assets` before the app's request handler. Only `compression` runs before it. The build reads `assetsBuildDirectory` and `publicPath` from the server build it's given.
@@ -186,6 +291,7 @@ from the files or with a 404, never by passing it to the app.
 Each case is tested with a real build of each framework. The test checks that:
 
 - Every URL the build copied is answered by the running app with the same bytes and without a header its hook or middleware adds. An asset the host sends as immutable is one the app sends with that same `Cache-Control`.
+- The headers `routes.json` gives a file are exactly the ones the app adds to it, and each redirect, at paths its pattern matches, is answered by the app with the status, `Location` and `Refresh` the host would send.
 - A page behind a hook or middleware (a 401 without a session) is not copied, and the app still answers it with that 401.
 - Every page `.output/edge.json` lists is one of the copied pages, and no page behind a hook or middleware, or left to the app, is listed.
 
