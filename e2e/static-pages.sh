@@ -55,8 +55,9 @@ for app in sveltekit:x-hook:"--hook /dyn /nope --left /about/ /blog/one/" \
 done
 
 # their content-hashed assets alone: Next.js standalone behind middleware
-# that skips /_next/static, and react-router-serve
-for app in next:x-mw:"--hook / /robots.txt /nope" \
+# that skips /_next/static (its config's headers with them, its redirects
+# the host's), and react-router-serve
+for app in next:x-mw:"--hook /dashboard /robots.txt /nope" \
   react-router:x-hook:"--hook / /about"; do
   IFS=: read -r name marker args <<<"$app"
   # shellcheck disable=SC2086
