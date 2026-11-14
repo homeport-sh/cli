@@ -20,16 +20,19 @@ import (
 // in .homeport/public: a file with the year-long immutable Cache-Control in
 // immutable/ (the release after keeps it a day, for a tab opened before
 // it), another in files/, each with its headers in routes.json and the
-// compressed copies the framework wrote beside it. Nothing it doesn't list,
-// and no file the host would send headers the app doesn't.
-const filesManifest = `{"v":1,"root":"public","files":["/_app/icon.svg","/assets/index-Ab12.js","/assets/style-Cd34.css","/favicon.ico","/gone.js","/sw.js","/x/odd.js"],
+// compressed copies the framework wrote beside it. A file its server sends
+// with no Cache-Control is in files/ with an exact set: the host adds none
+// of its own. Nothing it doesn't list, and no file the host would send
+// headers the app doesn't.
+const filesManifest = `{"v":1,"root":"public","files":["/_app/icon.svg","/assets/index-Ab12.js","/assets/style-Cd34.css","/favicon.ico","/gone.js","/robots.txt","/sw.js","/x/odd.js"],
 "precompressed":["br","gzip","zstd"],
 "headers":[{"match":"/sw.js","headers":{"cache-control":"public, max-age=0, must-revalidate"}},
 {"match":"/assets/**","headers":{"cache-control":"public, max-age=31536000, immutable"}},
 {"match":"/assets/style-Cd34.css","headers":{"x-frame-options":"DENY"}},
 {"match":"/_app/**","headers":{"cache-control":"public, max-age=3600","x-content-type-options":"nosniff"}},
 {"match":"/x/*","headers":{"cache-control":"no-store"}},
-{"match":"/x/odd.js","headers":{"cache-control":"public, max-age=60"}}],
+{"match":"/x/odd.js","headers":{"cache-control":"public, max-age=60"}},
+{"match":"/robots.txt","headers":{"x-content-type-options":"nosniff"}}],
 "middleware":false}`
 
 func filesOutput(manifest string) map[string]string {
@@ -43,6 +46,7 @@ func filesOutput(manifest string) map[string]string {
 		".output/public/_app/icon.svg":               "<svg/>",
 		".output/public/favicon.ico":                 "ico",
 		".output/public/sw.js":                       "sw",
+		".output/public/robots.txt":                  "robots",
 		".output/public/sw.js.br":                    "sw-br",
 		".output/public/x/odd.js":                    "odd",
 		".output/public/unlisted.txt":                "not listed",
@@ -58,6 +62,8 @@ func TestTheFilesManifestIsWhatTheHostServes(t *testing.T) {
 		"immutable /assets/index-Ab12.js.gz",
 		"immutable /assets/style-Cd34.css",
 		"files /_app/icon.svg",
+		"files /favicon.ico",
+		"files /robots.txt",
 		"files /sw.js",
 		"files /sw.js.br",
 		"files /x/odd.js",
@@ -65,8 +71,9 @@ func TestTheFilesManifestIsWhatTheHostServes(t *testing.T) {
 	var r struct {
 		V       int
 		Headers []struct {
-			Set  [][2]string
-			URLs []string
+			Set   [][2]string
+			URLs  []string
+			Exact bool
 		}
 	}
 	if err := json.Unmarshal([]byte(routes), &r); err != nil || r.V != 1 {
@@ -75,6 +82,9 @@ func TestTheFilesManifestIsWhatTheHostServes(t *testing.T) {
 	sets := map[string]string{}
 	for _, h := range r.Headers {
 		b, _ := json.Marshal(h.Set)
+		if h.Exact {
+			b = append([]byte("exact "), b...)
+		}
 		for _, u := range h.URLs {
 			sets[u] = string(b)
 		}
@@ -88,6 +98,9 @@ func TestTheFilesManifestIsWhatTheHostServes(t *testing.T) {
 		// a match that's neither is no rule here (rsc-kit 0.35.1 leaves
 		// such a file out of files)
 		"/x/odd.js": `[["cache-control","public, max-age=60"]]`,
+		// no Cache-Control: sent with exactly the app's headers, or none
+		"/favicon.ico": `exact []`,
+		"/robots.txt":  `exact [["x-content-type-options","nosniff"]]`,
 	}
 	for u, w := range want {
 		if sets[u] != w {
@@ -97,7 +110,7 @@ func TestTheFilesManifestIsWhatTheHostServes(t *testing.T) {
 	if len(sets) != len(want) {
 		t.Errorf("headers for %d URLs, want %d: %s", len(sets), len(want), routes)
 	}
-	for _, s := range []string{"left to the app: /favicon.ico", "left to the app: /gone.js"} {
+	for _, s := range []string{"left to the app: /gone.js"} {
 		if !strings.Contains(out, s) {
 			t.Errorf("the log doesn't say %q:\n%s", s, out)
 		}

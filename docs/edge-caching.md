@@ -25,7 +25,7 @@ release. The app doesn't wake for them and never sees the request.
 | SvelteKit, `@sveltejs/adapter-bun` | no | everything goes to the app |
 | Nuxt, Nitro, TanStack Start, Express and other servers | no | everything goes to the app. Their request hooks or route rules can run before any file. |
 | Laravel (FrankenPHP) | no | everything goes to the app. It sends no `Cache-Control` for its files, so serving them from the host would change their headers. |
-| rsc-kit 0.35.0+ | yes | the files its `.output/files.json` lists (see [The files manifest](#the-files-manifest)): `assets/` and the service worker, with the headers rsc-kit gives them. Pages through the edge contract. |
+| rsc-kit 0.35.0+ | yes | the files its `.output/files.json` lists (see [The files manifest](#the-files-manifest)): `assets/`, the service worker and its other public files (icons, the web manifest), with exactly the headers rsc-kit gives them. Pages through the edge contract. |
 | rsc-kit before 0.35.0, Next.js (next-bun-compile) | through the edge contract | see [A framework with a server of its own](#a-framework-with-a-server-of-its-own) |
 | An app with its own start command (`run:` in `homeport.yaml`, or the start command in its settings) | no | everything goes to the app. Its command might run code of its own first. |
 | A static site (no server) | already | the whole site is files, and it never sleeps |
@@ -216,6 +216,13 @@ writer in `buildplan/embed/public.mjs`.
   [headers.md](headers.md)'s rules. At most 64 sets, 32 headers in a set,
   and 1 MiB for the whole file: past it, the build leaves the files with
   headers to the app.
+  - A set with `"exact": true` is all its files go out with, besides the
+    file's own `Content-Type`, `Content-Length`, `ETag`, `Last-Modified`,
+    `Vary` and `Accept-Ranges`: the host adds no `Cache-Control` of its own
+    (`no-cache`, or a year for a fingerprinted asset). Its `set` may be
+    empty: `{ "set": [], "urls": ["/favicon.ico"], "exact": true }`.
+  - Without `exact`, a file whose set has no `Cache-Control`, or that is in
+    no set, gets the host's.
 - **`redirects`.** Tried in order for any request the host would pass to
   the app, any method, before the files. The first whose `from` matches
   answers with its `status` (301, 302, 303, 307 or 308), `Location: <to>`
@@ -288,8 +295,11 @@ Which files the host answers:
   immutable` is a fingerprinted asset. The release after it keeps it for a
   day, for a tab opened before that deploy.
 - A file with another `Cache-Control` is answered with its headers.
-- A file with no `Cache-Control` stays with the app: the host would add
-  its own `no-cache`, which the app doesn't send.
+- A file with no `Cache-Control` is answered with exactly its headers, or
+  none: its set is exact, so the host adds no `Cache-Control` of its own.
+  homeport's edge doesn't keep a file without one (it keeps only immutable
+  assets, and pages with `CDN-Cache-Control`), so every request for it
+  reaches the host, as it would reach the app.
 - So does a file with a header the host can't send (see
   [The public tree's routes](#the-public-trees-routes)), a path with
   characters other than plain ones, a dotfile, and a file that isn't in
