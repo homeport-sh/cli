@@ -703,6 +703,15 @@ func prerendered(kind, dir string, ownRun bool) string {
 	return "{ printf '%s' '" + base64.StdEncoding.EncodeToString([]byte(publicMJS)) + "' | base64 -d > .homeport-public.mjs && (cd " + b + " && ./bin ../.homeport-public.mjs " + kind + " " + dir + " ../.output/edge.json) || rm -rf " + b + "/.homeport/public; rm -f .homeport-public.mjs; }"
 }
 
+// filesStep is the build step that puts what a files manifest
+// (.output/files.json, docs/edge-caching.md) lists in the app's folder's
+// .homeport/public, for the builder to ship with a binary that has no
+// folder of its own (Plan.Public). Run by Bun, after the build; no manifest,
+// or one it can't read, is no tree - it never fails the build.
+func filesStep() string {
+	return "{ printf '%s' '" + base64.StdEncoding.EncodeToString([]byte(publicMJS)) + "' | base64 -d > .homeport-public.mjs && bun .homeport-public.mjs files .output/files.json || rm -rf .homeport/public; rm -f .homeport-public.mjs; }"
+}
+
 // publicTree is the server whose files embed/public.mjs reads, and where
 // in the bundle ("" none): SvelteKit's adapter-node (its out), Astro's node
 // adapter (dist), Next.js standalone (the app's folder in it: a workspace

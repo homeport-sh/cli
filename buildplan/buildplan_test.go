@@ -168,7 +168,7 @@ const rscKitPkg = `{"scripts":{"build":"rsc-kit build","compile":"rsc-kit compil
 func TestAnRSCKitAppIsDecidedByItsBuild(t *testing.T) {
 	p := detect(t, map[string]string{"package.json": rscKitPkg, "bun.lock": bunLock}, buildplan.Settings{})
 	if !p.RSCKit || p.Framework != "rsc-kit" || p.Toolchain != "bun" || p.Install != "bun install --frozen-lockfile" ||
-		p.Command != "bun run build" || strings.Contains(p.Command, "compile") {
+		!strings.HasPrefix(p.Command, "bun run build && { ") || strings.Contains(strings.SplitN(p.Command, " && ", 2)[0], "compile") {
 		t.Fatalf("rsc-kit: %+v", p)
 	}
 	// the builder reads it as rsc_kit in the plan's JSON

@@ -15,14 +15,20 @@
 // routes.json, beside the trees, is what else the server does before any of
 // the app's code, as data the host applies (docs/edge-caching.md, "The
 // public tree's routes"): headers it adds to some of the tree's files (a
-// file's set, by its URL), and redirects it answers for any path. Only
-// Next.js has them yet: its config's headers() and redirects().
+// file's set, by its URL), and redirects it answers for any path: Next.js's
+// config's headers() and redirects(), and a files manifest's headers.
 //
+//   bin public.mjs files <manifest> [marker]           (cwd: where the tree goes)
 //   bin public.mjs sveltekit <adapter out> <marker>   (cwd: the bundle)
 //   bin public.mjs astro <outDir> <marker>
 //   bin public.mjs next <standalone app folder> <marker>
 //   bin public.mjs react-router <server build> <marker>
 //   bin public.mjs remix <server build> <marker>
+//
+// files: homeport's files manifest (docs/edge-caching.md, "The files
+// manifest"), which a framework writes to say itself what its server answers
+// from files - rsc-kit's .output/files.json. Its own build's server is a
+// binary: the tree goes in the app's folder, for the builder to ship.
 //
 // Next.js, react-router-serve and remix-serve: their content-hashed assets
 // alone (immutable/), which their servers answer from files with the same
@@ -79,7 +85,7 @@ const ext = (f) => {
 class Tree {
 	constructor(wellKnown) {
 		this.wellKnown = wellKnown;
-		this.urls = new Map(); // url -> [tree, src]
+		this.urls = new Map(); // url -> [tree, src, copies]
 		this.left = []; // [url, why]
 		this.headers = new Map(); // url -> its set's key
 		this.sets = new Map(); // key (JSON) -> [[name, value]...]
@@ -99,8 +105,10 @@ class Tree {
 		this.headers.set(url, key);
 		return true;
 	}
-	// place: a URL and the file its server answers it with
-	put(url, src, immutable) {
+	// place: a URL and the file its server answers it with; copies, the
+	// extensions of the compressed copies beside it its server sends too
+	// (.br, .gz: the host's), else the builder writes its own
+	put(url, src, immutable, copies = []) {
 		if (this.urls.has(url)) return;
 		if (!plainURL(url, this.wellKnown)) return this.left.push([url, "its URL has characters only the app reads"]);
 		// the host serves a file's .br and .gz (the builder's) for the file's
@@ -109,7 +117,7 @@ class Tree {
 		const page = url.endsWith("/") || ext(src) === ".html" && !/\.html?$/.test(url);
 		if (page && ext(src) !== ".html") return this.left.push([url, "not an HTML page"]);
 		if (!page && !ext(url)) return this.left.push([url, "no file extension to give it a type"]);
-		this.urls.set(url, [immutable && !page ? "immutable" : page ? "pages" : "files", src]);
+		this.urls.set(url, [immutable && !page ? "immutable" : page ? "pages" : "files", src, copies]);
 	}
 	write() {
 		fs.rmSync(OUT, { recursive: true, force: true });
@@ -123,10 +131,11 @@ class Tree {
 			this.headers.clear();
 			routes = this.routes();
 		}
-		for (const [url, [tree, src]] of this.urls) {
+		for (const [url, [tree, src, copies]] of this.urls) {
 			const dst = path.join(OUT, tree, tree === "pages" ? url + ".html" : url);
 			fs.mkdirSync(path.dirname(dst), { recursive: true });
 			fs.copyFileSync(src, dst);
+			for (const c of copies) fs.copyFileSync(src + c, dst + c);
 			n[tree]++;
 		}
 		if (routes) {
@@ -170,6 +179,90 @@ const isDir = (f) => {
 		return false;
 	}
 };
+
+// files: homeport's files manifest (docs/edge-caching.md, "The files
+// manifest") - {"v":1,"root","files","precompressed","headers","middleware"}
+// - read whole or not at all: another version, middleware, a root outside
+// the manifest's folder is the app's, every file. Its files alone, each at
+// its URL, a file with its headers (every rule whose match is the URL, or a
+// prefix ending /**, in order, a later value replacing an earlier one's);
+// one with the year-long immutable Cache-Control is a fingerprinted asset
+// (immutable/), any other a file (files/). A file the host would send a
+// header the app doesn't (none of its own: the host's Cache-Control), or
+// one it can't send, is the app's.
+const IMMUTABLE = "public, max-age=31536000, immutable";
+function files(manifest) {
+	let m;
+	try {
+		m = JSON.parse(fs.readFileSync(manifest, "utf8"));
+	} catch (e) {
+		throw new Error(e && e.code === "ENOENT" ? "no " + manifest : manifest + " isn't JSON");
+	}
+	if (!m || typeof m !== "object" || m.v !== 1) throw new Error(manifest + ": not a files manifest this reads (v 1)");
+	if (m.middleware !== false) throw new Error(manifest + ": the app's code runs for its files (middleware)");
+	if (typeof m.root !== "string" || !Array.isArray(m.files) || (m.headers !== undefined && !Array.isArray(m.headers))) throw new Error(manifest + ": a files manifest this doesn't know");
+	const at = path.dirname(manifest);
+	const root = path.resolve(at, m.root);
+	if (path.isAbsolute(m.root) || (root !== path.resolve(at) && !root.startsWith(path.resolve(at) + path.sep)) || !isDir(root)) throw new Error(manifest + ": its root isn't a folder beside it");
+	const realRoot = fs.realpathSync(root);
+	const enc = { br: ".br", gzip: ".gz" }; // the host's copies (not zstd)
+	const copyExts = (Array.isArray(m.precompressed) ? m.precompressed : []).map((e) => enc[e]).filter(Boolean);
+	const rules = [];
+	for (const r of m.headers || []) {
+		if (!r || typeof r.match !== "string" || !r.match.startsWith("/") || !r.headers || typeof r.headers !== "object") throw new Error(manifest + ": a header rule this doesn't know");
+		const set = Object.entries(r.headers);
+		if (set.some(([, v]) => typeof v !== "string")) throw new Error(manifest + ": a header rule this doesn't know");
+		// exact, or a prefix ending /**; any other match is no rule here
+		if (r.match.endsWith("/**")) rules.push({ prefix: r.match.slice(0, -2), set });
+		else if (!r.match.includes("*")) rules.push({ exact: r.match, set });
+	}
+	const t = new Tree();
+	for (const u of m.files) {
+		if (typeof u !== "string" || !u.startsWith("/")) continue;
+		const src = path.join(root, u);
+		let real;
+		try {
+			real = fs.realpathSync(src);
+		} catch {
+			t.left.push([u, "listed, but not in " + m.root]);
+			continue;
+		}
+		if (!real.startsWith(realRoot + path.sep) || !isFile(real)) {
+			t.left.push([u, "not a file in " + m.root]);
+			continue;
+		}
+		// as its server sends them: by name in any case, the last one set
+		const hs = new Map();
+		for (const r of rules) {
+			if (r.exact !== undefined ? r.exact !== u : !u.startsWith(r.prefix)) continue;
+			for (const [k, v] of r.set) hs.set(k.toLowerCase(), [k, v]);
+		}
+		const set = [...hs.values()];
+		const bad = set.map(([k, v]) => [k, hostHeader(k, v)]).find(([, why]) => why);
+		if (bad) {
+			t.left.push([u, `a header of the app's homeport can't send (${bad[0]}: ${bad[1]})`]);
+			continue;
+		}
+		const cc = hs.get("cache-control");
+		if (!cc) {
+			t.left.push([u, "no Cache-Control of the app's: the host's own would differ"]);
+			continue;
+		}
+		const copies = copyExts.filter((c) => {
+			try {
+				return fs.lstatSync(src + c).isFile();
+			} catch {
+				return false;
+			}
+		});
+		t.put(u, src, cc[1].toLowerCase() === IMMUTABLE, copies);
+		if (t.urls.has(u) && !t.header(u, set)) {
+			t.urls.delete(u);
+			t.left.push([u, "more headers, or header sets, than homeport sends from files"]);
+		}
+	}
+	return t;
+}
 
 // SvelteKit's adapter-node: its server answers its asset table - client
 // files, then prerendered pages - before SvelteKit runs (hooks included)
@@ -652,14 +745,15 @@ const [kind, dir, marker] = process.argv.slice(2);
 const servers = { sveltekit: "adapter-node", astro: "Astro's node adapter", next: "Next.js standalone", "react-router": "react-router-serve", remix: "remix-serve" };
 let wrote = false;
 try {
-	const kinds = { sveltekit, astro, next, "react-router": reactRouter, remix: reactRouter };
+	const kinds = { files, sveltekit, astro, next, "react-router": reactRouter, remix: reactRouter };
 	const t = Object.hasOwn(kinds, kind) ? kinds[kind](dir) : null;
 	if (!t) throw new Error("no framework " + kind);
 	const n = t.write();
 	const e = edgeMarker(t, marker);
 	wrote = !!e;
-	say(`served without the app, before any of its code runs (as ${servers[kind]} serves them): ${n.pages} prerendered page(s), ${n.files} file(s), ${n.immutable} immutable asset(s)`);
-	if (n.headers) say(`  with the headers its config gives them: ${n.headers} of them`);
+	const as = kind === "files" ? "as its files manifest (" + dir + ") says its server serves them" : `as ${servers[kind]} serves them`;
+	say(`served without the app, before any of its code runs (${as}): ${n.pages} prerendered page(s), ${n.files} file(s), ${n.immutable} immutable asset(s)`);
+	if (n.headers) say(`  with the headers ${kind === "files" ? "its manifest" : "its config"} gives them: ${n.headers} of them`);
 	if (n.redirects) say(`  and its config's redirects, answered without the app: ` + t.redirects.slice(0, 10).map((r) => `${r.from} -> ${r.to} (${r.status})`).join(", ") + (n.redirects > 10 ? ` (and ${n.redirects - 10} more)` : ""));
 	const pages = [...t.urls].filter(([, [tr]]) => tr === "pages").map(([u]) => u);
 	if (pages.length) say("  pages: " + pages.slice(0, 20).join(" ") + (pages.length > 20 ? ` (and ${pages.length - 20} more)` : ""));

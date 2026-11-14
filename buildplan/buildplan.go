@@ -225,6 +225,11 @@ type Plan struct {
 	// (assets.go): the builder keeps them beside the server, for the
 	// release after it to answer a tab opened before that deploy
 	Assets []PlanAsset `json:"assets,omitempty"`
+	// Public: the build writes homeport's public tree (.homeport/public,
+	// docs/edge-caching.md) in the app's folder, for the builder to ship
+	// with the release - a binary has no folder of its own for it
+	// (homeportd's PlanPublic)
+	Public bool `json:"public,omitempty"`
 	// Headers: the app's response headers - homeport.yaml's, or the
 	// settings' when they have any (headers.go); a static site's too
 	Headers []HeaderRule `json:"headers,omitempty"`
@@ -536,7 +541,7 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 		p.Install = join(p.setup, s.Install)
 	}
 	if s.Kind != "" || s.Command != "" || s.Output != "" {
-		p.RSCKit = false // the person said what the build makes
+		p.RSCKit, p.Public = false, false // the person said what the build makes
 	}
 	if s.Command != "" {
 		p.Command = join(s.Command, p.assemble) // a bundle is still made from what it leaves
@@ -826,6 +831,9 @@ func (r reader) rscKit(p *Plan, cfg fileConfig) {
 		return
 	}
 	p.RSCKit, p.Artifact, p.StaticFallback = true, "dist/app", true
+	// its server is a binary: the files its manifest lists (rsc-kit
+	// 0.35.0+), for the builder to ship as the release's public tree
+	p.Command, p.Public = join(p.Command, filesStep()), true
 }
 
 // PlanAsset is a folder of fingerprinted files the build makes, in the
