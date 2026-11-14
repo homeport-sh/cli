@@ -47,7 +47,7 @@ const OUT = ".homeport/public";
 const MAX_STATIC = 200, MAX_PATH = 200;
 // routes.json's limits, as the host's: distinct header sets, headers in a
 // set, a value's bytes; redirects, a redirect's from and to
-const MAX_SETS = 64, MAX_SET = 32, MAX_VALUE = 8192, MAX_REDIRECTS = 128, MAX_FROM = 512, MAX_TO = 2048;
+const MAX_SETS = 64, MAX_SET = 32, MAX_VALUE = 8192, MAX_REDIRECTS = 128, MAX_FROM = 512, MAX_TO = 2048, MAX_ROUTES = 1 << 20;
 // a header the host sends from routes.json, as it checks one: a name of its
 // headers: rules' (docs/headers.md), never one homeport or the response
 // itself sets; a value of printable ASCII, no ` { }, no spaces around it
@@ -89,7 +89,8 @@ class Tree {
 	// host can't send them (the file's then the app's)
 	header(url, set) {
 		if (!set.length) return true;
-		if (set.length > MAX_SET) return false;
+		// a URL the host gives headers to: letters, digits and -._~ alone
+		if (set.length > MAX_SET || !/^\/([A-Za-z0-9._~-]+\/)*[A-Za-z0-9._~-]*$/.test(url)) return false;
 		const key = JSON.stringify(set);
 		if (!this.sets.has(key)) {
 			if (this.sets.size === MAX_SETS) return false;
@@ -113,22 +114,35 @@ class Tree {
 	write() {
 		fs.rmSync(OUT, { recursive: true, force: true });
 		const n = { immutable: 0, files: 0, pages: 0 };
+		let routes = this.routes();
+		if (Buffer.byteLength(routes) > MAX_ROUTES) {
+			// more than the host reads: the files with headers are the app's
+			for (const url of this.headers.keys()) {
+				if (this.urls.delete(url)) this.left.push([url, "more headers, or header sets, than homeport sends from files"]);
+			}
+			this.headers.clear();
+			routes = this.routes();
+		}
 		for (const [url, [tree, src]] of this.urls) {
 			const dst = path.join(OUT, tree, tree === "pages" ? url + ".html" : url);
 			fs.mkdirSync(path.dirname(dst), { recursive: true });
 			fs.copyFileSync(src, dst);
 			n[tree]++;
 		}
+		if (routes) {
+			fs.mkdirSync(OUT, { recursive: true });
+			fs.writeFileSync(path.join(OUT, "routes.json"), routes);
+		}
+		n.headers = [...this.headers.keys()].filter((u) => this.urls.has(u)).length;
+		n.redirects = this.redirects.length;
+		return n;
+	}
+	// routes: routes.json's text ("" none) - each set with its files' URLs
+	routes() {
 		const sets = new Map([...this.sets.keys()].map((k) => [k, []]));
 		for (const [url, key] of this.headers) if (this.urls.has(url)) sets.get(key).push(url);
 		const headers = [...sets].filter(([, urls]) => urls.length).map(([k, urls]) => ({ set: this.sets.get(k), urls }));
-		if (headers.length || this.redirects.length) {
-			fs.mkdirSync(OUT, { recursive: true });
-			fs.writeFileSync(path.join(OUT, "routes.json"), JSON.stringify({ v: 1, headers, redirects: this.redirects }) + "\n");
-		}
-		n.headers = headers.reduce((a, h) => a + h.urls.length, 0);
-		n.redirects = this.redirects.length;
-		return n;
+		return headers.length || this.redirects.length ? JSON.stringify({ v: 1, headers, redirects: this.redirects }) + "\n" : "";
 	}
 }
 

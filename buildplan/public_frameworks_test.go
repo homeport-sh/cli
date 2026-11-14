@@ -3,8 +3,10 @@ package buildplan_test
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -398,6 +400,27 @@ func TestNextConfigHeadersGoWithTheAssets(t *testing.T) {
 			if len(got) != len(nextAssets)-1 || len(readRoutes(t, raw).Headers) != 0 {
 				t.Errorf("%s: the other assets aren't as they were: %q %s", name, got, raw)
 			}
+		}
+	})
+	t.Run("more than the host reads is the app's", func(t *testing.T) {
+		// a set of 32 headers of 8000 bytes for each asset: past routes.json's
+		// 1 MiB
+		var rules []any
+		for i, a := range nextAssets {
+			u := strings.Fields(a)[1]
+			var hs []any
+			for j := range 32 {
+				hs = append(hs, map[string]any{"key": fmt.Sprintf("X-H%d", j), "value": strings.Repeat(string(rune('a'+i)), 8000)})
+			}
+			rules = append(rules, map[string]any{"source": u, "regex": "^" + regexp.QuoteMeta(u) + "(?:/)?$", "headers": hs})
+		}
+		internal := map[string]any{"source": "/:path+/", "destination": "/:path+", "internal": true, "statusCode": 308, "regex": "^(?:/((?:[^/]+?)(?:/(?:[^/]+?))*))/$"}
+		got, out, _, raw := publicRun(t, "next", ".", nextStandalone("", nil, map[string]any{"headers": rules, "redirects": []any{internal}}, nil, nil), "")
+		if len(got) != 0 || !strings.Contains(out, "left to the app: /_next/static/css/9f8e7d.css - more headers, or header sets, than homeport sends from files") {
+			t.Errorf("served without the app: %q\n%s", got, out)
+		}
+		if r := readRoutes(t, raw); len(r.Headers) != 0 || len(r.Redirects) != 1 || len(raw) > 1<<20 {
+			t.Errorf("routes.json: %d bytes, %d sets, %d redirects", len(raw), len(r.Headers), len(r.Redirects))
 		}
 	})
 }

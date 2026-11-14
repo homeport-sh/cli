@@ -205,10 +205,12 @@ host applies it. The format is the same for every framework:
 ```
 
 - **`headers`.** Each set's headers are added to the answers for its URLs,
-  which are URLs of the tree's files. A URL is in at most one set. A header
-  replaces one of the same name the host would send (`Cache-Control`). The
-  names and values follow [headers.md](headers.md)'s rules. At most 64
-  sets, 32 headers in a set.
+  which are URLs of the tree's files, of letters, digits and `-._~`. A URL
+  is in at most one set. A header replaces one of the same name the host
+  would send (`Cache-Control`). The names and values follow
+  [headers.md](headers.md)'s rules. At most 64 sets, 32 headers in a set,
+  and 1 MiB for the whole file: past it, the build leaves the files with
+  headers to the app.
 - **`redirects`.** Tried in order for any request the host would pass to
   the app, any method, before the files. The first whose `from` matches
   answers with its `status` (301, 302, 303, 307 or 308), `Location: <to>`
