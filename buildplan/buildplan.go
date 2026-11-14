@@ -88,18 +88,21 @@ type Settings struct {
 	// (CheckAssets), replacing homeport.yaml's and the detected ones when
 	// there are any
 	Assets []PlanAsset `json:"assets,omitempty"`
+	// BackendPaths: a backend beside a renderer's paths (backend.go), in
+	// place of homeport.yaml's and the ones rsc-kit's build names
+	BackendPaths []string `json:"backend_paths,omitempty"`
 }
 
 // IsZero says whether nothing is set.
 func (s Settings) IsZero() bool {
 	return s.Root == "" && s.Kind == "" && s.Install == "" && s.Command == "" && s.Output == "" &&
 		s.Run == "" && len(s.Release) == 0 && !s.NoRelease && s.StopGrace == "" && len(s.Processes) == 0 && s.Octane == nil && s.Runtime == "" &&
-		s.Python == "" && len(s.Packages) == 0 && len(s.Headers) == 0 && len(s.Assets) == 0
+		s.Python == "" && len(s.Packages) == 0 && len(s.Headers) == 0 && len(s.Assets) == 0 && len(s.BackendPaths) == 0
 }
 
 // With is s with what o sets in its place: one deploy's settings over the
 // app's saved ones. What o leaves empty is s's; processes, packages,
-// headers and assets, when o has any, are o's alone.
+// headers, assets and backend paths, when o has any, are o's alone.
 func (s Settings) With(o Settings) Settings {
 	pick := func(a, b string) string {
 		if b != "" {
@@ -112,7 +115,7 @@ func (s Settings) With(o Settings) Settings {
 		Release: slices.Clone(s.Release), NoRelease: s.NoRelease, StopGrace: pick(s.StopGrace, o.StopGrace),
 		Processes: slices.Clone(s.Processes), Octane: s.Octane,
 		Runtime: pick(s.Runtime, o.Runtime), Python: pick(s.Python, o.Python), Packages: slices.Clone(s.Packages), Headers: slices.Clone(s.Headers),
-		Assets: slices.Clone(s.Assets)}
+		Assets: slices.Clone(s.Assets), BackendPaths: slices.Clone(s.BackendPaths)}
 	// a release command and none are one setting: o's, when it says either
 	// (its commands, whole)
 	if o.NoRelease {
@@ -131,6 +134,9 @@ func (s Settings) With(o Settings) Settings {
 	}
 	if len(o.Assets) > 0 {
 		out.Assets = slices.Clone(o.Assets)
+	}
+	if len(o.BackendPaths) > 0 {
+		out.BackendPaths = slices.Clone(o.BackendPaths)
 	}
 	if o.Octane != nil {
 		v := *o.Octane
@@ -163,6 +169,13 @@ type Plan struct {
 	// scripts into a binary, or a static export. Kind and Artifact are then
 	// only what a builder that doesn't read it falls back to.
 	RSCKit bool `json:"rsc_kit,omitempty"`
+	// Supervise: the web runs through homeport's supervisor (backend.go),
+	// which the builder puts in the bundle as SuperviseFile - the CLI that
+	// made the plan - for the bundle's .homeport/wrap to run. Backend: a
+	// backend beside a renderer, whose paths the build leaves in the
+	// bundle's .homeport/backend-paths, for the host.
+	Supervise bool `json:"supervise,omitempty"`
+	Backend   bool `json:"backend,omitempty"`
 
 	// how a binary runs, from homeport.yaml or Settings (a PHP app's has a
 	// default, PHPRun): checked by whoever
@@ -345,7 +358,8 @@ type fileConfig struct {
 	Packages  []string                 `yaml:"packages"`
 	Headers   []HeaderRule             `yaml:"headers"`
 	Queue     *queueConfig             `yaml:"queue"`
-	Assets    []PlanAsset              `yaml:"assets"` // in place of the detected ones (CheckAssets)
+	Assets    []PlanAsset              `yaml:"assets"`  // in place of the detected ones (CheckAssets)
+	Backend   *backendConfig           `yaml:"backend"` // a backend beside a renderer's paths (backend.go)
 }
 
 type processConfig struct {
@@ -420,6 +434,12 @@ func (s Settings) Check() error {
 		return err
 	}
 	if _, err := CheckAssets(s.Assets); err != nil {
+		return err
+	}
+	if err := CheckBackendPaths(s.BackendPaths); err != nil {
+		return err
+	}
+	if err := checkHostCall(s.BackendPaths); err != nil {
 		return err
 	}
 	return CheckProcesses(s.Processes)
@@ -498,6 +518,10 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	p, err := r.detect(cfg, s)
 	if err != nil {
 		return Plan{}, err
+	}
+	if !p.Backend && (cfg.Backend != nil || len(s.BackendPaths) > 0) {
+		return Plan{}, errors.New("backend paths are a backend's beside an rsc-kit renderer, and this app has none: package.json with @rsc-kit/core, " +
+			"built with Bun (bun.lock), beside a PHP, Go, Rust or Python app, with no build command or output said")
 	}
 	if s.Root != "" || member != nil {
 		p.Root = r.root
@@ -615,7 +639,7 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	}
 	if php && s.Command != "" {
 		// the person's build makes the bundle: nothing of SSR's is in it
-		p.SSR, p.Runtime, p.RuntimeVersion, p.RuntimeReason = "", "", "", ""
+		p.SSR, p.Runtime, p.RuntimeVersion, p.RuntimeReason, p.Supervise = "", "", "", "", false
 	}
 	if php && p.laravelViews && s.Command == "" {
 		cacheViewsOnRelease(&p)
@@ -691,7 +715,7 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 		p.Run, p.Release, p.ReleaseReason, p.StopGrace, p.Processes = "", nil, "", "", nil // nothing runs
 		p.NoRelease, p.ReleaseDetected = false, ""
 		p.Runtime, p.RuntimeVersion, p.RuntimeReason, p.Health = "", "", "", ""
-		p.SSR, p.Reverb, p.Queue = "", false, nil
+		p.SSR, p.Reverb, p.Queue, p.Supervise, p.Backend = "", false, nil, false, false
 	}
 	return p, nil
 }
@@ -726,6 +750,8 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 		}
 		r.ws = w
 	}
+	// a backend with an rsc-kit renderer beside it (backend.go)
+	pair := r.pairs(cfg, s)
 
 	switch {
 	case cfg.Build.Image != "":
@@ -750,7 +776,8 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 		p.Toolchain, p.Image, p.Framework = "php", FrankenPHPImage, "PHP"
 		p.Install = "composer check-platform-reqs --no-dev --lock && composer install --no-dev --optimize-autoloader --no-interaction"
 		// Inertia's SSR: built with the rest, run beside the web (laravel.go)
-		ssr := cfg.Build.Command == "" && cfg.Static == "" && r.inertiaSSR()
+		// an rsc-kit renderer beside it renders its pages instead (backend.go)
+		ssr := cfg.Build.Command == "" && cfg.Static == "" && !pair && r.inertiaSSR()
 		p.Install = join(p.Install, r.frontEnd(ssr))
 		p.Assets = r.laravelAssets()
 		if cfg.Static == "" {
@@ -768,7 +795,7 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 				if err != nil {
 					return Plan{}, fmt.Errorf("Inertia's SSR: %w", err)
 				}
-				p.SSR, p.Runtime, p.RuntimeVersion, p.RuntimeReason = SSRInertia, x.rt, x.version, x.why
+				p.SSR, p.Runtime, p.RuntimeVersion, p.RuntimeReason, p.Supervise = SSRInertia, x.rt, x.version, x.why, true
 				p.Warnings = append(p.Warnings, ssrMemoryNote)
 				p.Command = join(p.Command, ssrAssemble(p.Artifact, x))
 			}
@@ -816,6 +843,18 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 		return Plan{}, errors.New(r.rustNotAnApp())
 	default:
 		return Plan{}, errors.New(r.unknown())
+	}
+	if pair && p.Kind != Static {
+		var given []string
+		if cfg.Backend != nil {
+			given = cfg.Backend.Paths
+		}
+		if len(s.BackendPaths) > 0 {
+			given = s.BackendPaths
+		}
+		if err := r.pair(&p, given); err != nil {
+			return Plan{}, err
+		}
 	}
 	return p, nil
 }

@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/homeport-sh/cli/supervise"
 )
 
 // Laravel's own servers, beside the web.
@@ -31,11 +33,10 @@ import (
 //     checked, chosen as a JavaScript app's runtime is.
 //
 // homeportd runs the web through .homeport/wrap when the bundle has one:
-// `./bin php-cli .homeport/beside.php ./bin <the web's args>`, a supervisor
-// in the app's own PHP, which starts each command in .homeport/beside, then
-// the web; starts one that exits again; passes a stop to the web; and exits
-// as the web does. So the renderer starts, sleeps, wakes and stops with the
-// web, one beside each copy.
+// homeport's supervisor (backend.go, the supervise package), which starts
+// each command in .homeport/beside, then the web; starts one that exits
+// again; passes a stop to each; and exits as the web does. So the renderer
+// starts, sleeps, wakes and stops with the web, one beside each copy.
 //
 // Laravel Reverb (laravel/reverb) runs as a process of its own, reverb, on
 // the port homeportd gives it: homeportd sends the app's WebSocket and
@@ -57,16 +58,8 @@ const ssrMemoryNote = "Inertia's SSR renderer runs in the app's memory, beside t
 // SSRInertia is Plan.SSR for Inertia's server-side rendering.
 const SSRInertia = "inertia"
 
-// what the bundle says runs beside the web, and how homeportd runs it
-const (
-	wrapFile   = ".homeport/wrap"
-	besideFile = ".homeport/beside"
-	besidePHPF = ".homeport/beside.php"
-	wrapArgs   = "bin php-cli " + besidePHPF
-)
-
-//go:embed embed/beside.php
-var besidePHP string
+// what homeportd runs the web through, when the bundle has it
+const wrapFile = ".homeport/wrap"
 
 // A Laravel app's views are compiled by its release command, once a deploy:
 // homeportd runs it in the sandbox the release serves from, at the path it
@@ -225,18 +218,15 @@ const glibcBun = "/tmp/homeport/bun-glibc"
 var targetRe = regexp.MustCompile(`--target[= ]\S+`)
 
 // ssr is how an app's SSR renderer runs: compiled (the binary at out, made
-// by compile, which is run again with target when it's set), or the bundle
-// on rt at version.
+// by compile, for the sandbox's Linux), or the bundle on rt at version.
 type ssr struct {
 	rt, version, why string
-	compile, target  string
-	out              string
+	compile, out     string
 }
 
-// ssrCompiled: the project's own SSR build compiles the SSR bundle - a
-// bun build --compile in build:ssr, or in a script it runs - and the binary
-// it makes.
-func (r reader) ssrCompiled() (cmd, out string, err error) {
+// compileStep is the bun build --compile command package.json's script
+// runs - itself, or in a script it runs - or "".
+func (r reader) compileStep(script string) string {
 	scripts := r.pkg().Scripts
 	var find func(name string, depth int) string
 	find = func(name string, depth int) string {
@@ -261,7 +251,14 @@ func (r reader) ssrCompiled() (cmd, out string, err error) {
 		}
 		return ""
 	}
-	cmd = find("build:ssr", 0)
+	return find(script, 0)
+}
+
+// ssrCompiled: the project's own SSR build compiles the SSR bundle - a
+// bun build --compile in build:ssr, or in a script it runs - and the binary
+// it makes.
+func (r reader) ssrCompiled() (cmd, out string, err error) {
+	cmd = r.compileStep("build:ssr")
 	if cmd == "" {
 		return "", "", nil
 	}
@@ -286,14 +283,12 @@ func (r reader) ssrFor(cfg fileConfig, s Settings) (ssr, error) {
 		// the build image's Bun is musl's, and a compile there makes a
 		// musl binary whatever --target says: run it again for this build's
 		// arch on the pinned glibc Bun, which the sandbox can run
-		t := targetRe.FindString(cmd)
-		if strings.Contains(t, "musl") {
-			return ssr{}, fmt.Errorf("its SSR build compiles for %s, which the sandbox can't run: compile for bun-linux-x64 or bun-linux-arm64 (glibc), or drop --target", strings.TrimLeft(t[len("--target"):], "= "))
+		again, musl := glibcCompile(cmd)
+		if musl != "" {
+			return ssr{}, fmt.Errorf("its SSR build compiles for %s, which the sandbox can't run: compile for bun-linux-x64 or bun-linux-arm64 (glibc), or drop --target", musl)
 		}
-		again := strings.Join(strings.Fields(targetRe.ReplaceAllString(cmd, "")), " ")
 		x := ssr{rt: "bun", version: BunVersion, out: out, compile: again,
-			why:    "its SSR build compiles the renderer (" + cmd + "): that binary runs, and no runtime ships",
-			target: " --target=bun-linux-$t --compile-executable-path=" + glibcBun}
+			why: "its SSR build compiles the renderer (" + cmd + "): that binary runs, and no runtime ships"}
 		return x, nil
 	}
 	rt, v, why, err := r.ssrRuntime(cfg, s)
@@ -303,7 +298,7 @@ func (r reader) ssrFor(cfg fileConfig, s Settings) (ssr, error) {
 // ssrAssemble puts Inertia's SSR renderer in the bundle b, beside the web:
 // what runs (the compiled binary, or the SSR bundle as one file at
 // bootstrap/ssr/ssr.mjs - where Inertia finds it, the only file there - and
-// the runtime, checked), the supervisor and .homeport/wrap.
+// the runtime, checked), what runs beside the web and .homeport/wrap.
 func ssrAssemble(b string, x ssr) string {
 	var steps []string
 	// sized to the app's memory: the supervisor fills in %heap% (a quarter
@@ -311,12 +306,7 @@ func ssrAssemble(b string, x ssr) string {
 	// Bun's (--smol, the JSC RAM size) is tuned to collect sooner, not capped
 	beside := "BUN_JSC_forceRAMSize=%heapbytes% " + x.out
 	if x.out != "" {
-		steps = append(steps,
-			"case $(uname -m) in x86_64) a=x64 t=x64 ;; aarch64) a=aarch64 t=arm64 ;; *) echo \"homeport: no Bun for $(uname -m)\" >&2; exit 1 ;; esac",
-			"mkdir -p "+path.Dir(glibcBun),
-			"curl -fsSL https://registry.npmjs.org/@oven/bun-linux-$a/-/bun-linux-$a-"+BunVersion+".tgz | tar -xzO package/bin/bun > "+glibcBun,
-			"chmod 755 "+glibcBun, checkSum(glibcBun, bunSum, "Bun"),
-			x.compile+x.target)
+		steps = append(glibcBunSteps(), x.compile)
 		steps = append(steps,
 			`{ [ -f `+x.out+` ] || { echo 'homeport: the SSR build made no `+x.out+`' >&2; exit 1; }; }`,
 			"mkdir -p "+path.Dir(b+"/"+x.out)+" "+b+"/.homeport",
@@ -350,9 +340,8 @@ func ssrAssemble(b string, x ssr) string {
 		}
 	}
 	steps = append(steps,
-		"printf '%s' '"+base64.StdEncoding.EncodeToString([]byte(besidePHP))+"' | base64 -d > "+b+"/"+besidePHPF,
-		"printf '%s\\n' '"+beside+"' > "+b+"/"+besideFile,
-		ssrWrap(b))
+		"printf '%s\\n' '"+beside+"' > "+b+"/"+supervise.BesideFile,
+		superviseWrap(b))
 	return join(steps...)
 }
 

@@ -46,11 +46,3 @@ func cacheConfigOnStart(p *Plan) {
 		p.Processes[i].Run = run
 	}
 }
-
-// ssrWrap writes the bundle b's .homeport/wrap for Inertia's SSR renderer:
-// the supervisor that runs it beside the web, behind the config's runner
-// when the bundle has one (homeport's FrankenPHP base writes it).
-func ssrWrap(b string) string {
-	write := func(args string) string { return "printf '%s\\n' '" + args + "' > " + b + "/" + wrapFile }
-	return "if [ -f " + b + "/" + startPHPF + " ]; then " + write("bin "+StartRunner+" php-cli "+besidePHPF) + "; else " + write(wrapArgs) + "; fi"
-}

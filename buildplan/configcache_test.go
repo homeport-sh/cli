@@ -95,14 +95,14 @@ func TestALaravelAppsProcessesStartWithItsConfigCached(t *testing.T) {
 	}
 }
 
-// Inertia's SSR renderer runs beside the web through the bundle's wrap: the
-// wrap starts the config's runner first when the bundle has one, so the web
-// is cached as it would be without SSR.
+// Inertia's SSR renderer runs beside the web through the bundle's wrap, the
+// supervisor, which runs the web through the config's runner when the bundle
+// has one, so the web is cached as it would be without SSR.
 func TestTheSSRWrapCachesTheConfigFirst(t *testing.T) {
 	kit := laravel([]string{inertia}, "package.json", `{"scripts":{"build":"vite build","build:ssr":"vite build && vite build --ssr"}}`, "package-lock.json", "{}")
 	p := detect(t, kit, buildplan.Settings{})
-	want := "if [ -f .homeport-bundle/.homeport/start.php ]; then printf '%s\\n' 'bin php-cli .homeport/start.php ./bin php-cli .homeport/beside.php' > .homeport-bundle/.homeport/wrap; " +
-		"else printf '%s\\n' 'bin php-cli .homeport/beside.php' > .homeport-bundle/.homeport/wrap; fi"
+	want := "if [ -f .homeport-bundle/.homeport/start.php ]; then printf '%s\\n' '.homeport/supervise supervise ./bin php-cli .homeport/start.php' > .homeport-bundle/.homeport/wrap; " +
+		"else printf '%s\\n' '.homeport/supervise supervise' > .homeport-bundle/.homeport/wrap; fi"
 	if !strings.Contains(p.Command, want) {
 		t.Errorf("wrap: %s", p.Command)
 	}
