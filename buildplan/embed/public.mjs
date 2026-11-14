@@ -88,19 +88,20 @@ class Tree {
 		this.urls = new Map(); // url -> [tree, src, copies]
 		this.left = []; // [url, why]
 		this.headers = new Map(); // url -> its set's key
-		this.sets = new Map(); // key (JSON) -> [[name, value]...]
+		this.sets = new Map(); // key (JSON) -> {set: [[name, value]...], exact?}
 		this.redirects = []; // {from, to, status, caseless?, refresh?}
 	}
-	// header: the headers its server adds to url's file; false when the
-	// host can't send them (the file's then the app's)
-	header(url, set) {
-		if (!set.length) return true;
+	// header: the headers its server adds to url's file; exact, all it
+	// sends with it (the host adds no Cache-Control of its own); false when
+	// the host can't send them (the file's then the app's)
+	header(url, set, exact = false) {
+		if (!set.length && !exact) return true;
 		// a URL the host gives headers to: letters, digits and -._~ alone
 		if (set.length > MAX_SET || !/^\/([A-Za-z0-9._~-]+\/)*[A-Za-z0-9._~-]*$/.test(url)) return false;
-		const key = JSON.stringify(set);
+		const key = JSON.stringify([set, exact]);
 		if (!this.sets.has(key)) {
 			if (this.sets.size === MAX_SETS) return false;
-			this.sets.set(key, set);
+			this.sets.set(key, exact ? { set, exact } : { set });
 		}
 		this.headers.set(url, key);
 		return true;
@@ -150,7 +151,7 @@ class Tree {
 	routes() {
 		const sets = new Map([...this.sets.keys()].map((k) => [k, []]));
 		for (const [url, key] of this.headers) if (this.urls.has(url)) sets.get(key).push(url);
-		const headers = [...sets].filter(([, urls]) => urls.length).map(([k, urls]) => ({ set: this.sets.get(k), urls }));
+		const headers = [...sets].filter(([, urls]) => urls.length).map(([k, urls]) => ({ set: this.sets.get(k).set, urls, ...(this.sets.get(k).exact && { exact: true }) }));
 		return headers.length || this.redirects.length ? JSON.stringify({ v: 1, headers, redirects: this.redirects }) + "\n" : "";
 	}
 }
@@ -243,11 +244,9 @@ function files(manifest) {
 			t.left.push([u, `a header of the app's homeport can't send (${bad[0]}: ${bad[1]})`]);
 			continue;
 		}
+		// none: the file goes out with exactly its set, the host adding no
+		// Cache-Control of its own (an exact set)
 		const cc = hs.get("cache-control");
-		if (!cc) {
-			t.left.push([u, "no Cache-Control of the app's: the host's own would differ"]);
-			continue;
-		}
 		const copies = copyExts.filter((c) => {
 			try {
 				return fs.lstatSync(src + c).isFile();
@@ -255,8 +254,8 @@ function files(manifest) {
 				return false;
 			}
 		});
-		t.put(u, src, cc[1].toLowerCase() === IMMUTABLE, copies);
-		if (t.urls.has(u) && !t.header(u, set)) {
+		t.put(u, src, !!cc && cc[1].toLowerCase() === IMMUTABLE, copies);
+		if (t.urls.has(u) && !t.header(u, set, !cc)) {
 			t.urls.delete(u);
 			t.left.push([u, "more headers, or header sets, than homeport sends from files"]);
 		}
