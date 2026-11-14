@@ -204,6 +204,13 @@ func TestReactRouterServeAndRemixServeAssetsAreServedWithoutTheApp(t *testing.T)
 			}
 			same(t, got, w, out)
 		})
+		// Vite 8's Rolldown declares the exports with var, Vite 7 with const
+		t.Run(kind+", a Vite 8 build", func(t *testing.T) {
+			files := rrBuild("build/server/index.js", "/", "build/client")
+			files["build/server/index.js"] = strings.ReplaceAll(files["build/server/index.js"], "const ", "var ")
+			got, out := public(t, kind, "build/server/index.js", files)
+			same(t, got, want, out)
+		})
 	}
 	// Remix's classic compiler (public/build at /build/), and a build that
 	// isn't one of these (React Router's RSC build): the app's
