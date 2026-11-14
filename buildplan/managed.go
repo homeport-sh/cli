@@ -52,6 +52,8 @@ var managed = []ManagedVar{
 	{Name: "RSC_ACTION_ENCRYPTION_KEY", Make: MakeKey, Available: envfile.Build, Fixed: true,
 		Why: "React server actions (@vitejs/plugin-rsc): the same key on every build keeps forms in open tabs working across deploys. " +
 			"rsc-kit reads it; another framework needs rsc({ defineEncryptionKey: \"process.env.RSC_ACTION_ENCRYPTION_KEY\" })"},
+	{Name: "RSC_HOST_CALL_SECRET", Make: MakeKey, Available: envfile.Runtime, Previous: "RSC_HOST_CALL_SECRET_PREVIOUS",
+		Why: "rsc-kit beside a backend: proves the renderer's calls to the backend, and the backend's to it, the same on every copy of the app"},
 	{Name: "RSC_SIGNING_SECRET", Make: MakeKey, Available: envfile.Runtime, Previous: "RSC_SIGNING_SECRET_PREVIOUS",
 		Why: "rsc-kit: signs what a page watches for changes, the same on every copy of the app"},
 }
@@ -114,6 +116,9 @@ func ManagedVars(fsys fs.FS, s Settings) []ManagedVar {
 	}
 	if deps["@rsc-kit/core"] {
 		want["RSC_SIGNING_SECRET"] = true
+	}
+	if r.rscKitPair() {
+		want["RSC_HOST_CALL_SECRET"] = true // not alone: with no backend, rsc-kit would call its own APP_URL
 	}
 	if deps["astro"] && r.astroServerOutput() {
 		want["ASTRO_KEY"] = true

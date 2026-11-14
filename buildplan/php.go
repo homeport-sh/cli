@@ -44,8 +44,9 @@ func (r reader) phpDocRoot() string {
 // php plans a PHP app: on homeport's FrankenPHP base, where FrankenPHP is
 // built already. With a composer.json the platform check comes first
 // (seconds), then composer; then the front-end assets if the app builds
-// any, and the app is bundled with that FrankenPHP.
-func (r reader) php(p *Plan, cfg fileConfig, s Settings) error {
+// any, and the app is bundled with that FrankenPHP. An rsc-kit renderer
+// beside it (pair, backend.go) renders its pages instead of Inertia.
+func (r reader) php(p *Plan, cfg fileConfig, s Settings, pair bool) error {
 	composer := r.exists("composer.json")
 	if composer && !r.exists("composer.lock") {
 		return errors.New("composer.json without composer.lock: commit the lockfile, so the build installs what you tested")
@@ -58,7 +59,7 @@ func (r reader) php(p *Plan, cfg fileConfig, s Settings) error {
 		p.Install = "composer check-platform-reqs --no-dev --lock && composer install --no-dev --optimize-autoloader --no-interaction"
 	}
 	// Inertia's SSR: built with the rest, run beside the web (laravel.go)
-	ssr := cfg.Build.Command == "" && cfg.Static == "" && r.inertiaSSR()
+	ssr := cfg.Build.Command == "" && cfg.Static == "" && !pair && r.inertiaSSR()
 	p.Install = join(p.Install, r.frontEnd(ssr))
 	if cfg.Static == "" {
 		p.Kind = Bundle

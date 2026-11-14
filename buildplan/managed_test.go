@@ -59,6 +59,10 @@ func TestTheVariablesAFrameworkNeedsHomeportToSet(t *testing.T) {
 		"a lockfile that only mentions it": {js(`{"dependencies":{"react":"19"}}`,
 			"package-lock.json", `{"packages":{"node_modules/@vitejs/plugin-rsc-helper":{}}}`), buildplan.Settings{}, nil},
 		"a Go app": {map[string]string{"go.mod": "module x\n\ngo 1.27\n"}, buildplan.Settings{}, nil},
+		"rsc-kit beside Laravel": {laravel(nil, "package.json", `{"dependencies":{"@rsc-kit/core":"0.35.0"}}`, "bun.lock", "{}"),
+			buildplan.Settings{}, []string{"RSC_HOST_CALL_SECRET", "RSC_SIGNING_SECRET"}},
+		"rsc-kit beside Go": {map[string]string{"go.mod": "module x\n\ngo 1.27\n", "package.json": `{"dependencies":{"@rsc-kit/core":"0.35.0"}}`, "bun.lock": "{}"},
+			buildplan.Settings{}, []string{"RSC_HOST_CALL_SECRET", "RSC_SIGNING_SECRET"}},
 		"Next.js in a folder": {map[string]string{"apps/web/package.json": next, "apps/web/package-lock.json": npmLock},
 			buildplan.Settings{Root: "apps/web"}, []string{"NEXT_DEPLOYMENT_ID", "NEXT_SERVER_ACTIONS_ENCRYPTION_KEY"}},
 		"plugin-rsc in a workspace's lockfile": {map[string]string{
@@ -79,7 +83,7 @@ func TestTheVariablesAFrameworkNeedsHomeportToSet(t *testing.T) {
 func TestHowEachManagedVariableIsMade(t *testing.T) {
 	files := js(`{"dependencies":{"next":"16","@rsc-kit/core":"0.30","astro":"7","@astrojs/node":"11"}}`,
 		"package-lock.json", `{"packages":{"node_modules/@vitejs/plugin-rsc":{}}}`,
-		"astro.config.mjs", "export default defineConfig({ output: 'server' })")
+		"astro.config.mjs", "export default defineConfig({ output: 'server' })", "go.mod", "module x\n\ngo 1.27\n", "bun.lock", "{}") // a Go backend beside rsc-kit
 	got := map[string]buildplan.ManagedVar{}
 	for _, m := range buildplan.ManagedVars(repo(files), buildplan.Settings{}) {
 		got[m.Name] = m
@@ -97,6 +101,7 @@ func TestHowEachManagedVariableIsMade(t *testing.T) {
 		"NEXT_DEPLOYMENT_ID":                 {buildplan.MakeRelease, envfile.BuildOnly, true, ""},
 		"RSC_ACTION_ENCRYPTION_KEY":          {buildplan.MakeKey, envfile.Build, true, ""},
 		"RSC_SIGNING_SECRET":                 {buildplan.MakeKey, envfile.Runtime, false, "RSC_SIGNING_SECRET_PREVIOUS"},
+		"RSC_HOST_CALL_SECRET":               {buildplan.MakeKey, envfile.Runtime, false, "RSC_HOST_CALL_SECRET_PREVIOUS"},
 		"ASTRO_KEY":                          {buildplan.MakeKey, envfile.BuildOnly, false, ""},
 	} {
 		m, ok := got[name]
@@ -117,7 +122,7 @@ func TestHowEachManagedVariableIsMade(t *testing.T) {
 // homeport's from a person's: the two action keys' availability is fixed
 // whoever sets them.
 func TestAManagedNameIsKnownWithoutTheApp(t *testing.T) {
-	for _, n := range []string{"NEXT_SERVER_ACTIONS_ENCRYPTION_KEY", "NEXT_DEPLOYMENT_ID", "RSC_ACTION_ENCRYPTION_KEY", "RSC_SIGNING_SECRET", "ASTRO_KEY"} {
+	for _, n := range []string{"NEXT_SERVER_ACTIONS_ENCRYPTION_KEY", "NEXT_DEPLOYMENT_ID", "RSC_ACTION_ENCRYPTION_KEY", "RSC_SIGNING_SECRET", "RSC_HOST_CALL_SECRET", "ASTRO_KEY"} {
 		if m, ok := buildplan.Managed(n); !ok || m.Name != n {
 			t.Errorf("Managed(%q) = %+v, %v", n, m, ok)
 		}
@@ -126,7 +131,7 @@ func TestAManagedNameIsKnownWithoutTheApp(t *testing.T) {
 		t.Error("Managed(DATABASE_URL)")
 	}
 	names := buildplan.ManagedNames()
-	if !slices.IsSorted(names) || len(names) != 5 {
+	if !slices.IsSorted(names) || len(names) != 6 {
 		t.Errorf("ManagedNames = %v", names)
 	}
 	// homeport's keys are build variables: a build may take every one

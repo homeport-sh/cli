@@ -603,12 +603,13 @@ for `laravel-vite-plugin` or `@inertiajs/vite`). Then:
 - **It runs beside the web, in the same sandbox**, so PHP reaches it at
   Inertia's default address, `http://127.0.0.1:13714`, with nothing to
   configure, whichever of the three it is. homeport starts the web through
-  `.homeport/beside.php`, a small supervisor in the app's own PHP. It starts
-  what `.homeport/beside` lists (the renderer), then the web. A renderer
-  that exits is started again after a second, then longer, up to 30
-  seconds. A stop reaches the web, and when the web exits, so does the
-  renderer. Each copy of the app has its own. An app that sleeps when idle
-  sleeps and wakes with its renderer.
+  its supervisor (`homeport supervise`, which the builder puts in the
+  bundle as `.homeport/supervise`). It starts what `.homeport/beside` lists
+  (the renderer), then the web. A renderer that exits is started again
+  after a second, then longer, up to 30 seconds. So is the web, unless it
+  exits 5 times in a minute: then the supervisor stops, and homeport sees
+  the app fail. A stop reaches each. Each copy of the app has its own. An
+  app that sleeps when idle sleeps and wakes with its renderer.
 - **While the renderer isn't answering** (it failed, or a request came in
   as it started), Inertia renders those pages in the browser instead, and
   the app logs why.
@@ -815,6 +816,60 @@ Offered: 3.12, 3.13, 3.14 and 3.15, each at homeport's pinned patch.
 The release is read-only, so everything is compiled at build. Data goes to
 a database or object storage, never into the app's folder. An app with a
 top-level `bin/` folder is refused, because `bin` is the interpreter.
+
+## A backend beside an rsc-kit renderer
+
+An app whose pages an [rsc-kit](https://github.com/rsc-kit/rsc-kit)
+renderer serves can have a backend in another language beside it, as one
+app: a Laravel, PHP, Go, Rust or Python app whose folder also has a
+`package.json` with `@rsc-kit/core`, built with Bun (`bun.lock` or
+`bun.lockb`). Nothing to configure. A build command, an output, a kind or
+`static:` said, by the build settings or `homeport.yaml`, makes it a plain
+backend again: your build makes the bundle. The plan says
+`Laravel · rsc-kit` (or `Go · rsc-kit`, ...).
+
+- **The build** is the backend's own (Laravel's caches, its release
+  command, its processes and queue, a Go binary, ...), then rsc-kit's: its
+  `build` script, which is required. A Go, Rust or Python image fetches the
+  pinned Bun first.
+- **The renderer** is the binary rsc-kit's single-binary step compiles
+  (`bun build --compile` in its `compile:binary` script, else `compile`),
+  run once more on the pinned glibc Bun for the Linux the app runs on, as
+  Inertia's is. A `-musl` target is refused. With no such step, it's
+  rsc-kit's server folder (`.output/server`, `.output/public`) on the
+  pinned Bun.
+- **What runs** is homeport's supervisor, as for Inertia: the backend
+  first, as it would run alone but on port 8080, then the renderer on the
+  app's port, with `RSC_BACKEND=http://127.0.0.1:8080`. Each is started
+  again when it exits, unless one exits 5 times in a minute: then the app
+  stops, and homeport sees it fail. Each copy of the app has its own pair,
+  and the two sleep and wake together.
+- **The backend's paths** go to the backend straight from the host, never
+  through the renderer: rsc-kit's build names them (`backendPaths` in
+  `.output/rsc-kit.json`), or `homeport.yaml` does, in their place:
+
+  ```yaml
+  backend:
+    paths: [/api, /webhooks/stripe]
+  ```
+
+  A path matches itself and everything under it (`/api` is `/api/users`
+  too, never `/apix`). Each starts with `/`, has letters, digits and
+  `. _ ~ -` in its segments, no `.` or `..` segment and no trailing `/`;
+  20 at most, 128 bytes each. `/_edge`, `/.well-known` and `/__homeport`
+  are the host's. rsc-kit's host-call endpoint (`/__rsc/host-call`) only
+  the renderer calls, so a path holding it is refused. With no paths,
+  only the renderer's calls reach the backend, and the build says so.
+- **The backend listens on every address** (`:8080`, not `127.0.0.1`),
+  since the host reaches it from outside the sandbox. One that listens on
+  `127.0.0.1` alone, with backend paths, stops the app, saying why.
+- **`RSC_HOST_CALL_SECRET`** is set for the app, as rsc-kit's signing
+  secret is: the renderer and the backend prove their calls to each other
+  with it. A rotation keeps the one before as
+  `RSC_HOST_CALL_SECRET_PREVIOUS`, which both read.
+
+**Its memory is the app's.** The renderer runs within the app's memory,
+beside the backend: size the app for both (the plan says so).
 
 ## Assets kept for the next release
 
