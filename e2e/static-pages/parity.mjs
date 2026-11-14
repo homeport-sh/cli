@@ -9,7 +9,7 @@
 // gives it besides the file's own, and an immutable asset, the
 // Cache-Control the host sends for it. Each of routes.json's redirects, at
 // paths its pattern matches: the app answers what the host would (status,
-// Location, a 308's Refresh), the host's first match in order. Each --hook path: the app's code runs for
+// Location, Refresh as routes.json says), the host's first match in order. Each --hook path: the app's code runs for
 // it (the marker is there), and it is NOT in the tree. Each --left path (a
 // redirect, another base): NOT in the tree. --edge: the edge marker the
 // build wrote lists only pages of the tree (so each is checked above),
@@ -78,12 +78,12 @@ function answer(path_) {
 			} else if (m) {
 				if (i >= segs.length) ok = false;
 				params[m[1]] = segs[i++];
-			} else if (i >= segs.length || segs[i++].toLowerCase() !== p.toLowerCase()) ok = false;
+			} else if (i >= segs.length || (r.caseless ? segs[i++].toLowerCase() !== p.toLowerCase() : segs[i++] !== p)) ok = false;
 			if (!ok || (m && m[2] && j !== ps.length - 1)) break;
 		}
 		if (!ok || i !== segs.length) continue;
 		const to = r.to.replace(/\/:(\w+)\*/g, (_, n) => (params[n] ? "/" + params[n] : "")).replace(/:(\w+)[*+]?/g, (_, n) => params[n]);
-		return { status: r.status, location: to };
+		return { status: r.status, location: to, refresh: r.refresh ? "0;url=" + to : null };
 	}
 	return null;
 }
@@ -137,7 +137,7 @@ for (const red of routes.redirects || []) {
 		const r = await fetch(app + p, { redirect: "manual" });
 		const got = { status: r.status, location: r.headers.get("location"), refresh: r.headers.get("refresh") };
 		if (!want) bad(`${p}: a sample of ${red.from} the host doesn't redirect`);
-		else if (got.status !== want.status || got.location !== want.location || got.refresh !== (want.status === 308 ? "0;url=" + want.location : null) || r.headers.has(marker)) {
+		else if (got.status !== want.status || got.location !== want.location || got.refresh !== want.refresh || r.headers.has(marker)) {
 			bad(`${p}: the app answers ${JSON.stringify(got)}, the host would ${JSON.stringify(want)}`);
 		} else ok(`${p}: ${want.status} ${want.location}, as the host answers it without the app`);
 	}

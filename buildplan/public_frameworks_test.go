@@ -308,9 +308,11 @@ type publicRoutes struct {
 }
 
 type publicRedirect struct {
-	From   string `json:"from"`
-	To     string `json:"to"`
-	Status int    `json:"status"`
+	From     string `json:"from"`
+	To       string `json:"to"`
+	Status   int    `json:"status"`
+	Caseless bool   `json:"caseless"`
+	Refresh  bool   `json:"refresh"`
 }
 
 func readRoutes(t *testing.T, raw string) publicRoutes {
@@ -426,10 +428,12 @@ func TestNextConfigHeadersGoWithTheAssets(t *testing.T) {
 }
 
 // A Next.js config's redirects(), in routes.json for the host to answer -
-// in order, up to the first it can't answer as Next.js does. What the host
-// answers for each (the status, Location, a 308's Refresh) is recorded from
-// next start in the engine's tests; e2e/static-pages.sh checks it against
-// a running app.
+// in order, up to the first it can't answer as Next.js does. Next matches
+// literals in any case and sends Refresh with a 308, so each says so
+// (caseless, a 308's refresh): the format is every framework's, and the
+// host knows none. What the host answers for each (the status, Location,
+// Refresh) is recorded from next start in the engine's tests;
+// e2e/static-pages.sh checks it against a running app.
 func TestNextConfigRedirectsAreAnsweredWithoutTheApp(t *testing.T) {
 	internal := map[string]any{"source": "/:path+/", "destination": "/:path+", "internal": true, "statusCode": 308, "regex": "^(?:/((?:[^/]+?)(?:/(?:[^/]+?))*))/$"}
 	red := func(source, dest string, status int, regex string, more ...any) map[string]any {
@@ -451,8 +455,8 @@ func TestNextConfigRedirectsAreAnsweredWithoutTheApp(t *testing.T) {
 	}
 	got, out, _, raw := publicRun(t, "next", ".", nextStandalone("", nil, map[string]any{"redirects": redirects}, nil, nil), "")
 	same(t, got, nextAssets, out)
-	want := []publicRedirect{{"/:path+/", "/:path+", 308}, {"/", "/dashboard", 307}, {"/old/:slug", "/new/:slug", 308},
-		{"/docs/:path*", "/guide/:path*", 301}, {"/m/:a/:b", "/n/:b/:a", 307}, {"/bare", "https://example.com/", 308}, {"/v1.0/x", "/v2/x/", 302}}
+	want := []publicRedirect{{"/:path+/", "/:path+", 308, true, true}, {"/", "/dashboard", 307, true, false}, {"/old/:slug", "/new/:slug", 308, true, true},
+		{"/docs/:path*", "/guide/:path*", 301, true, false}, {"/m/:a/:b", "/n/:b/:a", 307, true, false}, {"/bare", "https://example.com/", 308, true, true}, {"/v1.0/x", "/v2/x/", 302, true, false}}
 	if g := readRoutes(t, raw).Redirects; !reflect.DeepEqual(g, want) {
 		t.Errorf("redirects:\n got  %v\n want %v", g, want)
 	}
@@ -473,7 +477,7 @@ func TestNextConfigRedirectsAreAnsweredWithoutTheApp(t *testing.T) {
 		"a port":                         red("/port", "https://example.com:8443/x", 307, `^(?!/_next)/port(?:/)?$`),
 	} {
 		_, _, _, raw := publicRun(t, "next", ".", nextStandalone("", nil, map[string]any{"redirects": []any{internal, r, red("/", "/dashboard", 307, `^(?!/_next)/(?:/)?$`)}}, nil, nil), "")
-		if g := readRoutes(t, raw).Redirects; !reflect.DeepEqual(g, []publicRedirect{{"/:path+/", "/:path+", 308}}) {
+		if g := readRoutes(t, raw).Redirects; !reflect.DeepEqual(g, []publicRedirect{{"/:path+/", "/:path+", 308, true, true}}) {
 			t.Errorf("%s: %v", name, g)
 		}
 	}
@@ -484,7 +488,7 @@ func TestNextConfigRedirectsAreAnsweredWithoutTheApp(t *testing.T) {
 			red("/b/old", "/b/new", 308, `^(?!/b/_next)/b/old(?:/)?$`),
 			red("/b/:x", "/b/y/:x", 308, `^(?!/b/_next)/b(?:/([^/]+?))(?:/)?$`),
 			red("/b/after", "/b", 308, `^(?!/b/_next)/b/after(?:/)?$`)}}, nil, nil), "")
-		want := []publicRedirect{{"/:path+/", "/:path+", 308}, {"/b", "/b/home", 307}, {"/b/old", "/b/new", 308}}
+		want := []publicRedirect{{"/:path+/", "/:path+", 308, true, true}, {"/b", "/b/home", 307, true, false}, {"/b/old", "/b/new", 308, true, true}}
 		if g := readRoutes(t, raw).Redirects; !reflect.DeepEqual(g, want) {
 			t.Errorf("redirects:\n got  %v\n want %v", g, want)
 		}
