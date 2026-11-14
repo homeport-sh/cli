@@ -25,7 +25,8 @@ release. The app doesn't wake for them and never sees the request.
 | SvelteKit, `@sveltejs/adapter-bun` | no | everything goes to the app |
 | Nuxt, Nitro, TanStack Start, Express and other servers | no | everything goes to the app. Their request hooks or route rules can run before any file. |
 | Laravel (FrankenPHP) | no | everything goes to the app. It sends no `Cache-Control` for its files, so serving them from the host would change their headers. |
-| rsc-kit, Next.js (next-bun-compile) | through the edge contract | see [A framework with a server of its own](#a-framework-with-a-server-of-its-own) |
+| rsc-kit 0.35.0+ | yes | the files its `.output/files.json` lists (see [The files manifest](#the-files-manifest)): `assets/` and the service worker, with the headers rsc-kit gives them. Pages through the edge contract. |
+| rsc-kit before 0.35.0, Next.js (next-bun-compile) | through the edge contract | see [A framework with a server of its own](#a-framework-with-a-server-of-its-own) |
 | An app with its own start command (`run:` in `homeport.yaml`, or the start command in its settings) | no | everything goes to the app. Its command might run code of its own first. |
 | A static site (no server) | already | the whole site is files, and it never sleeps |
 
@@ -231,6 +232,67 @@ host applies it. The format is the same for every framework:
   name or value it refuses) leaves the whole release's tree to the app, so
   nothing is ever answered without the headers or redirect the app would
   give it.
+
+### The files manifest
+
+A framework (or any build) can say itself which files its server answers
+before any of the app's code runs, and the headers it sends with them. It
+writes `.output/files.json` in the app's folder; the build reads it and
+fills the public tree from it. rsc-kit 0.35.0 and later write it. Nothing
+in it is specific to one framework:
+
+```json
+{
+  "v": 1,
+  "root": "public",
+  "files": ["/assets/index-Ab12.js", "/favicon.ico", "/sw.js"],
+  "precompressed": ["br", "gzip", "zstd"],
+  "headers": [
+    { "match": "/sw.js", "headers": { "cache-control": "public, max-age=0, must-revalidate" } },
+    { "match": "/assets/**", "headers": { "cache-control": "public, max-age=31536000, immutable" } }
+  ],
+  "middleware": false
+}
+```
+
+- **`v`** is 1. Any other version, or a manifest the build can't read,
+  leaves every file to the app.
+- **`root`** is a folder relative to `files.json` itself, inside its folder
+  (normally `.output/public`).
+- **`files`** are the URL paths answered from `root`, and the only ones:
+  nothing else under `root` is. A path is the file's name under `root`,
+  joined with `/`. The host answers a request whose path is exactly one of
+  them (no `/x` to `/x/index.html`); anything else goes to the app.
+- **`precompressed`**: a file's `.br` and `.gz` beside it are its Brotli and
+  gzip copies, sent to a browser that accepts them, with
+  `Content-Encoding` and `Vary: Accept-Encoding`. A file without them gets
+  the build's own copies. `.zst` copies aren't sent; the host sends the
+  Brotli or gzip copy instead.
+- **`headers`**: every rule whose `match` is the path, or a prefix ending in
+  `/**` (`/assets/**` matches everything under `/assets/`), applies, in
+  order; a later rule's value replaces an earlier one's. A file gets
+  exactly these headers, so it's answered as the app answers it. A rule
+  with any other `match` is ignored, so a framework leaves a file such a
+  rule would match out of `files`.
+- **`middleware`** is `false`: none of the app's code runs for these files.
+  Anything else leaves every file to the app.
+
+Which files the host answers:
+
+- A file whose headers have the year-long `public, max-age=31536000,
+  immutable` is a fingerprinted asset. The release after it keeps it for a
+  day, for a tab opened before that deploy.
+- A file with another `Cache-Control` is answered with its headers.
+- A file with no `Cache-Control` stays with the app: the host would add
+  its own `no-cache`, which the app doesn't send.
+- So does a file with a header the host can't send (see
+  [The public tree's routes](#the-public-trees-routes)), a path with
+  characters other than plain ones, a dotfile, and a file that isn't in
+  `root` (a link out of it included).
+
+A framework whose server is a binary (rsc-kit's) has no folder for the
+tree, so the build writes it in the app's folder and the builder ships it
+with the binary.
 
 ## Security
 
