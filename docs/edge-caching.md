@@ -124,7 +124,8 @@ homeport:   and its config's redirects, answered without the app: /:path+/ -> /:
 - **Redirects.** The host answers them as Next.js does: the status
   (`permanent`, or `statusCode`), `Location` with the `:param`s filled in,
   the destination as the body, and `Refresh` on a 308. Paths match in any
-  case, and a path with or without one trailing slash, as Next.js's do. The
+  case, and a path with or without one trailing slash, as Next.js's do
+  (the build writes `caseless` and, on a 308, `refresh` for each). The
   trailing-slash redirect Next.js adds (`/about/` to `/about`) is one of
   them.
 - **Left to the app.** Redirects are taken in order, up to the first the
@@ -189,7 +190,10 @@ files.
 A framework's server can do more before any of the app's code than answer
 files: add headers to them, and answer redirects. The build writes what it
 does as data, in `.homeport/public/routes.json` beside the files, and the
-host applies it. The format is the same for every framework:
+host applies it. The format is the same for every framework, and the host
+knows none: where a framework's answer differs from the format's default,
+each entry says so. Every framework's reader writes it through the one
+writer in `buildplan/embed/public.mjs`.
 
 ```json
 {
@@ -198,9 +202,9 @@ host applies it. The format is the same for every framework:
     { "set": [["X-Frame-Options", "DENY"], ["X-Content-Type-Options", "nosniff"]], "urls": ["/_next/static/chunks/a1b2.js", "/_next/static/css/c3d4.css"] }
   ],
   "redirects": [
-    { "from": "/:path+/", "to": "/:path+", "status": 308 },
-    { "from": "/", "to": "/dashboard", "status": 307 },
-    { "from": "/docs/:path*", "to": "/guide/:path*", "status": 301 }
+    { "from": "/:path+/", "to": "/:path+", "status": 308, "caseless": true, "refresh": true },
+    { "from": "/", "to": "/dashboard", "status": 307, "caseless": true },
+    { "from": "/docs/:path*", "to": "/guide/:path*", "status": 301, "caseless": true }
   ]
 }
 ```
@@ -215,11 +219,12 @@ host applies it. The format is the same for every framework:
 - **`redirects`.** Tried in order for any request the host would pass to
   the app, any method, before the files. The first whose `from` matches
   answers with its `status` (301, 302, 303, 307 or 308), `Location: <to>`
-  with the params filled in, `<to>` as the body, and `Refresh: 0;url=<to>`
-  on a 308. At most 128.
+  with the params filled in, `<to>` as the body, and with `"refresh": true`,
+  `Refresh: 0;url=<to>`. At most 128.
   - `from` is a path of segments: a literal (letters, digits, `-._~`),
     `:name` (one segment), or last, `:name*` (zero or more) or `:name+`
-    (one or more). Literals match in any case. A `from` that doesn't end in
+    (one or more). Literals match as written, or in any case with
+    `"caseless": true`. A `from` that doesn't end in
     `/` also matches the path with one `/` added, and one that does needs
     it.
   - `to` is a path or an `http(s)://host/path` URL, with `:name`,

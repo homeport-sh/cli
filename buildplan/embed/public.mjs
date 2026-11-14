@@ -89,7 +89,7 @@ class Tree {
 		this.left = []; // [url, why]
 		this.headers = new Map(); // url -> its set's key
 		this.sets = new Map(); // key (JSON) -> [[name, value]...]
-		this.redirects = []; // {from, to, status}
+		this.redirects = []; // {from, to, status, caseless?, refresh?}
 	}
 	// header: the headers its server adds to url's file; false when the
 	// host can't send them (the file's then the app's)
@@ -660,7 +660,10 @@ function nextRedirect(r, base) {
 		} else if (!/^[A-Za-z0-9._~/-]+$/.test(t)) return null;
 	}
 	if (/(^|\/)\.\.?(\/|$)/.test(to.replace(/:\w+[*+]?/g, "x")) || /:\w+\*/.test(to.replace(/\/:\w+\*/g, ""))) return null;
-	return { from, to: origin + to, status: r.statusCode };
+	// Next's router matches literals in any case (without
+	// caseSensitiveRoutes, which stops the list) and router-server.js sends
+	// Refresh with a 308: routes.json says so, the host knows no framework
+	return { from, to: origin + to, status: r.statusCode, caseless: true, ...(r.statusCode === 308 && { refresh: true }) };
 }
 
 // react-router-serve and remix-serve (Vite builds): express.static on the
