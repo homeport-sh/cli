@@ -31,7 +31,7 @@ homeport deploy     # upload the working tree, build it, follow it live
 | `homeport env rebuild` | builds the live commit again with the variables as they are now: a change the build sees needs one |
 | `homeport env pull [--env <name>]` | an environment's database and storage credentials into `.env.local`, never production's |
 | `homeport domains ls` | an app's own domains (its Domains tab's: live or pending, direct or behind Cloudflare's proxy, and where each redirects), then its platform domains (its tenants' own, which the app adds through the Domains API): each one's status and why it isn't live, how many are live, and how many the plan includes |
-| `homeport domains add <domain>` | adds one, and says the DNS records to set at its provider (the same one again is the one there) |
+| `homeport domains add <domain> [--no-www]` | adds one, and says the DNS records to set at its provider (the same one again is the one there); a root domain's www. (a www.'s root) comes with it, redirecting to it and not billed, unless `--no-www` |
 | `homeport domains get <domain>` | one's status, why it isn't live, and its DNS records |
 | `homeport domains remove <domain>` | removes one: it's no longer served (asks first; `--yes`) |
 | `homeport domains connect <domain>` | opens its DNS provider's page that sets its records (Domain Connect: Cloudflare and others); you sign in there and confirm. `domains get` says when its provider can. A person's sign-in only, not an API token; `--no-browser` says the link |

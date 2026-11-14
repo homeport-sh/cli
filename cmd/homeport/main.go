@@ -65,8 +65,10 @@ func (a *app) usage() {
   homeport domains ls an app's platform domains (its tenants' own, which
                       the app adds through the Domains API): each one's
                       status, and why it isn't live
-  homeport domains add <domain>
-                      adds one, and says the DNS records to set
+  homeport domains add <domain> [--no-www]
+                      adds one, and says the DNS records to set; a root's
+                      www. (a www.'s root) with it, redirecting to it, not
+                      billed, unless --no-www
   homeport domains get <domain>
                       one's status and DNS records
   homeport domains remove <domain>

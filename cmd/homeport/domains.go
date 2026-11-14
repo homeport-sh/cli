@@ -12,7 +12,7 @@ import (
 )
 
 const domainsUsage = `usage: homeport domains ls
-       homeport domains add <domain>
+       homeport domains add <domain> [--no-www]
        homeport domains get <domain>
        homeport domains remove <domain> [--yes]
        homeport domains connect <domain> [--no-browser]
@@ -120,7 +120,11 @@ func (a *app) domainsLs(ctx context.Context, args []string) error {
 	}
 	rows := [][]string{{"DOMAIN", "STATUS", "ADDED", "WHY"}}
 	for _, d := range all {
-		rows = append(rows, []string{d.Domain, d.Status, day(d.CreatedAt), d.Why})
+		why := d.Why
+		if d.RedirectTo != "" {
+			why = strings.TrimSuffix("→ "+d.RedirectTo+"; "+why, "; ")
+		}
+		rows = append(rows, []string{d.Domain, d.Status, day(d.CreatedAt), why})
 	}
 	if err := a.table(rows); err != nil {
 		return err
@@ -146,9 +150,12 @@ func (a *app) table(rows [][]string) error {
 }
 
 // domainsAdd is `homeport domains add <domain>`: the domain added (the
-// same one again is the one there), and what to set at its DNS provider.
+// same one again is the one there), and what to set at its DNS provider;
+// and a root's www. (a www.'s root) with it, redirecting to it, unless
+// --no-www.
 func (a *app) domainsAdd(ctx context.Context, args []string) error {
 	fs, f := a.envFlagSet("domains add")
+	noWWW := fs.Bool("no-www", false, "the domain alone: not its www. (or a www.'s root) too")
 	pos, err := parseMixed(fs, args)
 	if err != nil {
 		return err
@@ -161,12 +168,16 @@ func (a *app) domainsAdd(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	d, err := c.AddDomain(ctx, t.link.Team, t.link.App, name)
+	d, err := c.AddDomain(ctx, t.link.Team, t.link.App, name, *noWWW)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(a.out, "Added %s to %s.\n", d.Domain, envWhere(t))
 	sayDomain(a.out, d)
+	if w := d.Companion; w != nil {
+		fmt.Fprintf(a.out, "\nAlso added %s: it redirects to %s once both are live, path and query kept, and is not billed (--no-www adds the domain alone).\n", w.Domain, d.Domain)
+		sayDomain(a.out, w)
+	}
 	return nil
 }
 
@@ -311,6 +322,9 @@ func sayDomain(out io.Writer, d *cloud.Domain) {
 		fmt.Fprintf(out, " (%s)", d.Why)
 	}
 	fmt.Fprintln(out)
+	if d.RedirectTo != "" {
+		fmt.Fprintf(out, "Redirects to %s once both are live, path and query kept; not billed.\n", d.RedirectTo)
+	}
 	if d.Unrouted != "" {
 		fmt.Fprintf(out, "Not reachable yet: %s.\n", d.Unrouted)
 	}
