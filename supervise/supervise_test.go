@@ -44,7 +44,7 @@ func TestMain(m *testing.M) {
 // HELPER_STOP_EXIT.
 func helper(name string) {
 	say := func(f string, a ...any) { fmt.Fprintf(os.Stderr, name+" "+f+"\n", a...) }
-	say("ran args=%s port=%s backend=%s ram=%s", strings.Join(os.Args[1:], ","), os.Getenv("PORT"), os.Getenv("RSC_BACKEND"), os.Getenv("BUN_JSC_forceRAMSize"))
+	say("ran args=%s port=%s backend=%s ram=%s pid=%d", strings.Join(os.Args[1:], ","), os.Getenv("PORT"), os.Getenv("RSC_BACKEND"), os.Getenv("BUN_JSC_forceRAMSize"), os.Getpid())
 	if c := os.Getenv("HELPER_EXIT"); c != "" {
 		n, _ := strconv.Atoi(c)
 		os.Exit(n)
@@ -166,6 +166,19 @@ func exitCode(t *testing.T, cmd *exec.Cmd, out *syncBuf) int {
 		t.Fatalf("still running after 15s:\n%s", out)
 	}
 	return -1
+}
+
+// firstPid is the pid name first ran as in out, 0 when it never ran.
+func firstPid(out, name string) int {
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, name+" ran ") {
+			if _, p, ok := strings.Cut(l, " pid="); ok {
+				n, _ := strconv.Atoi(p)
+				return n
+			}
+		}
+	}
+	return 0
 }
 
 // before says whether a is in out, and before b.
@@ -302,7 +315,9 @@ func TestWhatsBesideTheWebStartsFirst(t *testing.T) {
 	cmd, out := supervise(t, dir, port, args, env, "PORT=8000", "HOMEPORT_MEMORY_MB=1024", "HELPER_STOP_EXIT=5")
 	waitFor(t, func() bool { return strings.Count(out.String(), "ssr ran") >= 7 }, out)
 	s := out.String()
-	if !before(s, "ssr ran", "web ran") || !before(s, "ssr2 ran", "web ran") {
+	// started before, by pid: each is forked in turn, and pids go up; when
+	// each says it ran is up to the scheduler
+	if ssr, ssr2, web := firstPid(s, "ssr"), firstPid(s, "ssr2"), firstPid(s, "web"); ssr == 0 || ssr2 == 0 || web == 0 || ssr > web || ssr2 > web {
 		t.Errorf("the web started before what's beside it:\n%s", s)
 	}
 	if !strings.Contains(s, "ssr ran args=--max-old-space-size=256 port=8000 ") || !strings.Contains(s, "web ran args=a1,a2 port=8000 backend= ") {
