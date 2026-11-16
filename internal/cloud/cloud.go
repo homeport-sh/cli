@@ -78,26 +78,8 @@ func (c *Client) callUpTo(ctx context.Context, hc *http.Client, method, path str
 		}
 		body = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.Base, "/")+path, body)
+	res, err := c.send(ctx, hc, method, path, body, "application/json")
 	if err != nil {
-		return err
-	}
-	if in != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	req.Header.Set("Accept", "application/json")
-	if c.UserAgent != "" {
-		req.Header.Set("User-Agent", c.UserAgent)
-	}
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
-	}
-	res, err := hc.Do(req)
-	if err != nil {
-		var ue *url.Error
-		if errors.As(err, &ue) {
-			return fmt.Errorf("couldn't reach %s: %v", c.Base, ue.Err)
-		}
 		return err
 	}
 	defer res.Body.Close()
@@ -111,6 +93,40 @@ func (c *Client) callUpTo(ctx context.Context, hc *http.Client, method, path str
 		}
 		return json.Unmarshal(raw, out)
 	}
+	return answerError(res, raw, path)
+}
+
+// send sends a request to path, signed in, accepting accept (a body is
+// JSON); a server not reached is said so.
+func (c *Client) send(ctx context.Context, hc *http.Client, method, path string, body io.Reader, accept string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.Base, "/")+path, body)
+	if err != nil {
+		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Accept", accept)
+	if c.UserAgent != "" {
+		req.Header.Set("User-Agent", c.UserAgent)
+	}
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	res, err := hc.Do(req)
+	if err != nil {
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			return nil, fmt.Errorf("couldn't reach %s: %v", c.Base, ue.Err)
+		}
+		return nil, err
+	}
+	return res, nil
+}
+
+// answerError is a refusal's answer, raw, to a call to path: ErrSignedOut,
+// or an *Error saying why.
+func answerError(res *http.Response, raw []byte, path string) error {
 	var p struct {
 		Error string `json:"error"`
 		Field string `json:"field"`
@@ -618,13 +634,31 @@ func (e AuditEntry) MarshalJSON() ([]byte, error) {
 	return json.Marshal(plain(e))
 }
 
-// AuditFilter narrows a team's activity; each part is optional. App is an
-// app environment's id; Actor a person's email, user:<id>, token:<id>,
-// support or homeport; Kind one of people, access, billing, apps, data,
-// domains, jobs, support, homeport; Since and Until a time (RFC 3339), a
-// day (UTC) or an age (12h, 7d) - Until not included.
+// AuditFilter narrows a team's activity; each part is optional, and the
+// API reads each name. App is an app, every environment of it: its name,
+// its id or any of its environments' ids. Env is one environment: its id,
+// or its name with App. Actor is a person's email, an API token's name,
+// user:<id>, token:<id>, support or homeport; Kind one of people, access,
+// billing, apps, data, domains, jobs, support, homeport; Since and Until a
+// time (RFC 3339), a day (UTC; Until's included) or an age (12h, 7d).
 type AuditFilter struct {
-	App, Actor, Kind, Since, Until string
+	App, Env, Actor, Kind, Since, Until string
+}
+
+// query is f as the API's query, with extra.
+func (f AuditFilter) query(extra map[string]string) url.Values {
+	q := url.Values{}
+	for k, v := range map[string]string{"app": f.App, "env": f.Env, "actor": f.Actor, "kind": f.Kind, "since": f.Since, "until": f.Until} {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	for k, v := range extra {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	return q
 }
 
 // Audit is a page of a team's activity, newest first: Next reads the page
@@ -642,12 +676,7 @@ const MaxAuditPage = 1000
 // 50), from cursor (a page's Next; "" the newest): its owner's, or a team
 // token's that may audit:read.
 func (c *Client) Audit(ctx context.Context, team string, f AuditFilter, cursor string, limit int) (*Audit, error) {
-	q := url.Values{}
-	for k, v := range map[string]string{"app": f.App, "actor": f.Actor, "kind": f.Kind, "since": f.Since, "until": f.Until, "cursor": cursor} {
-		if v != "" {
-			q.Set(k, v)
-		}
-	}
+	q := f.query(map[string]string{"cursor": cursor})
 	if limit > 0 {
 		q.Set("limit", strconv.Itoa(limit))
 	}
@@ -658,6 +687,27 @@ func (c *Client) Audit(ctx context.Context, team string, f AuditFilter, cursor s
 	var out Audit
 	err := c.callUpTo(ctx, c.http(), "GET", p, nil, &out, 16<<20)
 	return &out, err
+}
+
+// AuditExport is the Activity page's export of a team's activity that f
+// matches, as format (csv or json), newest first, up to the API's most:
+// its body, to be closed, and the note that it was cut short and how to
+// get the rest ("" it's whole) - which the file says too.
+func (c *Client) AuditExport(ctx context.Context, team string, f AuditFilter, format string) (io.ReadCloser, string, error) {
+	p := "/v1/cli/teams/" + url.PathEscape(team) + "/audit/export?" + f.query(map[string]string{"format": format}).Encode()
+	res, err := c.send(ctx, c.http(), "GET", p, nil, "*/*")
+	if err != nil {
+		return nil, "", err
+	}
+	if res.StatusCode >= 200 && res.StatusCode < 300 {
+		return res.Body, res.Header.Get("Homeport-Export-Note"), nil
+	}
+	defer res.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(res.Body, 1<<16))
+	if err != nil {
+		return nil, "", err
+	}
+	return nil, "", answerError(res, raw, p)
 }
 
 // Domain is one of an app's platform domains: a tenant's domain on the

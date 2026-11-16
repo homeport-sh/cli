@@ -2,10 +2,10 @@ package main
 
 import (
 	"cmp"
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,15 +19,11 @@ import (
 var auditKinds = []string{"people", "access", "billing", "apps", "data", "domains", "jobs", "support", "homeport"}
 
 // serveAudit is GET /v1/cli/teams/{team}/audit: the team's activity,
-// newest first, narrowed by app, actor and kind, a page of limit at a time
+// newest first, narrowed as auditMatch reads it, a page of limit at a time
 // (at most auditPage) from cursor.
 func (f *fakeAPI) serveAudit(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f.auditReads = append(f.auditReads, q)
-	if k := q.Get("kind"); k != "" && !slices.Contains(auditKinds, k) {
-		f.write(w, 400, map[string]string{"error": "no such kind: " + k, "field": "kind"})
-		return
-	}
 	limit := 50
 	if v := q.Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -40,18 +36,10 @@ func (f *fakeAPI) serveAudit(w http.ResponseWriter, r *http.Request) {
 	if f.auditPage > 0 {
 		limit = min(limit, f.auditPage)
 	}
-	match := []map[string]any{}
-	for _, e := range f.audit {
-		if app := q.Get("app"); app != "" && e["app_id"] != app {
-			continue
-		}
-		if k := q.Get("kind"); k != "" && e["kind"] != k {
-			continue
-		}
-		if a := q.Get("actor"); a != "" && e["actor_email"] != a && (a != "support" || e["actor_kind"] != "operator") {
-			continue
-		}
-		match = append(match, e)
+	match, refused := f.auditMatch(q)
+	if refused != nil {
+		f.write(w, 400, refused)
+		return
 	}
 	from := 0
 	if c := q.Get("cursor"); c != "" {
@@ -63,6 +51,69 @@ func (f *fakeAPI) serveAudit(w http.ResponseWriter, r *http.Request) {
 		next = "c" + strconv.Itoa(from+limit)
 	}
 	f.write(w, 200, map[string]any{"entries": match[from:min(from+limit, len(match))], "next": next, "days": cmp.Or(f.auditDays, 30)})
+}
+
+// auditMatch are the entries q's filters match, as the API reads them: app
+// a whole app (blog, by name or any of its environments' ids), env one
+// environment (its id, or its name with app), actor an email, support or
+// a token's name. A filter that isn't one is refused, as the API words it.
+func (f *fakeAPI) auditMatch(q url.Values) ([]map[string]any, map[string]string) {
+	if k := q.Get("kind"); k != "" && !slices.Contains(auditKinds, k) {
+		return nil, map[string]string{"error": "no such kind: " + k + " (the kinds are " + strings.Join(auditKinds, ", ") + ")", "field": "kind"}
+	}
+	app, env := q.Get("app"), q.Get("env")
+	if app != "" && app != "blog" && app != blogID && app != stageID {
+		return nil, map[string]string{"error": "no such app: " + app, "field": "app"}
+	}
+	if env != "" && app == "" && env != blogID && env != stageID {
+		return nil, map[string]string{"error": "no such environment: " + env + " (an environment's id, or its name with app)", "field": "env"}
+	}
+	match := []map[string]any{}
+	for _, e := range f.audit {
+		if app != "" && e["app_name"] != "blog" {
+			continue
+		}
+		if env != "" && e["app_id"] != env && e["environment"] != env {
+			continue
+		}
+		if k := q.Get("kind"); k != "" && e["kind"] != k {
+			continue
+		}
+		if a := q.Get("actor"); a != "" && e["actor_email"] != a && (a != "support" || e["actor_kind"] != "operator") &&
+			(e["actor_kind"] != "token" || e["actor_name"] != a) {
+			continue
+		}
+		match = append(match, e)
+	}
+	return match, nil
+}
+
+// serveAuditExport is GET /v1/cli/teams/{team}/audit/export: the Activity
+// page's export of the entries that match, as CSV or JSON - here the
+// matching entries' ids, and a note when auditNote cuts it short.
+func (f *fakeAPI) serveAuditExport(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	f.auditExports = append(f.auditExports, q)
+	format := q.Get("format")
+	if format != "csv" && format != "json" {
+		f.write(w, 400, map[string]string{"error": "CSV or JSON", "field": "format"})
+		return
+	}
+	match, refused := f.auditMatch(q)
+	if refused != nil {
+		f.write(w, 400, refused)
+		return
+	}
+	var ids []string
+	for _, e := range match {
+		ids = append(ids, fmt.Sprint(e["id"]))
+	}
+	if f.auditNote != "" {
+		w.Header().Set("Homeport-Export-Note", f.auditNote)
+	}
+	w.Header().Set("Content-Type", map[string]string{"csv": "text/csv; charset=utf-8", "json": "application/json"}[format])
+	w.Header().Set("Content-Disposition", `attachment; filename="activity-2026-11-16.`+format+`"`)
+	fmt.Fprintf(w, "%s export: %s\n", format, strings.Join(ids, ","))
 }
 
 // entry is one entry as the API gives it.
@@ -122,18 +173,30 @@ func TestAuditListsTheLinkedEnvironmentsActivity(t *testing.T) {
 	if got := h.out.String(); got != want {
 		t.Errorf("said:\n%s\nwant:\n%s", got, want)
 	}
-	if len(f.auditReads) != 1 || f.auditReads[0].Encode() != "app="+blogID+"&limit=50" {
+	if len(f.auditReads) != 1 || f.auditReads[0].Encode() != "env="+blogID+"&limit=50" {
 		t.Errorf("reads %v", f.auditReads)
 	}
 
-	// --env: another environment of the linked app
+	// --env: another environment of the linked app, by its name: the API
+	// reads the name, so a token that may only audit:read names it too
 	f.auditReads = nil
 	if code := h.run("audit", "--env", "staging"); code != 0 || !strings.Contains(h.out.String(), "alice/blog (staging)") ||
 		!strings.Contains(h.out.String(), "Alice Doe (alice@example.com)") || !strings.Contains(h.out.String(), "changed variables API_KEY") {
 		t.Fatalf("staging: %d %s", code, h.said())
 	}
-	if f.auditReads[0].Get("app") != stageID {
+	if f.auditReads[0].Encode() != "app="+blogID+"&env=staging&limit=50" {
 		t.Errorf("staging read %v", f.auditReads)
+	}
+
+	// --all-envs: every environment of the linked app, each entry's said
+	f.auditReads = nil
+	if code := h.run("audit", "--all-envs"); code != 0 || !strings.Contains(h.out.String(), "Activity in alice/blog, every environment, newest first:") ||
+		!strings.Contains(h.out.String(), "blog (staging)") || !strings.Contains(h.out.String(), "blog (production)") ||
+		strings.Contains(h.out.String(), "removed member") {
+		t.Fatalf("every environment: %d %s", code, h.said())
+	}
+	if f.auditReads[0].Encode() != "app="+blogID+"&limit=50" {
+		t.Errorf("every environment's read %v", f.auditReads)
 	}
 
 	// none: it says so, on stderr, and how far back it looked
@@ -145,7 +208,8 @@ func TestAuditListsTheLinkedEnvironmentsActivity(t *testing.T) {
 }
 
 // Not linked, or --team alone: the whole team's, each entry's app and
-// environment said; --app (and --env) one environment's.
+// environment said; --app the app's, every environment of it, and --env
+// one environment's - named as typed, for the API to read.
 func TestAuditListsTheTeamsActivity(t *testing.T) {
 	inUTC(t)
 	f := newFakeAPI(t)
@@ -166,11 +230,22 @@ func TestAuditListsTheTeamsActivity(t *testing.T) {
 		t.Errorf("the team's read named an app: %v", q)
 	}
 
+	// --app: every environment of it
+	f.auditReads = nil
+	if code := h.run("audit", "--app", "blog"); code != 0 || !strings.Contains(h.out.String(), "Activity in alice/blog, every environment, newest first:") ||
+		!strings.Contains(h.out.String(), "blog (staging)") || strings.Contains(h.out.String(), "removed member") ||
+		f.auditReads[0].Encode() != "app=blog&limit=50" {
+		t.Fatalf("--app: %d %s %v", code, h.said(), f.auditReads)
+	}
 	// --app and --env: that environment's
 	f.auditReads = nil
 	if code := h.run("audit", "--app", "blog", "--env", "staging"); code != 0 || !strings.Contains(h.out.String(), "alice/blog (staging)") ||
-		f.auditReads[0].Get("app") != stageID {
-		t.Fatalf("--app: %d %s %v", code, h.said(), f.auditReads)
+		f.auditReads[0].Encode() != "app=blog&env=staging&limit=50" {
+		t.Fatalf("--app --env: %d %s %v", code, h.said(), f.auditReads)
+	}
+	// an app that isn't: the API's words, with the flag
+	if code := h.run("audit", "--app", "nope"); code != exitError || !strings.Contains(h.err.String(), "--app: no such app: nope") {
+		t.Errorf("no such app: %d %s", code, h.said())
 	}
 
 	// --env names an app's environment: alone with --team, it's a usage error
@@ -211,11 +286,17 @@ func TestAuditFilters(t *testing.T) {
 		t.Errorf("more than a page:\n%s", h.said())
 	}
 
-	if code := h.run("audit", "--kind", "nothing"); code != exitError || !strings.Contains(h.err.String(), "--kind: no such kind: nothing") {
+	// an API token, by its name
+	if code := h.run("audit", "--team", "alice", "--actor", "deploy-bot"); code != 0 || f.auditReads[len(f.auditReads)-1].Get("actor") != "deploy-bot" ||
+		!strings.Contains(h.out.String(), "deploy-bot (API token)") || strings.Contains(h.out.String(), "Alice Doe") {
+		t.Errorf("a token's: %d %s", code, h.said())
+	}
+
+	if code := h.run("audit", "--kind", "nothing"); code != exitError || !strings.Contains(h.err.String(), "--kind: no such kind: nothing (the kinds are people,") {
 		t.Errorf("refused: %d %s", code, h.said())
 	}
 	for _, args := range [][]string{{"--export", "xml"}, {"--export", "csv", "--json"}, {"--export", "csv", "--cursor", "c2"},
-		{"--output", "x.csv"}, {"stray"}} {
+		{"--export", "csv", "--limit", "5"}, {"--output", "x.csv"}, {"--all-envs", "--team", "alice"}, {"stray"}} {
 		if code := h.run(append([]string{"audit"}, args...)...); code != exitUsage {
 			t.Errorf("%v: %d %s", args, code, h.said())
 		}
@@ -248,13 +329,13 @@ func TestAuditJSON(t *testing.T) {
 	}
 }
 
-// --export reads every entry that matches, page by page, into a file as
-// the Activity page's export writes it, and says where.
+// --export downloads the Activity page's export of every entry that
+// matches - the API's, filtered as a page is - into a file, and says
+// where.
 func TestAuditExportsEveryEntry(t *testing.T) {
 	f, h := linkedHarness(t)
 	f.audit = someActivity()
-	f.auditPage = 2
-	if code := h.run("audit", "--team", "alice", "--export", "csv"); code != 0 {
+	if code := h.run("audit", "--export", "csv", "--all-envs", "--kind", "apps", "--until", "2026-11-15"); code != 0 {
 		t.Fatalf("%d %s", code, h.said())
 	}
 	name := "activity-" + time.Now().UTC().Format("2006-01-02") + ".csv"
@@ -262,67 +343,44 @@ func TestAuditExportsEveryEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows, err := csv.NewReader(strings.NewReader(string(b))).ReadAll()
-	if err != nil {
-		t.Fatalf("not CSV: %v\n%s", err, b)
+	if string(b) != "csv export: 3,2,1\n" {
+		t.Errorf("file: %q", b)
 	}
-	if strings.Join(rows[0], ",") != "at,actor_kind,actor_name,actor_email,via,ip,user_agent,action,kind,app,app_name,environment,target,detail" {
-		t.Errorf("columns %v", rows[0])
+	if len(f.auditReads) != 0 || len(f.auditExports) != 1 ||
+		f.auditExports[0].Encode() != "app="+blogID+"&format=csv&kind=apps&until=2026-11-15" {
+		t.Errorf("reads %v, exports %v", f.auditReads, f.auditExports)
 	}
-	if len(rows) != 6 || rows[1][7] != "member.removed" || rows[5][7] != "memory.raised" || rows[2][9] != blogID || rows[2][13] != "{}" {
-		t.Errorf("rows:\n%s", b)
-	}
-	if !strings.Contains(h.err.String(), "5 entries") || !strings.Contains(h.err.String(), name) {
+	if !strings.Contains(h.err.String(), "Wrote "+name) || strings.Contains(h.err.String(), "Stopped") {
 		t.Errorf("said %s", h.said())
-	}
-	var cursors []string
-	for _, q := range f.auditReads {
-		cursors = append(cursors, q.Get("limit")+"/"+q.Get("cursor"))
-	}
-	if got := strings.Join(cursors, " "); got != "1000/ 1000/c2 1000/c4" {
-		t.Errorf("reads %s", got)
 	}
 
 	// never over a file that's there
 	if code := h.run("audit", "--export", "csv"); code != exitError || !strings.Contains(h.err.String(), "--output") {
 		t.Errorf("again: %d %s", code, h.said())
 	}
+	// a filter that isn't one: the API's words, with the flag
+	if code := h.run("audit", "--export", "json", "--output", "k.json", "--kind", "nothing"); code != exitError ||
+		!strings.Contains(h.err.String(), "--kind: no such kind: nothing") {
+		t.Errorf("refused: %d %s", code, h.said())
+	}
+	if _, err := os.Stat(filepath.Join(h.a.wd, "k.json")); err == nil {
+		t.Error("a refused export left a file")
+	}
 }
 
-// An export stops at its most - newest first - and says so: in the file,
-// as the Activity page's does, and to the person, with how to get the
-// older ones.
+// An export cut short says so, as the API does: in the file, and to the
+// person, with how to get the older ones.
 func TestAuditExportSaysWhenItStopped(t *testing.T) {
 	f, h := linkedHarness(t)
-	was := auditExportMost
-	auditExportMost = 2
-	t.Cleanup(func() { auditExportMost = was })
 	f.audit = someActivity()
-	f.auditPage = 2
+	f.auditNote = "truncated at 100,000 rows, newest first: for older entries, export again with until 2026-11-14, or narrow the date range"
 	if code := h.run("audit", "--team", "alice", "--export", "json", "--output", "-"); code != 0 {
 		t.Fatalf("%d %s", code, h.said())
 	}
-	var out struct {
-		Entries   []map[string]any `json:"entries"`
-		Truncated bool             `json:"truncated"`
-		Note      string           `json:"note"`
+	if h.out.String() != "json export: 5,4,3,2,1\n" || !strings.Contains(h.err.String(), f.auditNote) {
+		t.Errorf("out %q err %q", h.out.String(), h.err.String())
 	}
-	if err := json.Unmarshal(h.out.Bytes(), &out); err != nil {
-		t.Fatalf("not JSON: %v\n%s", err, h.out.String())
-	}
-	// the oldest kept is the 16th's: --until the 17th takes up from it
-	if len(out.Entries) != 2 || !out.Truncated || !strings.Contains(out.Note, "2 entries") || !strings.Contains(out.Note, "--until 2026-11-17") {
-		t.Errorf("export %+v", out)
-	}
-	if !strings.Contains(h.err.String(), out.Note) {
-		t.Errorf("didn't say it stopped: %s", h.err.String())
-	}
-
-	if code := h.run("audit", "--team", "alice", "--export", "csv", "--output", "a.csv"); code != 0 {
-		t.Fatalf("%d %s", code, h.said())
-	}
-	b, _ := os.ReadFile(filepath.Join(h.a.wd, "a.csv"))
-	if lines := strings.Split(strings.TrimSpace(string(b)), "\n"); len(lines) != 4 || !strings.HasPrefix(lines[3], "# Stopped at 2 entries") {
-		t.Errorf("csv:\n%s", b)
+	if want := (url.Values{"format": {"json"}}).Encode(); f.auditExports[0].Encode() != want {
+		t.Errorf("export %v", f.auditExports)
 	}
 }

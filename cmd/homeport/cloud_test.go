@@ -98,6 +98,8 @@ type fakeAPI struct {
 	auditDays     int                  // how far back the plan keeps (0: 30)
 	auditPage     int                  // the most entries a page answers (0: as many as asked)
 	auditReads    []url.Values         // each activity read's query
+	auditExports  []url.Values         // each export's query
+	auditNote     string               // an export cut short: its Homeport-Export-Note
 	rollbacks     []struct {
 		Deploy     string `json:"deploy"`
 		RunRelease bool   `json:"run_release"`
@@ -403,6 +405,8 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 		f.serveLogs(w, r)
 	case r.Method == "GET" && p == "/v1/cli/teams/"+team1+"/audit":
 		f.serveAudit(w, r)
+	case r.Method == "GET" && p == "/v1/cli/teams/"+team1+"/audit/export":
+		f.serveAuditExport(w, r)
 	case strings.Contains(p, "/custom-domains/") && strings.HasSuffix(p, "/proxy"):
 		f.serveProxy(w, r)
 	case strings.HasSuffix(p, "/custom-domains"):
