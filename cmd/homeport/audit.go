@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -18,26 +16,28 @@ import (
 	"github.com/homeport-sh/cli/internal/config"
 )
 
-// auditExportMost is the most entries an export holds: the Activity
-// page's.
-var auditExportMost = 100_000
-
 // audit is `homeport audit`: a team's activity (design/audit-log.md in
 // homeport cloud) - who changed what, and when - newest first. In a linked
-// folder it's the linked environment's; --team alone, or a folder nothing
-// links, the whole team's; --app (and --env) one environment's. --json is
-// a page as the API answers it; --export reads every entry that matches
-// into a file, as the Activity page's export writes it.
+// folder it's the linked environment's (--env another's, --all-envs every
+// environment's of the app); --team alone, or a folder nothing links, the
+// whole team's; --app an app's, every environment of it, or with --env
+// one's. The API reads the names, so a token that may only audit:read
+// names them too. --json is a page as the API answers it; --export
+// downloads the Activity page's export of every entry that matches.
 func (a *app) audit(ctx context.Context, args []string) error {
-	fs, f := a.envFlagSet("audit")
-	actor := fs.String("actor", "", "who: a person's email, support (Homeport support) or homeport (Homeport itself)")
+	fs, f := a.flags("audit"), envFlags{}
+	f.app = fs.String("app", "", "an app, by name: every environment of it, unless --env names one (instead of the link)")
+	f.env = fs.String("env", "", "one environment, by name (default: the linked one)")
+	f.team = fs.String("team", "", "the team, by its address (instead of the link)")
+	allEnvs := fs.Bool("all-envs", false, "every environment of the linked app")
+	actor := fs.String("actor", "", "who: a person's email, an API token's name, support (Homeport support) or homeport (Homeport itself)")
 	kind := fs.String("kind", "", "a kind of action: people, access, billing, apps, data, domains, jobs, support or homeport")
 	since := fs.String("since", "", "from: a time (2026-11-15T09:00:00Z), a day (2026-11-15, UTC) or an age (12h, 7d)")
-	until := fs.String("until", "", "before: a time, a day (before it starts, UTC) or an age")
+	until := fs.String("until", "", "to: a time, a day (UTC, the day included) or an age")
 	limit := fs.Int("limit", 50, "how many, newest first: 1 to 1000")
 	cursor := fs.String("cursor", "", "with --json: the page after one, by its next")
 	asJSON := fs.Bool("json", false, "the page as JSON, as the API answers it")
-	export := fs.String("export", "", "csv or json: every entry that matches (up to 100,000), to a file")
+	export := fs.String("export", "", "csv or json: every entry that matches (up to 100,000), to a file, as the Activity page exports it")
 	output := fs.String("output", "", "where --export writes (default: activity-<date>.<csv|json> here; - for stdout)")
 	fs.StringVar(output, "o", "", "the same as --output")
 	if err := parse(fs, args); err != nil {
@@ -56,12 +56,16 @@ func (a *app) audit(ctx context.Context, args []string) error {
 		return usageErr("--cursor reads the page after one --json printed")
 	case *f.env != "" && *f.app == "" && *f.team != "":
 		return usageErr("--env is an app's environment: name the app with --app")
+	case *allEnvs && *f.env != "":
+		return usageErr("--all-envs is every environment: --env names one")
+	case *allEnvs && *f.app == "" && *f.team != "":
+		return usageErr("--all-envs is every environment of an app: name it with --app, or link this folder")
 	}
-	c, team, app, where, err := a.auditScope(ctx, f)
+	c, team, filter, where, err := a.auditScope(ctx, f, *allEnvs)
 	if err != nil {
 		return err
 	}
-	filter := cloud.AuditFilter{App: app, Actor: *actor, Kind: *kind, Since: *since, Until: *until}
+	filter.Actor, filter.Kind, filter.Since, filter.Until = *actor, *kind, *since, *until
 	if *export != "" {
 		return a.auditExport(ctx, c, team, filter, *export, *output)
 	}
@@ -82,14 +86,16 @@ func (a *app) audit(ctx context.Context, args []string) error {
 		return nil
 	}
 	fmt.Fprintf(a.out, "Activity in %s, newest first:\n\n", where)
+	// one environment's says none; an app's or the team's says each one's
+	oneEnv := filter.Env != ""
 	head := []string{"WHEN", "WHO", "WHAT"}
-	if app == "" {
+	if !oneEnv {
 		head = append(head, "APP")
 	}
 	rows := [][]string{append(head, "VIA")}
 	for _, e := range page.Entries {
 		r := []string{e.At.Local().Format("Jan 2 15:04"), auditWho(e), e.Says}
-		if app == "" {
+		if !oneEnv {
 			r = append(r, auditApp(e))
 		}
 		rows = append(rows, append(r, auditVia[e.Via]))
@@ -103,49 +109,67 @@ func (a *app) audit(ctx context.Context, args []string) error {
 	return nil
 }
 
-// auditScope is whose activity the flags name: an environment's (--app,
-// or the folder's link) or the team's (--team alone, or no link) - its
-// team's id, the environment's ("" the team's) and how to say it.
-func (a *app) auditScope(ctx context.Context, f envFlags) (c *cloud.Client, team, app, where string, err error) {
-	if *f.app == "" {
-		linked := false
-		if *f.team == "" {
-			_, _, lerr := config.FindLink(a.wd)
-			if lerr != nil && !errors.Is(lerr, config.ErrNotLinked) {
-				return nil, "", "", "", lerr
-			}
-			linked = lerr == nil
-		}
-		if !linked {
-			if *f.env != "" {
-				return nil, "", "", "", usageErr("--env is an app's environment: name the app with --app, or link this folder")
-			}
-			if c, err = a.client(); err != nil {
-				return nil, "", "", "", err
-			}
-			who, err := c.WhoAmI(ctx)
-			if err != nil {
-				return nil, "", "", "", err
-			}
-			t, err := a.pickTeam(who, *f.team)
-			if err != nil {
-				return nil, "", "", "", err
-			}
-			return c, t.ID, "", t.Slug, nil
-		}
+// auditScope is whose activity the flags name, as the API reads it: an
+// app's or one environment's (--app and --env by name, or the folder's
+// link by its ids), or the team's (--team alone, or no link) - its team's
+// id, the filter naming the app and environment, and how to say it. The
+// names go to the API as typed: it reads them, for a token that may only
+// audit:read too.
+func (a *app) auditScope(ctx context.Context, f envFlags, allEnvs bool) (c *cloud.Client, team string, filter cloud.AuditFilter, where string, err error) {
+	if c, err = a.client(); err != nil {
+		return nil, "", filter, "", err
 	}
-	c, t, _, err := a.envTarget(ctx, f)
+	var link *config.Link
+	if *f.app == "" && *f.team == "" {
+		l, _, lerr := config.FindLink(a.wd)
+		if lerr != nil && !errors.Is(lerr, config.ErrNotLinked) {
+			return nil, "", filter, "", lerr
+		}
+		link = l
+	}
+	if link != nil {
+		where := link.TeamSlug + "/" + link.Project
+		switch {
+		case allEnvs:
+			return c, link.Team, cloud.AuditFilter{App: link.App}, where + ", every environment", nil
+		case *f.env != "" && *f.env != link.Environment:
+			return c, link.Team, cloud.AuditFilter{App: link.App, Env: *f.env}, where + " (" + *f.env + ")", nil
+		}
+		return c, link.Team, cloud.AuditFilter{Env: link.App}, where + " (" + link.Environment + ")", nil
+	}
+	if *f.env != "" && *f.app == "" {
+		return nil, "", filter, "", usageErr("--env is an app's environment: name the app with --app, or link this folder")
+	}
+	if allEnvs && *f.app == "" {
+		return nil, "", filter, "", usageErr("--all-envs is every environment of an app: name it with --app, or link this folder")
+	}
+	who, err := c.WhoAmI(ctx)
 	if err != nil {
-		return nil, "", "", "", err
+		return nil, "", filter, "", err
 	}
-	return c, t.link.Team, t.link.App, envWhere(t), nil
+	t, err := a.pickTeam(who, *f.team)
+	if err != nil {
+		return nil, "", filter, "", err
+	}
+	switch {
+	case *f.app != "" && *f.env != "":
+		return c, t.ID, cloud.AuditFilter{App: *f.app, Env: *f.env}, t.Slug + "/" + *f.app + " (" + *f.env + ")", nil
+	case *f.app != "":
+		return c, t.ID, cloud.AuditFilter{App: *f.app}, t.Slug + "/" + *f.app + ", every environment", nil
+	}
+	return c, t.ID, filter, t.Slug, nil
 }
+
+// auditFlags are the flags the API's fields are: an answer about "env" is
+// --env's.
+var auditFlags = map[string]string{"app": "--app", "env": "--env", "actor": "--actor", "kind": "--kind", "since": "--since",
+	"until": "--until", "limit": "--limit", "cursor": "--cursor", "format": "--export"}
 
 // auditRefusal is a refused read said with the flag it's about.
 func auditRefusal(err error) error {
 	var e *cloud.Error
-	if errors.As(err, &e) && e.Field != "" && e.Field != "app" {
-		return fmt.Errorf("--%s: %s", e.Field, e.Message)
+	if errors.As(err, &e) && auditFlags[e.Field] != "" {
+		return fmt.Errorf("%s: %s", auditFlags[e.Field], e.Message)
 	}
 	return err
 }
@@ -176,71 +200,33 @@ func auditApp(e cloud.AuditEntry) string {
 // unsaid, their names say it.
 var auditVia = map[string]string{"dashboard": "dashboard", "cli": "CLI", "api": "API"}
 
-// auditColumns are an export's CSV columns: the Activity page's.
-var auditColumns = []string{"at", "actor_kind", "actor_name", "actor_email", "via", "ip", "user_agent", "action", "kind",
-	"app", "app_name", "environment", "target", "detail"}
-
-// auditExport reads every entry that matches, newest first, up to
-// auditExportMost, and writes them to output (default: activity-<date>.
-// <format> here, never over a file that's there; - stdout) as the Activity
-// page's export does: CSV with a closing # line when it stopped, or JSON
-// as {entries, truncated, note}.
+// auditExport downloads the Activity page's export of what filter
+// matches, as format, to output (default: activity-<date>.<format> here,
+// never over a file that's there; - stdout), and says where - and, when
+// the API cut it short, so, and how to get the rest.
 func (a *app) auditExport(ctx context.Context, c *cloud.Client, team string, filter cloud.AuditFilter, format, output string) error {
-	var entries []cloud.AuditEntry
-	for cursor := ""; ; {
-		page, err := c.Audit(ctx, team, filter, cursor, cloud.MaxAuditPage)
-		if err != nil {
-			return auditRefusal(err)
-		}
-		entries = append(entries, page.Entries...)
-		if cursor = page.Next; cursor == "" || len(entries) > auditExportMost {
-			break
+	if output == "" {
+		output = "activity-" + time.Now().UTC().Format(time.DateOnly) + "." + format
+	}
+	path := output
+	if output != "-" && !filepath.IsAbs(path) {
+		path = filepath.Join(a.wd, path)
+	}
+	if output != "-" {
+		if _, err := os.Lstat(path); err == nil {
+			return fmt.Errorf("%s is there already: name another with --output", output)
 		}
 	}
-	note := ""
-	if len(entries) > auditExportMost {
-		entries = entries[:auditExportMost]
-		note = auditCut(auditExportMost, entries[auditExportMost-1].At)
+	body, note, err := c.AuditExport(ctx, team, filter, format)
+	if err != nil {
+		return auditRefusal(err)
 	}
-	var b bytes.Buffer
-	if format == "json" {
-		body, err := json.MarshalIndent(struct {
-			Entries   []cloud.AuditEntry `json:"entries"`
-			Truncated bool               `json:"truncated"`
-			Note      string             `json:"note,omitempty"`
-		}{append([]cloud.AuditEntry{}, entries...), note != "", note}, "", "  ")
-		if err != nil {
-			return err
-		}
-		b.Write(body)
-		b.WriteString("\n")
-	} else {
-		w := csv.NewWriter(&b)
-		_ = w.Write(auditColumns)
-		for _, e := range entries {
-			_ = w.Write([]string{e.At.UTC().Format(time.RFC3339Nano), e.ActorKind, e.ActorName, e.ActorEmail, e.Via, e.IP, e.UserAgent,
-				e.Action, e.Kind, e.App, e.AppName, e.Environment, e.Target, string(e.Detail)})
-		}
-		w.Flush()
-		if err := w.Error(); err != nil {
-			return err
-		}
-		if note != "" {
-			b.WriteString("# " + note + "\n")
-		}
-	}
+	defer body.Close()
 	if output == "-" {
-		if _, err := io.Copy(a.out, &b); err != nil {
+		if _, err := io.Copy(a.out, body); err != nil {
 			return err
 		}
 	} else {
-		if output == "" {
-			output = "activity-" + time.Now().UTC().Format(time.DateOnly) + "." + format
-		}
-		path := output
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(a.wd, path)
-		}
 		fh, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if errors.Is(err, os.ErrExist) {
 			return fmt.Errorf("%s is there already: name another with --output", output)
@@ -248,34 +234,20 @@ func (a *app) auditExport(ctx context.Context, c *cloud.Client, team string, fil
 		if err != nil {
 			return err
 		}
-		if _, err := io.Copy(fh, &b); err != nil {
+		if _, err := io.Copy(fh, body); err != nil {
 			fh.Close()
+			os.Remove(path)
 			return err
 		}
 		if err := fh.Close(); err != nil {
 			return err
 		}
-		fmt.Fprintf(a.err, "Wrote %s to %s.\n", entriesSaid(len(entries)), output)
+		fmt.Fprintf(a.err, "Wrote %s.\n", output)
 	}
 	if note != "" {
 		fmt.Fprintln(a.err, note)
 	}
 	return nil
-}
-
-// auditCut says an export stopped at most entries, the oldest of them at
-// oldest, and how to get the rest: --until the day after it, so none
-// from that day is missed.
-func auditCut(most int, oldest time.Time) string {
-	return fmt.Sprintf("Stopped at %s, newest first: for older ones, export again with --until %s, or narrow the range.",
-		entriesSaid(most), oldest.UTC().AddDate(0, 0, 1).Format(time.DateOnly))
-}
-
-func entriesSaid(n int) string {
-	if n == 1 {
-		return "1 entry"
-	}
-	return thousands(n) + " entries"
 }
 
 // thousands is n with its thousands separated: 100,000.
