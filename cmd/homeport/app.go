@@ -104,6 +104,8 @@ func (a *app) run(args []string) int {
 		err = a.queue(ctx, rest)
 	case "logs":
 		err = a.logs(ctx, rest)
+	case "audit":
+		err = a.audit(ctx, rest)
 	case "build-plan":
 		err = cmdBuildPlan(rest)
 	case "mcp":

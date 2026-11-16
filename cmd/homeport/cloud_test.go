@@ -94,6 +94,10 @@ type fakeAPI struct {
 	logPages      []cloud.Logs         // runtime logs, read by read (nil: one line, panic: boom)
 	logReads      []string             // each logs read: the app and the cursor it sent
 	logRefuse     *cloud.Error         // a logs read's answer, when it's refused
+	audit         []map[string]any     // the team's activity, newest first, as the API gives each entry
+	auditDays     int                  // how far back the plan keeps (0: 30)
+	auditPage     int                  // the most entries a page answers (0: as many as asked)
+	auditReads    []url.Values         // each activity read's query
 	rollbacks     []struct {
 		Deploy     string `json:"deploy"`
 		RunRelease bool   `json:"run_release"`
@@ -397,6 +401,8 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 		f.serveQueue(w, r)
 	case strings.HasSuffix(p, "/logs"):
 		f.serveLogs(w, r)
+	case r.Method == "GET" && p == "/v1/cli/teams/"+team1+"/audit":
+		f.serveAudit(w, r)
 	case strings.Contains(p, "/custom-domains/") && strings.HasSuffix(p, "/proxy"):
 		f.serveProxy(w, r)
 	case strings.HasSuffix(p, "/custom-domains"):
