@@ -28,12 +28,18 @@ const (
 	// MakeValue: Value, a default added where the app has none of its own,
 	// and kept.
 	MakeValue = "value"
+	// MakeURL: the environment's address as https://<host>, which only a
+	// control plane knows (its primary domain, else its own name there):
+	// added where the app has none of its own, and changed with the
+	// address while the value is still the one homeport set.
+	MakeURL = "url"
 )
 
 // ManagedVar is one variable homeport sets for an app.
 type ManagedVar struct {
 	Name string
-	// Make is how its value is made: MakeKey, MakeRelease or MakeValue.
+	// Make is how its value is made: MakeKey, MakeRelease, MakeValue or
+	// MakeURL.
 	Make string
 	// Value is MakeValue's value ("" for the others).
 	Value string
@@ -49,7 +55,13 @@ type ManagedVar struct {
 	Why string
 }
 
+// Secret says whether its value is kept hidden: a key homeport makes is a
+// secret; a default or a URL is shown as it is.
+func (m ManagedVar) Secret() bool { return m.Make == MakeKey }
+
 var managed = []ManagedVar{
+	{Name: "APP_URL", Make: MakeURL, Available: envfile.Runtime,
+		Why: "Laravel: the address its links, redirects and emails use: the environment's primary domain, or its homeport.run address when it has none"},
 	{Name: "ASTRO_KEY", Make: MakeKey, Available: envfile.BuildOnly,
 		Why: "Astro server islands: the same key on every build keeps pages cached from one build working with the next"},
 	{Name: "LOG_CHANNEL", Make: MakeValue, Value: "stderr", Available: envfile.Runtime,
@@ -100,7 +112,8 @@ const maxLockfile = 64 << 20
 // repository), at s's root, sorted by name: told from its package.json and
 // its lockfile (its workspace's, for a member), so a framework that depends
 // on @vitejs/plugin-rsc counts too; and Laravel's from its composer.json,
-// alone or beside rsc-kit. None for another app.
+// alone or beside rsc-kit (its log channel, and its URL, which a control
+// plane fills in). None for another app.
 func ManagedVars(fsys fs.FS, s Settings) []ManagedVar {
 	r := reader{fsys: fsys, root: "."}
 	if s.Root != "" {
@@ -110,7 +123,7 @@ func ManagedVars(fsys fs.FS, s Settings) []ManagedVar {
 	}
 	want := map[string]bool{}
 	if r.requires("laravel/framework") {
-		want["LOG_CHANNEL"] = true
+		want["LOG_CHANNEL"], want["APP_URL"] = true, true
 	}
 	if deps := r.deps(); deps != nil {
 		r.jsManaged(deps, want)

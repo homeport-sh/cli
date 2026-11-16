@@ -23,8 +23,8 @@ func managedNames(t *testing.T, files map[string]string, s buildplan.Settings) [
 // which homeport sets for an app, are told from its files: Next.js's action
 // key and deployment ID, @vitejs/plugin-rsc's key (from the lockfile, so a
 // framework that depends on it - Waku - counts), rsc-kit's signing secret,
-// a server-rendered Astro app's key, and Laravel's log channel, wherever
-// Laravel runs.
+// a server-rendered Astro app's key, and Laravel's log channel and URL,
+// wherever Laravel runs.
 func TestTheVariablesAFrameworkNeedsHomeportToSet(t *testing.T) {
 	const next = `{"scripts":{"build":"next build"},"dependencies":{"next":"16.4.2","react":"19"}}`
 	for name, c := range map[string]struct {
@@ -61,11 +61,11 @@ func TestTheVariablesAFrameworkNeedsHomeportToSet(t *testing.T) {
 			"package-lock.json", `{"packages":{"node_modules/@vitejs/plugin-rsc-helper":{}}}`), buildplan.Settings{}, nil},
 		"a Go app": {map[string]string{"go.mod": "module x\n\ngo 1.27\n"}, buildplan.Settings{}, nil},
 		"rsc-kit beside Laravel": {laravel(nil, "package.json", `{"dependencies":{"@rsc-kit/core":"0.35.0"}}`, "bun.lock", "{}"),
-			buildplan.Settings{}, []string{"LOG_CHANNEL", "RSC_HOST_CALL_SECRET", "RSC_SIGNING_SECRET"}},
-		"Laravel":           {laravel(nil), buildplan.Settings{}, []string{"LOG_CHANNEL"}},
-		"Laravel with Vite": {laravel(nil, "package.json", `{"devDependencies":{"vite":"7","laravel-vite-plugin":"2"}}`), buildplan.Settings{}, []string{"LOG_CHANNEL"}},
+			buildplan.Settings{}, []string{"APP_URL", "LOG_CHANNEL", "RSC_HOST_CALL_SECRET", "RSC_SIGNING_SECRET"}},
+		"Laravel":           {laravel(nil), buildplan.Settings{}, []string{"APP_URL", "LOG_CHANNEL"}},
+		"Laravel with Vite": {laravel(nil, "package.json", `{"devDependencies":{"vite":"7","laravel-vite-plugin":"2"}}`), buildplan.Settings{}, []string{"APP_URL", "LOG_CHANNEL"}},
 		"Laravel in a folder": {map[string]string{"api/composer.json": `{"require":{"laravel/framework":"^12.0"}}`, "api/composer.lock": "{}"},
-			buildplan.Settings{Root: "api"}, []string{"LOG_CHANNEL"}},
+			buildplan.Settings{Root: "api"}, []string{"APP_URL", "LOG_CHANNEL"}},
 		"a PHP app that isn't Laravel": {map[string]string{"composer.json": `{"require":{"symfony/framework-bundle":"^7.0"}}`, "composer.lock": "{}"},
 			buildplan.Settings{}, nil},
 		"plain PHP": {map[string]string{"index.php": "<?php echo 1;"}, buildplan.Settings{}, nil},
@@ -130,7 +130,7 @@ func TestHowEachManagedVariableIsMade(t *testing.T) {
 // homeport's from a person's: the two action keys' availability is fixed
 // whoever sets them.
 func TestAManagedNameIsKnownWithoutTheApp(t *testing.T) {
-	for _, n := range []string{"NEXT_SERVER_ACTIONS_ENCRYPTION_KEY", "NEXT_DEPLOYMENT_ID", "RSC_ACTION_ENCRYPTION_KEY", "RSC_SIGNING_SECRET", "RSC_HOST_CALL_SECRET", "ASTRO_KEY", "LOG_CHANNEL"} {
+	for _, n := range []string{"NEXT_SERVER_ACTIONS_ENCRYPTION_KEY", "NEXT_DEPLOYMENT_ID", "RSC_ACTION_ENCRYPTION_KEY", "RSC_SIGNING_SECRET", "RSC_HOST_CALL_SECRET", "ASTRO_KEY", "LOG_CHANNEL", "APP_URL"} {
 		if m, ok := buildplan.Managed(n); !ok || m.Name != n {
 			t.Errorf("Managed(%q) = %+v, %v", n, m, ok)
 		}
@@ -143,7 +143,7 @@ func TestAManagedNameIsKnownWithoutTheApp(t *testing.T) {
 		}
 	}
 	names := buildplan.ManagedNames()
-	if !slices.IsSorted(names) || len(names) != 7 {
+	if !slices.IsSorted(names) || len(names) != 8 {
 		t.Errorf("ManagedNames = %v", names)
 	}
 	// homeport's keys are build variables: a build may take every one
@@ -173,10 +173,44 @@ func TestLaravelsDefaultsAreValues(t *testing.T) {
 			t.Errorf("%s: %+v, want the value %q at runtime, not fixed", name, m, value)
 		}
 	}
-	// a key or a release has no value of its own
+	// a key, a release or a URL has no value of its own
 	for _, n := range buildplan.ManagedNames() {
 		if m, _ := buildplan.Managed(n); (m.Make == buildplan.MakeValue) != (m.Value != "") {
 			t.Errorf("%s: make %q, value %q", n, m.Make, m.Value)
+		}
+	}
+}
+
+// Laravel's APP_URL is the environment's address, which only the control
+// plane knows (its primary domain, or its homeport.run name): declared
+// here with no value, seen at runtime, and the person may set another.
+func TestLaravelsURLIsTheControlPlanes(t *testing.T) {
+	var got *buildplan.ManagedVar
+	for _, m := range buildplan.ManagedVars(repo(laravel(nil)), buildplan.Settings{}) {
+		if m.Name == "APP_URL" {
+			got = &m
+		}
+	}
+	if got == nil {
+		t.Fatal("no APP_URL for a Laravel app")
+	}
+	if got.Make != buildplan.MakeURL || got.Value != "" || got.Available != envfile.Runtime || got.Fixed || got.Previous != "" || got.Why == "" {
+		t.Errorf("APP_URL: %+v, want made from the URL at runtime, not fixed", *got)
+	}
+}
+
+// A key homeport makes is a secret; a default or a URL is shown as it is,
+// like any value a person can read.
+func TestOnlyAKeyIsSecret(t *testing.T) {
+	for _, n := range buildplan.ManagedNames() {
+		m, _ := buildplan.Managed(n)
+		if m.Secret() != (m.Make == buildplan.MakeKey) {
+			t.Errorf("%s (%s): secret %v", n, m.Make, m.Secret())
+		}
+	}
+	for n, secret := range map[string]bool{"NEXT_SERVER_ACTIONS_ENCRYPTION_KEY": true, "RSC_SIGNING_SECRET": true, "LOG_CHANNEL": false, "APP_URL": false} {
+		if m, _ := buildplan.Managed(n); m.Secret() != secret {
+			t.Errorf("%s: secret %v, want %v", n, m.Secret(), secret)
 		}
 	}
 }
