@@ -50,6 +50,15 @@ func (a *app) usage() {
                       what's new until Ctrl-C
                       [--process <name>] [--errors]
                       [--env <name>] [--team <slug> --app <name>]
+  homeport audit      who changed what, and when, newest first: the linked
+                      environment's; with --team alone (or in a folder
+                      nothing links) the whole team's. For the team's
+                      owner, or a team token that may audit:read
+                      [--actor <email>|support|homeport] [--kind <kind>]
+                      [--since 7d] [--until 2026-11-15] [--limit 50]
+                      [--json [--cursor <next>]]
+                      [--export csv|json [--output <file>|-]]
+                      [--env <name>] [--team <slug> [--app <name>]]
   homeport env set    sets an environment's variables: NAME=value…, or a
                       file variable (a certificate, a key, any multi-line
                       or binary value) the app reads at /run/secrets/NAME:

@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,6 +64,12 @@ func (c *Client) call(ctx context.Context, method, path string, in, out any) err
 }
 
 func (c *Client) callWith(ctx context.Context, hc *http.Client, method, path string, in, out any) error {
+	return c.callUpTo(ctx, hc, method, path, in, out, 4<<20)
+}
+
+// callUpTo is callWith reading an answer of up to most bytes: a page of
+// activity, its entries' details up to 4 KB each, is more than most.
+func (c *Client) callUpTo(ctx context.Context, hc *http.Client, method, path string, in, out any, most int64) error {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -94,7 +101,7 @@ func (c *Client) callWith(ctx context.Context, hc *http.Client, method, path str
 		return err
 	}
 	defer res.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(res.Body, 4<<20))
+	raw, err := io.ReadAll(io.LimitReader(res.Body, most))
 	if err != nil {
 		return err
 	}
@@ -565,6 +572,92 @@ func (c *Client) DetachDatabase(ctx context.Context, team, app string) (json.Raw
 // Usage is a team's month so far, and what it's likely to cost.
 func (c *Client) Usage(ctx context.Context, team string) (json.RawMessage, error) {
 	return c.raw(ctx, "GET", "/v1/cli/teams/"+url.PathEscape(team)+"/usage", nil)
+}
+
+// AuditEntry is one entry of a team's activity (design/audit-log.md in
+// homeport cloud): who (ActorKind user, token, operator - Homeport
+// support - or system - Homeport itself), what they did as a sentence
+// (Says, after who), how (Via) and to which app environment ("" the
+// team's own). Raw is the entry as the API gave it, every field kept.
+type AuditEntry struct {
+	ID          int64           `json:"id"`
+	At          time.Time       `json:"at"`
+	ActorKind   string          `json:"actor_kind"`
+	ActorName   string          `json:"actor_name"`
+	ActorEmail  string          `json:"actor_email"`
+	Via         string          `json:"via"`
+	IP          string          `json:"ip"`
+	UserAgent   string          `json:"user_agent"`
+	Action      string          `json:"action"`
+	Kind        string          `json:"kind"`
+	Says        string          `json:"says"`
+	App         string          `json:"app_id"`
+	AppName     string          `json:"app_name"`
+	Environment string          `json:"environment"`
+	Target      string          `json:"target"`
+	Detail      json.RawMessage `json:"detail"`
+
+	Raw json.RawMessage `json:"-"`
+}
+
+func (e *AuditEntry) UnmarshalJSON(b []byte) error {
+	type plain AuditEntry
+	if err := json.Unmarshal(b, (*plain)(e)); err != nil {
+		return err
+	}
+	e.Raw = append(json.RawMessage(nil), b...)
+	return nil
+}
+
+// MarshalJSON is the entry as the API gave it.
+func (e AuditEntry) MarshalJSON() ([]byte, error) {
+	if e.Raw != nil {
+		return e.Raw, nil
+	}
+	type plain AuditEntry
+	return json.Marshal(plain(e))
+}
+
+// AuditFilter narrows a team's activity; each part is optional. App is an
+// app environment's id; Actor a person's email, user:<id>, token:<id>,
+// support or homeport; Kind one of people, access, billing, apps, data,
+// domains, jobs, support, homeport; Since and Until a time (RFC 3339), a
+// day (UTC) or an age (12h, 7d) - Until not included.
+type AuditFilter struct {
+	App, Actor, Kind, Since, Until string
+}
+
+// Audit is a page of a team's activity, newest first: Next reads the page
+// after it ("" for none), Days is how far back the team's plan keeps.
+type Audit struct {
+	Entries []AuditEntry `json:"entries"`
+	Next    string       `json:"next"`
+	Days    int          `json:"days"`
+}
+
+// MaxAuditPage is the most entries one read answers.
+const MaxAuditPage = 1000
+
+// Audit is a page of a team's activity, limit at a time (0: the API's
+// 50), from cursor (a page's Next; "" the newest): its owner's, or a team
+// token's that may audit:read.
+func (c *Client) Audit(ctx context.Context, team string, f AuditFilter, cursor string, limit int) (*Audit, error) {
+	q := url.Values{}
+	for k, v := range map[string]string{"app": f.App, "actor": f.Actor, "kind": f.Kind, "since": f.Since, "until": f.Until, "cursor": cursor} {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	p := "/v1/cli/teams/" + url.PathEscape(team) + "/audit"
+	if len(q) > 0 {
+		p += "?" + q.Encode()
+	}
+	var out Audit
+	err := c.callUpTo(ctx, c.http(), "GET", p, nil, &out, 16<<20)
+	return &out, err
 }
 
 // Domain is one of an app's platform domains: a tenant's domain on the
