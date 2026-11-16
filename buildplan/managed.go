@@ -50,8 +50,6 @@ type ManagedVar struct {
 }
 
 var managed = []ManagedVar{
-	{Name: "APP_MAINTENANCE_DRIVER", Make: MakeValue, Value: "cache", Available: envfile.Runtime,
-		Why: "Laravel: `php artisan down` reaches every copy of the app, not only the one it ran in"},
 	{Name: "ASTRO_KEY", Make: MakeKey, Available: envfile.BuildOnly,
 		Why: "Astro server islands: the same key on every build keeps pages cached from one build working with the next"},
 	{Name: "LOG_CHANNEL", Make: MakeValue, Value: "stderr", Available: envfile.Runtime,
@@ -112,7 +110,7 @@ func ManagedVars(fsys fs.FS, s Settings) []ManagedVar {
 	}
 	want := map[string]bool{}
 	if r.requires("laravel/framework") {
-		want["LOG_CHANNEL"], want["APP_MAINTENANCE_DRIVER"] = true, true
+		want["LOG_CHANNEL"] = true
 	}
 	if deps := r.deps(); deps != nil {
 		r.jsManaged(deps, want)
