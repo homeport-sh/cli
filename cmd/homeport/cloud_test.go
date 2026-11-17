@@ -58,12 +58,15 @@ type fakeAPI struct {
 	detail   string
 	buildGet int
 
-	tokenNames    []string                  // tokens made for CI, by name
-	tokenFor      []string                  // and the team/app each is for, by id
-	env           map[string]string         // an environment's variables, as set
-	files         map[string][]byte         // its file variables, as set
-	envApp        string                    // the environment the last set was for
-	envPosts      int                       // how many sets reached the platform
+	tokenNames []string          // tokens made for CI, by name
+	tokenFor   []string          // and the team/app each is for, by id
+	env        map[string]string // an environment's variables, as set
+	files      map[string][]byte // its file variables, as set
+	envApp     string            // the environment the last set was for
+	envPosts   int               // how many sets reached the platform
+	// delivery is where the values stand on the host, each read of the env
+	// the next (the last kept); none, a platform before it
+	delivery      []map[string]any
 	available     map[string]string         // who sees each variable, by name, as the platform holds it
 	availSent     map[string]string         // the availability the last set sent
 	rolesSent     map[string]fakeRoleChange // the values for one role the last set sent
@@ -320,7 +323,14 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 			vars = append(vars, v)
 			needs = needs || f.builtChanged[n]
 		}
-		f.write(w, 200, map[string]any{"Names": names, "Files": files, "Vars": vars, "NeedsRebuild": needs})
+		out := map[string]any{"Names": names, "Files": files, "Vars": vars, "NeedsRebuild": needs}
+		if len(f.delivery) > 0 {
+			out["Delivery"] = f.delivery[0]
+			if len(f.delivery) > 1 {
+				f.delivery = f.delivery[1:]
+			}
+		}
+		f.write(w, 200, out)
 	case strings.HasSuffix(p, "/rebuild") && r.Method == "POST":
 		if f.noLive {
 			f.write(w, 400, map[string]any{"Error": "nothing is live to rebuild: deploy first"})

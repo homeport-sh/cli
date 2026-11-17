@@ -419,6 +419,20 @@ type Env struct {
 	// NeedsRebuild: what its build sees changed since its live release was
 	// built
 	NeedsRebuild bool
+	// Delivery: where its current values stand on its host (nil from a
+	// platform before it)
+	Delivery *EnvDelivery
+}
+
+// EnvDelivery is where an environment's current values stand on its host
+// (design/safe-env-change.md): pending until the app is started on them,
+// live once it is, rejected when it wouldn't start on them - the old
+// values live again, Detail what failed and its last lines - or deploy:
+// its next deploy takes them (nothing live yet, or Save and rebuild).
+type EnvDelivery struct {
+	State   string `json:"state"`
+	Version int64  `json:"version"`
+	Detail  string `json:"detail"`
 }
 
 // EnvVar is one variable an environment gets, by name.
