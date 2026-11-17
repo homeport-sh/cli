@@ -356,6 +356,22 @@ documents must be UTF-8.
   edge's copy as it is. A revalidation carries `Edge-Accept: nonce` like
   any other request for the path.
 
+### `Cache-Tag` and `Surrogate-Key`: the page's tags
+
+Optional, on either kind of answer: the page's purge tags, as **response
+headers of the `/_edge/page` answer** itself, `Cache-Tag` comma-separated,
+`Surrogate-Key` space-separated, or both. A purge that names one of them
+reaches the page (section 7, "Purges"). They are never among `headers`,
+and the edge never sends them to a visitor.
+
+- At most 128 tags in all, each 1-1024 visible ASCII characters (no
+  spaces, no control characters), the tags a purge can name.
+- **An answer with more, or with any tag a purge couldn't name, is kept
+  untagged:** the page is still served, and a purge reaches it by its path
+  or `all` alone. Nothing else about the answer changes.
+- Tags are read from every 200, so a revalidation's new page brings its
+  own; a 304 keeps the tags the page has.
+
 ### 404
 
 For any path that is not listed here: in no list, guarded, not a page of
@@ -556,6 +572,24 @@ awake: 304 keeps it, 200 replaces it, 404 drops it. **Never while the app
 sleeps:** nothing can have changed, because what invalidates a page runs
 in the app. When the app next wakes, its stale pages are checked once.
 
+**Purges.** Where the platform lets an app purge (on homeport, a `POST`
+to `$CDN_PURGE_URL` with `{"tags": [...], "paths": [...], "all": true}`),
+a purge reaches the edge's static pages, shells and nonce shells as well as
+anything else it caches: by `paths` (the decoded path, on every hostname),
+by `tags` (the page's `Cache-Tag` and `Surrogate-Key`, above) or `all`. A
+page a purge names is not dropped but marked due: the next visitor's
+request for it is held while the edge asks the app again (`If-None-Match`
+with its `ETag`, or a plain request without one), and gets the answer: 304
+keeps the page, 200 replaces it, 404 drops it and the request goes to the
+app. Requests that arrive meanwhile wait on that one request. **The purge
+itself never wakes the app.** If the app sleeps, the next request for a
+purged page wakes it once, as any request the edge sends the app does;
+pages the purge didn't name are still served without waking it. If asking
+again fails, the stored page is served, never an error, and stays due
+until the app answers. So after `revalidatePath` or `revalidateTag` (or
+your framework's equivalent) a purge makes the new page the next one
+served, rather than within the revalidation's minute.
+
 **Sleep and misses.** The edge never wakes an app to fetch, refill or
 revalidate a page. A request for a listed page the edge doesn't hold yet
 goes to the app as usual (and wakes it if it sleeps); the edge fetches the
@@ -593,6 +627,10 @@ to the app's answers. (On homeport, those are [`headers:`](headers.md).)
   edge that speaks v2 ignores a build that has only `ppr.json`, and serves
   that app with no pages from the edge (the deploy succeeds and says to
   upgrade the framework). A framework should not write both.
+- **Page tags and purges** (`Cache-Tag` and `Surrogate-Key` on
+  `/_edge/page`, section 7's "Purges") are such an addition. An edge that
+  doesn't read the tags reaches the page by path or `all` alone, or not at
+  all, and its revalidation stays the bound.
 - A framework may keep endpoints of its own beside `/_edge/*`. They are not
   part of the contract, and an edge never calls them.
 
