@@ -347,3 +347,49 @@ func TestAPIFiles(t *testing.T) {
 		}
 	}
 }
+
+// A backend beside a renderer (backend.go) is the app's server: its api/ is
+// left alone, and the build log says why - from detection, homeport.yaml's
+// backend paths or the build settings'. Backend paths with no backend are
+// still the backend's error, never an api/ server.
+func TestAnAPIFolderBesideABackendIsLeftAlone(t *testing.T) {
+	gofiles := func(more ...string) map[string]string {
+		f := map[string]string{"go.mod": "module m\n\ngo 1.27\n", "main.go": "package main", "package.json": rscKitServer, "bun.lock": bunLock, "api/hello.ts": hello}
+		for i := 0; i+1 < len(more); i += 2 {
+			f[more[i]] = more[i+1]
+		}
+		return f
+	}
+	for name, c := range map[string]struct {
+		files map[string]string
+		s     buildplan.Settings
+	}{
+		"detected": {gofiles(), buildplan.Settings{}},
+		"yaml":     {gofiles("homeport.yaml", "backend:\n  paths: [/api]\n"), buildplan.Settings{}},
+		"settings": {gofiles(), buildplan.Settings{BackendPaths: []string{"/api"}}},
+		"laravel":  {laravel(nil, "package.json", rscKitServer, "bun.lock", bunLock, "api/hello.ts", hello), buildplan.Settings{}},
+	} {
+		p, err := buildplan.Detect(repo(c.files), c.s)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if !p.Backend || p.API != nil || strings.Contains(p.Command, ".homeport-api.mjs") {
+			t.Errorf("%s: backend %v, api %+v", name, p.Backend, p.API)
+		}
+		if !slices.Contains(p.Warnings, "api/ left alone: a backend beside rsc-kit's renderer is the app's server") {
+			t.Errorf("%s: warnings %q", name, p.Warnings)
+		}
+	}
+	for name, c := range map[string]struct {
+		files map[string]string
+		s     buildplan.Settings
+	}{
+		"yaml":     {map[string]string{"index.html": "x", "api/hello.ts": hello, "homeport.yaml": "backend:\n  paths: [/x]\n"}, buildplan.Settings{}},
+		"settings": {map[string]string{"api/hello.ts": hello}, buildplan.Settings{BackendPaths: []string{"/x"}}},
+	} {
+		if _, err := buildplan.Detect(repo(c.files), c.s); err == nil || !strings.Contains(err.Error(), "backend paths are a backend's beside an rsc-kit renderer") {
+			t.Errorf("backend paths, no backend (%s): %v", name, err)
+		}
+	}
+}

@@ -352,10 +352,14 @@ func TestTheAPIServerServesTheSite(t *testing.T) {
 	}
 	// its public tree, for the host: what the server answers from a file,
 	// the same file
-	want := []string{"files /.well-known/security.txt", "files /404.html", "files /about.html", "files /docs/index.html", "files /index.html",
+	want := []string{"fallback /404.html", "files /.well-known/security.txt", "files /404.html", "files /about.html", "files /docs/index.html", "files /index.html",
 		"files /style.css", "immutable /assets/app-1234abcd.js", "pages /", "pages /404", "pages /about", "pages /docs", "pages /docs/"}
 	if got := sitePublic(t, bundle); !slices.Equal(got, want) {
 		t.Errorf("public tree:\n got  %q\n want %q", got, want)
+	}
+	// its fallback: what the server answers a path that isn't a file
+	if b, _ := os.ReadFile(filepath.Join(bundle, ".homeport/public/fallback/404.html")); string(b) != "<h1>lost</h1>" {
+		t.Errorf("fallback: %q", b)
 	}
 
 	// an SPA (index.html its only page): every path that isn't a file is it
@@ -367,13 +371,45 @@ func TestTheAPIServerServesTheSite(t *testing.T) {
 	if a := ask(t, "GET", u+"/settings/profile", nil); a.status != 200 || a.body != "<div id=app>" {
 		t.Errorf("SPA: %d %q", a.status, a.body)
 	}
+	if got, want := sitePublic(t, bundle), []string{"fallback /200.html", "files /index.html", "pages /"}; !slices.Equal(got, want) {
+		t.Errorf("SPA public tree:\n got  %q\n want %q", got, want)
+	}
+	if b, _ := os.ReadFile(filepath.Join(bundle, ".homeport/public/fallback/200.html")); string(b) != "<div id=app>" {
+		t.Errorf("SPA fallback: %q", b)
+	}
+
+	// an SPA by its 200.html: that's its fallback
+	out, bundle, err = buildAPI(t, map[string]string{"index.html": "<h1>home</h1>", "200.html": "<div id=app>", "about.html": "x",
+		"api/hi.ts": "export const GET = () => new Response('hi')\n"}, 0, 0)
+	if err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	sitePublic(t, bundle)
+	if b, _ := os.ReadFile(filepath.Join(bundle, ".homeport/public/fallback/200.html")); string(b) != "<div id=app>" {
+		t.Errorf("200.html fallback: %q", b)
+	}
+
+	// pages and no 404.html: the server's own 404 page, the same one
+	out, bundle, err = buildAPI(t, map[string]string{"index.html": "<h1>home</h1>", "about.html": "x", "api/hi.ts": "export const GET = () => new Response('hi')\n"}, 0, 0)
+	if err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	if got, want := sitePublic(t, bundle), []string{"fallback /404.html", "files /about.html", "files /index.html", "pages /", "pages /about"}; !slices.Equal(got, want) {
+		t.Errorf("no 404.html public tree:\n got  %q\n want %q", got, want)
+	}
+	u = runAPI(t, "bun", bundle)
+	a := ask(t, "GET", u+"/nope", nil)
+	if b, _ := os.ReadFile(filepath.Join(bundle, ".homeport/public/fallback/404.html")); a.status != 404 || string(b) != a.body {
+		t.Errorf("plain 404 fallback: %q, the server's %d %q", b, a.status, a.body)
+	}
 }
 
 // sitePublic runs public.mjs's site kind in a built bundle: its tree.
 func sitePublic(t *testing.T, bundle string) []string {
 	t.Helper()
 	script, _ := filepath.Abs("embed/public.mjs")
-	cmd := exec.Command("bun", script, "site", ".homeport/site", "", buildplan.StaticImmutableRe)
+	// the fallback the server's build chose, beside the bundle (apiStep)
+	cmd := exec.Command("bun", script, "site", ".homeport/site", "", buildplan.StaticImmutableRe, "../"+buildplan.APIFallbackDir)
 	cmd.Dir = bundle
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%v\n%s", err, out)
@@ -426,12 +462,13 @@ func TestTheAPIBuildForReal(t *testing.T) {
 	if !strings.Contains(out, "==> api/: 1 handler") || !strings.Contains(out, "served without waking the app") {
 		t.Errorf("the log:\n%s", out)
 	}
-	for _, f := range []string{".homeport-api.mjs", ".homeport-api-entry.mjs", ".homeport-public.mjs", buildplan.BundleDir + "/.env", buildplan.BundleDir + "/.homeport/site/.env"} {
+	for _, f := range []string{".homeport-api.mjs", ".homeport-api-entry.mjs", ".homeport-public.mjs", buildplan.APIFallbackDir, buildplan.BundleDir + "/.env", buildplan.BundleDir + "/.homeport/site/.env"} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
 			t.Errorf("%s is left", f)
 		}
 	}
-	for _, f := range []string{buildplan.BundleDir + "/.homeport/public/pages/about.html", buildplan.BundleDir + "/.homeport/public/pages/.html", ".output/edge.json"} {
+	for _, f := range []string{buildplan.BundleDir + "/.homeport/public/pages/about.html", buildplan.BundleDir + "/.homeport/public/pages/.html",
+		buildplan.BundleDir + "/.homeport/public/fallback/404.html", ".output/edge.json"} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Errorf("no %s", f)
 		}

@@ -258,8 +258,12 @@ func reqResError(file string) string {
 }
 
 // apiOff says why api/ is left alone whatever it holds, or "": what the
-// person said, a project of its own in it, a Worker's, a workspace's root.
+// person said, a project of its own in it, a Worker's, a workspace's root,
+// a backend beside a renderer (backend.go).
 func (r reader) apiOff(cfg fileConfig, s Settings) string {
+	if r.pairs(cfg, s) {
+		return "a backend beside rsc-kit's renderer is the app's server"
+	}
 	for _, m := range apiManifests {
 		if r.exists("api/" + m) {
 			return "api/" + m + " makes it a project of its own"
@@ -477,6 +481,12 @@ func saidRuntime(cfg fileConfig, s Settings) (string, string) {
 	return s.Runtime, "the build settings"
 }
 
+// apiFallbackDir is where the server's build leaves the one page a site
+// answers a path that isn't a file with - its 200.html (an SPA's shell) or
+// its 404.html - beside the bundle, for public.mjs's site kind to put in the
+// public tree's fallback/; gone after the build.
+const apiFallbackDir = ".homeport-api-fallback"
+
 // apiConfig is what the generator is handed (embed/api-server.mjs).
 type apiConfig struct {
 	Routes     []APIRoute `json:"routes"`
@@ -487,6 +497,9 @@ type apiConfig struct {
 	Bare       bool       `json:"bare,omitempty"`  // no package.json: no package imports
 	Out        string     `json:"out"`             // the bundle
 	Immutable  string     `json:"immutable"`
+	// where the build leaves the site's fallback page (apiFallbackDir), for
+	// public.mjs to put in the public tree
+	Fallback string `json:"fallback"`
 	// the body limit (bytes) and the time to a first byte (ms), when not
 	// the server's own (32 MiB, 300 s): smaller in tests
 	Limit   int `json:"limit,omitempty"`
@@ -494,7 +507,7 @@ type apiConfig struct {
 }
 
 func newAPIConfig(a *apiScan, site, rt string, hasPkg bool) apiConfig {
-	c := apiConfig{Routes: a.routes, Middleware: a.middleware, Site: site, Target: rt, Bare: !hasPkg, Out: BundleDir, Immutable: StaticImmutableRe}
+	c := apiConfig{Routes: a.routes, Middleware: a.middleware, Site: site, Target: rt, Bare: !hasPkg, Out: BundleDir, Immutable: StaticImmutableRe, Fallback: apiFallbackDir}
 	if site == "" && hasPkg {
 		c.Sites = SiteFolders
 	}
@@ -510,6 +523,7 @@ func apiStep(a *apiScan, site, rt string, hasPkg bool) string {
 	gen := "{ printf '%s' '" + base64.StdEncoding.EncodeToString([]byte(apiServerMJS)) + "' | base64 -d > .homeport-api.mjs && " +
 		"bun .homeport-api.mjs --homeport-api-build " + base64.StdEncoding.EncodeToString(j) + "; s=$?; rm -f .homeport-api.mjs .homeport-api-entry.mjs; [ $s = 0 ]; }"
 	tree := "{ printf '%s' '" + base64.StdEncoding.EncodeToString([]byte(publicMJS)) + "' | base64 -d > .homeport-public.mjs && (cd " + b +
-		" && ./bin ../.homeport-public.mjs site .homeport/site ../.output/edge.json '" + StaticImmutableRe + "') || rm -rf " + b + "/.homeport/public; rm -f .homeport-public.mjs; }"
+		" && ./bin ../.homeport-public.mjs site .homeport/site ../.output/edge.json '" + StaticImmutableRe + "' ../" + apiFallbackDir + ") || rm -rf " + b +
+		"/.homeport/public; rm -rf .homeport-public.mjs " + apiFallbackDir + "; }"
 	return gen + " && { [ ! -d " + b + "/.homeport/site ] || " + tree + "; }"
 }

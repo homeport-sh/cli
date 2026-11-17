@@ -13,6 +13,9 @@ func WithCatalog(c []Package) (restore func()) {
 	return func() { catalog = old }
 }
 
+// APIFallbackDir is where the server's build leaves the site's fallback.
+const APIFallbackDir = apiFallbackDir
+
 // APIBuildArg is the generator's argument for p's api/ folder (api.go),
 // building into out, with a body limit (bytes) and a time to the first
 // byte (ms) of the test's.

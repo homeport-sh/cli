@@ -543,7 +543,7 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	if s.Root != "" || member != nil {
 		p.Root = r.root
 	}
-	if p.Toolchain == "node" || p.Toolchain == "bun" || p.Toolchain == "none" {
+	if p.Toolchain == "node" || p.Toolchain == "bun" || p.Toolchain == "none" || p.Backend {
 		p.Warnings = append(p.Warnings, r.apiWarnings(&p, cfg, s)...)
 	}
 	if member != nil {

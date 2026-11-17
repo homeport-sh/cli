@@ -32,8 +32,8 @@ const LATE = Symbol("late");
 
 const json = (status, body, headers) => new Response(JSON.stringify(body) + "\n", { status, headers: { "content-type": "application/json", ...headers } });
 const internal = () => json(500, { error: "internal error" });
-const notFound = () =>
-	new Response("<!doctype html>\n<meta charset=utf-8>\n<title>Not found</title>\n<h1>Not found</h1>\n", { status: 404, headers: { "content-type": "text/html; charset=utf-8" } });
+const NOT_FOUND = "<!doctype html>\n<meta charset=utf-8>\n<title>Not found</title>\n<h1>Not found</h1>\n";
+const notFound = () => new Response(NOT_FOUND, { status: 404, headers: { "content-type": "text/html; charset=utf-8" } });
 
 // the routes, most specific first: per part, a name, then [id], then [...x]
 function table(routes) {
@@ -345,6 +345,14 @@ async function build(c) {
 		// a static site's rule: 200.html, or index.html its only page
 		const spa = files.includes("/200.html") ? "/200.html" : pages.length === 1 && pages[0] === "/index.html" ? "/index.html" : null;
 		site = { files, spa, notFound: !spa && files.includes("/404.html") ? "/404.html" : null };
+		// the page it answers a path that isn't a file with, for the public
+		// tree's fallback/ (public.mjs): the host answers it the same way
+		fs.rmSync(c.fallback, { recursive: true, force: true });
+		fs.mkdirSync(c.fallback, { recursive: true });
+		const from = (f) => path.join(out, "site", f);
+		if (spa) fs.copyFileSync(from(spa), path.join(c.fallback, "200.html"));
+		else if (site.notFound) fs.copyFileSync(from(site.notFound), path.join(c.fallback, "404.html"));
+		else fs.writeFileSync(path.join(c.fallback, "404.html"), NOT_FOUND);
 	}
 	const at = ".homeport-api-entry.mjs";
 	entry(c, at, site, ".homeport-api.mjs");
