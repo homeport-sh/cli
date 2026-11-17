@@ -86,10 +86,20 @@ type fakeAPI struct {
 	domains       []cloud.Domain       // an app's platform domains, by name
 	customDomains []cloud.CustomDomain // an app's own domains
 	domainCalls   []string             // each Domains API call: method, app and what follows /domains
+	noWWW         []bool               // each add's no_www
 	proxyCalls    []string             // each proxy switch: method, domain and on
 	queue         *cloud.Queue         // an app's queue (nil: it has none)
 	queueBusy     bool                 // a drain is running: Drain now is refused
 	queueCalls    []string             // each Queue API call: method and what follows /queue
+	logPages      []cloud.Logs         // runtime logs, read by read (nil: one line, panic: boom)
+	logReads      []string             // each logs read: the app and the cursor it sent
+	logRefuse     *cloud.Error         // a logs read's answer, when it's refused
+	audit         []map[string]any     // the team's activity, newest first, as the API gives each entry
+	auditDays     int                  // how far back the plan keeps (0: 30)
+	auditPage     int                  // the most entries a page answers (0: as many as asked)
+	auditReads    []url.Values         // each activity read's query
+	auditExports  []url.Values         // each export's query
+	auditNote     string               // an export cut short: its Homeport-Export-Note
 	rollbacks     []struct {
 		Deploy     string `json:"deploy"`
 		RunRelease bool   `json:"run_release"`
@@ -392,7 +402,11 @@ func (f *fakeAPI) serve(w http.ResponseWriter, r *http.Request) {
 	case strings.Contains(p, "/queue"):
 		f.serveQueue(w, r)
 	case strings.HasSuffix(p, "/logs"):
-		f.write(w, 200, map[string]any{"Cursor": "c2", "Lines": []map[string]any{{"Time": "2026-10-08T12:00:00Z", "Level": "error", "Message": "panic: boom", "Process": "web"}}})
+		f.serveLogs(w, r)
+	case r.Method == "GET" && p == "/v1/cli/teams/"+team1+"/audit":
+		f.serveAudit(w, r)
+	case r.Method == "GET" && p == "/v1/cli/teams/"+team1+"/audit/export":
+		f.serveAuditExport(w, r)
 	case strings.Contains(p, "/custom-domains/") && strings.HasSuffix(p, "/proxy"):
 		f.serveProxy(w, r)
 	case strings.HasSuffix(p, "/custom-domains"):
@@ -442,6 +456,24 @@ func (f *fakeAPI) serveQueue(w http.ResponseWriter, r *http.Request) {
 	default:
 		f.t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
 		w.WriteHeader(404)
+	}
+}
+
+// serveLogs is an environment's runtime logs: logPages, a page a read,
+// then nothing new (the cursor sent back).
+func (f *fakeAPI) serveLogs(w http.ResponseWriter, r *http.Request) {
+	app := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/cli/teams/"+team1+"/apps/"), "/logs")
+	cursor := r.URL.Query().Get("cursor")
+	f.logReads = append(f.logReads, app+" "+cursor)
+	switch {
+	case f.logRefuse != nil:
+		f.write(w, f.logRefuse.Status, map[string]string{"error": f.logRefuse.Message})
+	case f.logPages == nil:
+		f.write(w, 200, map[string]any{"Cursor": "c2", "Lines": []map[string]any{{"Time": "2026-10-08T12:00:00Z", "Level": "error", "Message": "panic: boom", "Process": "web"}}})
+	case len(f.logReads) <= len(f.logPages):
+		f.write(w, 200, f.logPages[len(f.logReads)-1])
+	default:
+		f.write(w, 200, cloud.Logs{Cursor: cursor, Lines: []cloud.LogLine{}})
 	}
 }
 
@@ -498,8 +530,10 @@ func (f *fakeAPI) serveDomains(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "POST" && rest == "":
 		var in struct {
 			Domain string `json:"domain"`
+			NoWWW  bool   `json:"no_www"`
 		}
 		json.NewDecoder(r.Body).Decode(&in)
+		f.noWWW = append(f.noWWW, in.NoWWW)
 		if !strings.Contains(in.Domain, ".") {
 			f.write(w, 400, map[string]string{"error": "that isn't a domain", "field": "domain"})
 			return
@@ -508,6 +542,16 @@ func (f *fakeAPI) serveDomains(w http.ResponseWriter, r *http.Request) {
 			Records: []cloud.DNSRecord{{Type: "CNAME", Name: "shop", FullName: in.Domain, Value: "blog.homeport.app"},
 				{Type: "TXT", Name: "_homeport.shop", FullName: "_homeport." + in.Domain, Value: "homeport-verify=abc123"}}}
 		f.domains = append(f.domains, d)
+		// a root's www. (a www.'s root) comes with it, redirecting to it
+		other := "www." + in.Domain
+		if root, ok := strings.CutPrefix(in.Domain, "www."); ok {
+			other = root
+		}
+		if strings.Count(strings.TrimPrefix(in.Domain, "www."), ".") == 1 && !in.NoWWW {
+			c := cloud.Domain{Domain: other, Status: "pending", RedirectTo: in.Domain, CreatedAt: d.CreatedAt, Records: []cloud.DNSRecord{}}
+			f.domains = append(f.domains, c)
+			d.Companion = &c
+		}
 		slices.SortFunc(f.domains, func(a, b cloud.Domain) int { return strings.Compare(a.Domain, b.Domain) })
 		f.write(w, 201, d)
 	case i < 0:

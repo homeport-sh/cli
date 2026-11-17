@@ -444,6 +444,16 @@ func TestMCPDomains(t *testing.T) {
 	if text, isErr := callTool(t, cs, "add_domain", with(map[string]any{"domain": "https://x.example.com"})); !isErr || len(yes.asked) != 1 {
 		t.Fatalf("not a domain, asked anyway: %v %s %q", isErr, text, yes.asked)
 	}
+	// a root's www. comes with it, unless declined
+	if text, isErr := callTool(t, cs, "add_domain", with(map[string]any{"domain": "acme.com"})); isErr || !strings.Contains(text, `"companion"`) || !strings.Contains(text, `"redirect_to": "acme.com"`) {
+		t.Fatalf("add a root: %v %s", isErr, text)
+	}
+	if len(yes.asked) != 2 || !strings.Contains(yes.asked[1], "www.") {
+		t.Fatalf("asked %q", yes.asked)
+	}
+	if text, isErr := callTool(t, cs, "add_domain", with(map[string]any{"domain": "globex.com", "no_www": true})); isErr || strings.Contains(text, `"companion"`) || !f.noWWW[len(f.noWWW)-1] {
+		t.Fatalf("declined: %v %s", isErr, text)
+	}
 }
 
 // The queue's status is read-only: how it runs, its last report, its drains.

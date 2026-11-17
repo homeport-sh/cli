@@ -88,6 +88,9 @@ type Settings struct {
 	// (CheckAssets), replacing homeport.yaml's and the detected ones when
 	// there are any
 	Assets []PlanAsset `json:"assets,omitempty"`
+	// BackendPaths: a backend beside a renderer's paths (backend.go), in
+	// place of homeport.yaml's and the ones rsc-kit's build names
+	BackendPaths []string `json:"backend_paths,omitempty"`
 	// API: false leaves an api/ folder alone (api.go); nil is "build its
 	// handlers when it has some"
 	API *bool `json:"api,omitempty"`
@@ -97,12 +100,12 @@ type Settings struct {
 func (s Settings) IsZero() bool {
 	return s.Root == "" && s.Kind == "" && s.Install == "" && s.Command == "" && s.Output == "" &&
 		s.Run == "" && len(s.Release) == 0 && !s.NoRelease && s.StopGrace == "" && len(s.Processes) == 0 && s.Octane == nil && s.Runtime == "" &&
-		s.Python == "" && len(s.Packages) == 0 && len(s.Headers) == 0 && len(s.Assets) == 0 && s.API == nil
+		s.Python == "" && len(s.Packages) == 0 && len(s.Headers) == 0 && len(s.Assets) == 0 && len(s.BackendPaths) == 0 && s.API == nil
 }
 
 // With is s with what o sets in its place: one deploy's settings over the
 // app's saved ones. What o leaves empty is s's; processes, packages,
-// headers and assets, when o has any, are o's alone.
+// headers, assets and backend paths, when o has any, are o's alone.
 func (s Settings) With(o Settings) Settings {
 	pick := func(a, b string) string {
 		if b != "" {
@@ -115,7 +118,7 @@ func (s Settings) With(o Settings) Settings {
 		Release: slices.Clone(s.Release), NoRelease: s.NoRelease, StopGrace: pick(s.StopGrace, o.StopGrace),
 		Processes: slices.Clone(s.Processes), Octane: s.Octane,
 		Runtime: pick(s.Runtime, o.Runtime), Python: pick(s.Python, o.Python), Packages: slices.Clone(s.Packages), Headers: slices.Clone(s.Headers),
-		Assets: slices.Clone(s.Assets)}
+		Assets: slices.Clone(s.Assets), BackendPaths: slices.Clone(s.BackendPaths)}
 	// a release command and none are one setting: o's, when it says either
 	// (its commands, whole)
 	if o.NoRelease {
@@ -134,6 +137,9 @@ func (s Settings) With(o Settings) Settings {
 	}
 	if len(o.Assets) > 0 {
 		out.Assets = slices.Clone(o.Assets)
+	}
+	if len(o.BackendPaths) > 0 {
+		out.BackendPaths = slices.Clone(o.BackendPaths)
 	}
 	if o.Octane != nil {
 		v := *o.Octane
@@ -171,6 +177,13 @@ type Plan struct {
 	// scripts into a binary, or a static export. Kind and Artifact are then
 	// only what a builder that doesn't read it falls back to.
 	RSCKit bool `json:"rsc_kit,omitempty"`
+	// Supervise: the web runs through homeport's supervisor (backend.go),
+	// which the builder puts in the bundle as SuperviseFile - the CLI that
+	// made the plan - for the bundle's .homeport/wrap to run. Backend: a
+	// backend beside a renderer, whose paths the build leaves in the
+	// bundle's .homeport/backend-paths, for the host.
+	Supervise bool `json:"supervise,omitempty"`
+	Backend   bool `json:"backend,omitempty"`
 
 	// how a binary runs, from homeport.yaml or Settings (a PHP app's has a
 	// default, PHPRun): checked by whoever
@@ -233,6 +246,11 @@ type Plan struct {
 	// (assets.go): the builder keeps them beside the server, for the
 	// release after it to answer a tab opened before that deploy
 	Assets []PlanAsset `json:"assets,omitempty"`
+	// Public: the build writes homeport's public tree (.homeport/public,
+	// docs/edge-caching.md) in the app's folder, for the builder to ship
+	// with the release - a binary has no folder of its own for it
+	// (homeportd's PlanPublic)
+	Public bool `json:"public,omitempty"`
 	// Headers: the app's response headers - homeport.yaml's, or the
 	// settings' when they have any (headers.go); a static site's too
 	Headers []HeaderRule `json:"headers,omitempty"`
@@ -251,6 +269,9 @@ type Plan struct {
 	// laravelViews: the bundle has the release runner that compiles
 	// Laravel's views (laravel.go)
 	laravelViews bool
+	// phpRoot: a PHP app's document root, in its folder - public, or . for
+	// an app whose files are at its top (php.go)
+	phpRoot string
 	// rscKitApp: an rsc-kit app, whatever builds it (RSCKit is whether
 	// homeport's build does): its binary runs src/commands/<name> as
 	// ./app <name>, which its queue and release command are
@@ -278,7 +299,7 @@ const PHPVersion = "8.5"
 // front-end assets. A Laravel bundle's php.ini has opcache skip timestamp
 // checks and keep what it compiles, in the release's storage/, across
 // wakes. Pinned by digest: a tag can be pushed again.
-const FrankenPHPImage = "ghcr.io/homeport-sh/frankenphp:" + PHPVersion + "-1.13.5-bun1.4.4@sha256:06172101e86cbdac22a0a074488d1e8fce152340c5fcaf6172abaefdd2628a43"
+const FrankenPHPImage = "ghcr.io/homeport-sh/frankenphp:" + PHPVersion + "-1.13.5-bun1.4.4-2@sha256:94482fb90cb5310ffcf0cce4929cdfec465573c8707616ae6bfd7123d40f3e2b"
 
 // BundleDir is where a PHP app's build puts its bundle, in the app's folder.
 const BundleDir = ".homeport-bundle"
@@ -321,7 +342,7 @@ var SiteFolders = []string{"build", "dist", "out"}
 // app's app/ and database/migrations, which its queue's detection scans
 // (queue.go): the builder's plan says what that found.
 func Files() []string {
-	return slices.Concat([]string{ConfigFile, "go.mod", "composer.json", "composer.lock", "package.json", "bun.lock", "bun.lockb",
+	return slices.Concat([]string{ConfigFile, "go.mod", "composer.json", "composer.lock", "index.php", "public/index.php", "package.json", "bun.lock", "bun.lockb",
 		"package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", ".nvmrc", ".node-version", ".bun-version", "index.html",
 		"astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.mts"}, svelteConfigs, nextConfigs, nuxtConfigs, nitroConfigs, releaseFiles(), pythonFiles(), rustFiles(), queueFiles(), apiForeign)
 }
@@ -352,8 +373,9 @@ type fileConfig struct {
 	Packages  []string                 `yaml:"packages"`
 	Headers   []HeaderRule             `yaml:"headers"`
 	Queue     *queueConfig             `yaml:"queue"`
-	Assets    []PlanAsset              `yaml:"assets"` // in place of the detected ones (CheckAssets)
-	API       *bool                    `yaml:"api"`    // false: api/ is left alone
+	Assets    []PlanAsset              `yaml:"assets"`  // in place of the detected ones (CheckAssets)
+	Backend   *backendConfig           `yaml:"backend"` // a backend beside a renderer's paths (backend.go)
+	API       *bool                    `yaml:"api"`     // false: api/ is left alone
 }
 
 type processConfig struct {
@@ -428,6 +450,12 @@ func (s Settings) Check() error {
 		return err
 	}
 	if _, err := CheckAssets(s.Assets); err != nil {
+		return err
+	}
+	if err := CheckBackendPaths(s.BackendPaths); err != nil {
+		return err
+	}
+	if err := checkHostCall(s.BackendPaths); err != nil {
 		return err
 	}
 	return CheckProcesses(s.Processes)
@@ -508,6 +536,10 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
+	if !p.Backend && (cfg.Backend != nil || len(s.BackendPaths) > 0) {
+		return Plan{}, errors.New("backend paths are a backend's beside an rsc-kit renderer, and this app has none: package.json with @rsc-kit/core, " +
+			"built with Bun (bun.lock), beside a PHP, Go, Rust or Python app, with no build command or output said")
+	}
 	if s.Root != "" || member != nil {
 		p.Root = r.root
 	}
@@ -553,12 +585,12 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 		p.Install = join(p.setup, s.Install)
 	}
 	if s.Kind != "" || s.Command != "" || s.Output != "" {
-		p.RSCKit = false // the person said what the build makes
+		p.RSCKit, p.Public = false, false // the person said what the build makes
 	}
 	if s.Command != "" {
 		p.Command = join(s.Command, p.assemble) // a bundle is still made from what it leaves
 		if p.Toolchain == "none" {
-			return Plan{}, errors.New("a build command needs a toolchain: there's no package.json, go.mod, Cargo.toml or composer.json in the app's folder")
+			return Plan{}, errors.New("a build command needs a toolchain: there's no package.json, go.mod, Cargo.toml, composer.json or index.php in the app's folder")
 		}
 	}
 	if s.Output != "" {
@@ -627,7 +659,7 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	}
 	if php && s.Command != "" {
 		// the person's build makes the bundle: nothing of SSR's is in it
-		p.SSR, p.Runtime, p.RuntimeVersion, p.RuntimeReason = "", "", "", ""
+		p.SSR, p.Runtime, p.RuntimeVersion, p.RuntimeReason, p.Supervise = "", "", "", "", false
 	}
 	if php && p.laravelViews && s.Command == "" {
 		cacheViewsOnRelease(&p)
@@ -661,7 +693,7 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 		case p.Run == "":
 			p.Run = PHPRun
 		default:
-			p.Run, p.Octane = phpServerRoot(p.Run), p.Run == PHPOctaneRun
+			p.Run, p.Octane = phpServerRoot(p.Run, p.phpRoot), p.Run == PHPOctaneRun
 		}
 	}
 	switch {
@@ -703,7 +735,7 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 		p.Run, p.Release, p.ReleaseReason, p.StopGrace, p.Processes = "", nil, "", "", nil // nothing runs
 		p.NoRelease, p.ReleaseDetected = false, ""
 		p.Runtime, p.RuntimeVersion, p.RuntimeReason, p.Health = "", "", "", ""
-		p.SSR, p.Reverb, p.Queue = "", false, nil
+		p.SSR, p.Reverb, p.Queue, p.Supervise, p.Backend = "", false, nil, false, false
 	}
 	return p, nil
 }
@@ -727,17 +759,19 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 	}
 
 	// nothing in the folder says how it builds, and a Go module is above it
-	goAbove := cfg.Build.Image == "" && !r.exists("go.mod") && !r.exists("composer.json") && !r.python() &&
+	goAbove := cfg.Build.Image == "" && !r.exists("go.mod") && !r.phpApp() && !r.python() &&
 		!r.exists("package.json") && !r.exists("index.html") && !r.exists("Cargo.toml") && r.goModuleAbove()
 
 	// a workspace member: its lockfile is its workspace's, above it
-	if cfg.Build.Image == "" && !r.exists("composer.json") && !r.exists("go.mod") && r.exists("package.json") && !r.hasLockfile() && !r.python() && !r.rustApp() {
+	if cfg.Build.Image == "" && !r.phpApp() && !r.exists("go.mod") && r.exists("package.json") && !r.hasLockfile() && !r.python() && !r.rustApp() {
 		w, err := r.findWorkspace()
 		if err != nil {
 			return Plan{}, err
 		}
 		r.ws = w
 	}
+	// a backend with an rsc-kit renderer beside it (backend.go)
+	pair := r.pairs(cfg, s)
 
 	switch {
 	case cfg.Build.Image != "":
@@ -748,46 +782,10 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 			return Plan{}, errors.New("build.image needs a build.command: what to run in it")
 		}
 		p.Toolchain, p.Image, p.Framework = "custom", cfg.Build.Image, "Custom image"
-	case r.exists("composer.json"):
-		// PHP: on homeport's FrankenPHP base, where FrankenPHP is built
-		// already. The platform check comes first (seconds), then composer,
-		// then the front-end assets if the app builds any, and the app is
-		// bundled with that FrankenPHP: nothing is compiled.
-		if !r.exists("composer.lock") {
-			return Plan{}, errors.New("composer.json without composer.lock: commit the lockfile, so the build installs what you tested")
-		}
-		if err := r.phpVersion(); err != nil {
+	case r.phpApp():
+		// PHP: a bundle with homeport's FrankenPHP as bin (php.go)
+		if err := r.php(&p, cfg, s, pair); err != nil {
 			return Plan{}, err
-		}
-		p.Toolchain, p.Image, p.Framework = "php", FrankenPHPImage, "PHP"
-		p.Install = "composer check-platform-reqs --no-dev --lock && composer install --no-dev --optimize-autoloader --no-interaction"
-		// Inertia's SSR: built with the rest, run beside the web (laravel.go)
-		ssr := cfg.Build.Command == "" && cfg.Static == "" && r.inertiaSSR()
-		p.Install = join(p.Install, r.frontEnd(ssr))
-		p.Assets = r.laravelAssets()
-		if cfg.Static == "" {
-			p.Kind = Bundle
-			if cfg.Build.Artifact == "" {
-				p.Artifact, p.StaticFallback = BundleDir, false
-			}
-		}
-		if p.Command == "" {
-			// a bundle's executable is bin, at its top: frankenphp-bundle
-			// puts FrankenPHP there as frankenphp
-			p.Command = "frankenphp-bundle . " + p.Artifact + " && mv -T " + p.Artifact + "/frankenphp " + p.Artifact + "/bin"
-			if ssr {
-				x, err := r.ssrFor(cfg, s)
-				if err != nil {
-					return Plan{}, fmt.Errorf("Inertia's SSR: %w", err)
-				}
-				p.SSR, p.Runtime, p.RuntimeVersion, p.RuntimeReason = SSRInertia, x.rt, x.version, x.why
-				p.Warnings = append(p.Warnings, ssrMemoryNote)
-				p.Command = join(p.Command, ssrAssemble(p.Artifact, x))
-			}
-			if r.requires("laravel/framework") {
-				p.Command = LaravelCaches + " && " + join(p.Command, releaseViewCache(p.Artifact), queueRunner(p.Artifact))
-				p.laravelViews = true
-			}
 		}
 	case r.exists("go.mod") || goAbove:
 		v, err := r.goVersion()
@@ -845,8 +843,19 @@ func (r reader) detect(cfg fileConfig, s Settings) (Plan, error) {
 		if ok, err := r.apiOnly(&p, cfg, s); ok || err != nil {
 			return p, err
 		}
-		return Plan{}, errors.New("can't tell how to build this app: no go.mod, composer.json, Cargo.toml, bun or npm lockfile, pyproject.toml, requirements.txt or index.html in its folder - " +
-			"set the build and output in the app's build settings")
+		return Plan{}, errors.New(r.unknown())
+	}
+	if pair && p.Kind != Static {
+		var given []string
+		if cfg.Backend != nil {
+			given = cfg.Backend.Paths
+		}
+		if len(s.BackendPaths) > 0 {
+			given = s.BackendPaths
+		}
+		if err := r.pair(&p, given); err != nil {
+			return Plan{}, err
+		}
 	}
 	return p, nil
 }
@@ -862,6 +871,9 @@ func (r reader) rscKit(p *Plan, cfg fileConfig) {
 		return
 	}
 	p.RSCKit, p.Artifact, p.StaticFallback = true, "dist/app", true
+	// its server is a binary: the files its manifest lists (rsc-kit
+	// 0.35.0+), for the builder to ship as the release's public tree
+	p.Command, p.Public = join(p.Command, filesStep()), true
 }
 
 // PlanAsset is a folder of fingerprinted files the build makes, in the
@@ -931,6 +943,33 @@ type reader struct {
 }
 
 // buildScript is the package.json script that builds the app.
+// projectFiles: what tells an app apart, any one of them in its folder
+var projectFiles = []string{"package.json", "go.mod", "composer.json", "index.php", "public/index.php", "Cargo.toml", "pyproject.toml", "requirements.txt", "index.html"}
+
+// unknown is why a folder with no project in it can't be built: the
+// folders just below it that hold one, to set as the app's folder, when
+// there are any (the app is in web/ of its repository), else what was
+// looked for.
+func (r reader) unknown() string {
+	var below []string
+	entries, _ := fs.ReadDir(r.fsys, cmpOr(r.root, "."))
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || e.Name() == "node_modules" {
+			continue
+		}
+		sub := reader{fsys: r.fsys, root: path.Join(r.root, e.Name())}
+		if slices.ContainsFunc(projectFiles, sub.exists) {
+			below = append(below, strconv.Quote(path.Join(r.root, e.Name())))
+		}
+	}
+	if len(below) > 0 {
+		return "can't tell how to build this app: its folder has no project, but " + strings.Join(below, ", ") +
+			" does - set it as the app's folder in the build settings"
+	}
+	return "can't tell how to build this app: no package.json, go.mod, composer.json, index.php, Cargo.toml, pyproject.toml, requirements.txt or index.html in its folder - " +
+		"set the app's folder, or the build and output, in the app's build settings"
+}
+
 func (r reader) buildScript() string { return cmpOr(r.script, "build") }
 
 func (r reader) name(n string) string { return path.Join(r.root, n) }
@@ -991,10 +1030,11 @@ func (r reader) deps() map[string]bool {
 // phpServerRoot: a php-server run that names no document root serves
 // public/. An embedded FrankenPHP did that by itself, so a run written for
 // one says no --root; run from a bundle's folder it would serve the app's
-// own files (its config, its .env).
-func phpServerRoot(run string) string {
+// own files (its config, its .env). An app whose document root is its own
+// folder (root .) is served from there as it is.
+func phpServerRoot(run, root string) string {
 	f := strings.Fields(run)
-	if len(f) == 0 || f[0] != "php-server" {
+	if len(f) == 0 || f[0] != "php-server" || root == "." {
 		return run
 	}
 	for _, a := range f[1:] {

@@ -12,12 +12,24 @@
 // it redirects (the other trailing-slash form), answers with headers of the
 // app's, or runs any of the app's code for, is left out - the app answers it.
 //
+// routes.json, beside the trees, is what else the server does before any of
+// the app's code, as data the host applies (docs/edge-caching.md, "The
+// public tree's routes"): headers it adds to some of the tree's files (a
+// file's set, by its URL), and redirects it answers for any path: Next.js's
+// config's headers() and redirects(), and a files manifest's headers.
+//
+//   bin public.mjs files <manifest> [marker]           (cwd: where the tree goes)
 //   bin public.mjs sveltekit <adapter out> <marker>   (cwd: the bundle)
 //   bin public.mjs astro <outDir> <marker>
 //   bin public.mjs next <standalone app folder> <marker>
 //   bin public.mjs react-router <server build> <marker>
 //   bin public.mjs remix <server build> <marker>
 //   bin public.mjs site <site folder> <marker> <immutable>
+//
+// files: homeport's files manifest (docs/edge-caching.md, "The files
+// manifest"), which a framework writes to say itself what its server answers
+// from files - rsc-kit's .output/files.json. Its own build's server is a
+// binary: the tree goes in the app's folder, for the builder to ship.
 //
 // Next.js, react-router-serve and remix-serve: their content-hashed assets
 // alone (immutable/), which their servers answer from files with the same
@@ -44,6 +56,20 @@ import { fileURLToPath } from "node:url";
 const OUT = ".homeport/public";
 // the edge contract's limits on "static": how many, and each path's bytes
 const MAX_STATIC = 200, MAX_PATH = 200;
+// routes.json's limits, as the host's: distinct header sets, headers in a
+// set, a value's bytes; redirects, a redirect's from and to
+const MAX_SETS = 64, MAX_SET = 32, MAX_VALUE = 8192, MAX_REDIRECTS = 128, MAX_FROM = 512, MAX_TO = 2048, MAX_ROUTES = 1 << 20;
+// a header the host sends from routes.json, as it checks one: a name of its
+// headers: rules' (docs/headers.md), never one homeport or the response
+// itself sets; a value of printable ASCII, no ` { }, no spaces around it
+const REFUSED = new Set("set-cookie content-length transfer-encoding connection keep-alive proxy-connection te trailer upgrade content-encoding vary content-range accept-ranges etag last-modified date alt-svc location x-origin-auth x-robots-tag defer match server via".split(" "));
+function hostHeader(name, value) {
+	if (!/^[A-Za-z][A-Za-z0-9-]{0,63}$/.test(name)) return "its name";
+	const l = name.toLowerCase();
+	if (REFUSED.has(l) || l.startsWith("x-homeport-")) return "homeport's or the response's own";
+	if (typeof value !== "string" || !/^[ -~]{1,8192}$/.test(value) || /^ | $|[`{}]/.test(value) || Buffer.byteLength(value) > MAX_VALUE) return "its value";
+	return null;
+}
 const say = (s) => console.log("homeport: " + s);
 
 // URLs it serves: plain characters only (no escapes, nothing a server could
@@ -64,11 +90,31 @@ const ext = (f) => {
 class Tree {
 	constructor(wellKnown) {
 		this.wellKnown = wellKnown;
-		this.urls = new Map(); // url -> [tree, src]
+		this.urls = new Map(); // url -> [tree, src, copies]
 		this.left = []; // [url, why]
+		this.headers = new Map(); // url -> its set's key
+		this.sets = new Map(); // key (JSON) -> {set: [[name, value]...], exact?}
+		this.redirects = []; // {from, to, status, caseless?, refresh?}
 	}
-	// place: a URL and the file its server answers it with
-	put(url, src, immutable) {
+	// header: the headers its server adds to url's file; exact, all it
+	// sends with it (the host adds no Cache-Control of its own); false when
+	// the host can't send them (the file's then the app's)
+	header(url, set, exact = false) {
+		if (!set.length && !exact) return true;
+		// a URL the host gives headers to: letters, digits and -._~ alone
+		if (set.length > MAX_SET || !/^\/([A-Za-z0-9._~-]+\/)*[A-Za-z0-9._~-]*$/.test(url)) return false;
+		const key = JSON.stringify([set, exact]);
+		if (!this.sets.has(key)) {
+			if (this.sets.size === MAX_SETS) return false;
+			this.sets.set(key, exact ? { set, exact } : { set });
+		}
+		this.headers.set(url, key);
+		return true;
+	}
+	// place: a URL and the file its server answers it with; copies, the
+	// extensions of the compressed copies beside it its server sends too
+	// (.br, .gz: the host's), else the builder writes its own
+	put(url, src, immutable, copies = []) {
 		if (this.urls.has(url)) return;
 		if (!plainURL(url, this.wellKnown)) return this.left.push([url, "its URL has characters only the app reads"]);
 		// the host serves a file's .br and .gz (the builder's) for the file's
@@ -77,18 +123,41 @@ class Tree {
 		const page = url.endsWith("/") || ext(src) === ".html" && !/\.html?$/.test(url);
 		if (page && ext(src) !== ".html") return this.left.push([url, "not an HTML page"]);
 		if (!page && !ext(url)) return this.left.push([url, "no file extension to give it a type"]);
-		this.urls.set(url, [immutable && !page ? "immutable" : page ? "pages" : "files", src]);
+		this.urls.set(url, [immutable && !page ? "immutable" : page ? "pages" : "files", src, copies]);
 	}
 	write() {
 		fs.rmSync(OUT, { recursive: true, force: true });
 		const n = { immutable: 0, files: 0, pages: 0 };
-		for (const [url, [tree, src]] of this.urls) {
+		let routes = this.routes();
+		if (Buffer.byteLength(routes) > MAX_ROUTES) {
+			// more than the host reads: the files with headers are the app's
+			for (const url of this.headers.keys()) {
+				if (this.urls.delete(url)) this.left.push([url, "more headers, or header sets, than homeport sends from files"]);
+			}
+			this.headers.clear();
+			routes = this.routes();
+		}
+		for (const [url, [tree, src, copies]] of this.urls) {
 			const dst = path.join(OUT, tree, tree === "pages" ? url + ".html" : url);
 			fs.mkdirSync(path.dirname(dst), { recursive: true });
 			fs.copyFileSync(src, dst);
+			for (const c of copies) fs.copyFileSync(src + c, dst + c);
 			n[tree]++;
 		}
+		if (routes) {
+			fs.mkdirSync(OUT, { recursive: true });
+			fs.writeFileSync(path.join(OUT, "routes.json"), routes);
+		}
+		n.headers = [...this.headers.keys()].filter((u) => this.urls.has(u)).length;
+		n.redirects = this.redirects.length;
 		return n;
+	}
+	// routes: routes.json's text ("" none) - each set with its files' URLs
+	routes() {
+		const sets = new Map([...this.sets.keys()].map((k) => [k, []]));
+		for (const [url, key] of this.headers) if (this.urls.has(url)) sets.get(key).push(url);
+		const headers = [...sets].filter(([, urls]) => urls.length).map(([k, urls]) => ({ set: this.sets.get(k).set, urls, ...(this.sets.get(k).exact && { exact: true }) }));
+		return headers.length || this.redirects.length ? JSON.stringify({ v: 1, headers, redirects: this.redirects }) + "\n" : "";
 	}
 }
 
@@ -116,6 +185,88 @@ const isDir = (f) => {
 		return false;
 	}
 };
+
+// files: homeport's files manifest (docs/edge-caching.md, "The files
+// manifest") - {"v":1,"root","files","precompressed","headers","middleware"}
+// - read whole or not at all: another version, middleware, a root outside
+// the manifest's folder is the app's, every file. Its files alone, each at
+// its URL, a file with its headers (every rule whose match is the URL, or a
+// prefix ending /**, in order, a later value replacing an earlier one's);
+// one with the year-long immutable Cache-Control is a fingerprinted asset
+// (immutable/), any other a file (files/). A file the host would send a
+// header the app doesn't (none of its own: the host's Cache-Control), or
+// one it can't send, is the app's.
+const IMMUTABLE = "public, max-age=31536000, immutable";
+function files(manifest) {
+	let m;
+	try {
+		m = JSON.parse(fs.readFileSync(manifest, "utf8"));
+	} catch (e) {
+		throw new Error(e && e.code === "ENOENT" ? "no " + manifest : manifest + " isn't JSON");
+	}
+	if (!m || typeof m !== "object" || m.v !== 1) throw new Error(manifest + ": not a files manifest this reads (v 1)");
+	if (m.middleware !== false) throw new Error(manifest + ": the app's code runs for its files (middleware)");
+	if (typeof m.root !== "string" || !Array.isArray(m.files) || (m.headers !== undefined && !Array.isArray(m.headers))) throw new Error(manifest + ": a files manifest this doesn't know");
+	const at = path.dirname(manifest);
+	const root = path.resolve(at, m.root);
+	if (path.isAbsolute(m.root) || (root !== path.resolve(at) && !root.startsWith(path.resolve(at) + path.sep)) || !isDir(root)) throw new Error(manifest + ": its root isn't a folder beside it");
+	const realRoot = fs.realpathSync(root);
+	const enc = { br: ".br", gzip: ".gz" }; // the host's copies (not zstd)
+	const copyExts = (Array.isArray(m.precompressed) ? m.precompressed : []).map((e) => enc[e]).filter(Boolean);
+	const rules = [];
+	for (const r of m.headers || []) {
+		if (!r || typeof r.match !== "string" || !r.match.startsWith("/") || !r.headers || typeof r.headers !== "object") throw new Error(manifest + ": a header rule this doesn't know");
+		const set = Object.entries(r.headers);
+		if (set.some(([, v]) => typeof v !== "string")) throw new Error(manifest + ": a header rule this doesn't know");
+		// exact, or a prefix ending /**; any other match is no rule here
+		if (r.match.endsWith("/**")) rules.push({ prefix: r.match.slice(0, -2), set });
+		else if (!r.match.includes("*")) rules.push({ exact: r.match, set });
+	}
+	const t = new Tree();
+	for (const u of m.files) {
+		if (typeof u !== "string" || !u.startsWith("/")) continue;
+		const src = path.join(root, u);
+		let real;
+		try {
+			real = fs.realpathSync(src);
+		} catch {
+			t.left.push([u, "listed, but not in " + m.root]);
+			continue;
+		}
+		if (!real.startsWith(realRoot + path.sep) || !isFile(real)) {
+			t.left.push([u, "not a file in " + m.root]);
+			continue;
+		}
+		// as its server sends them: by name in any case, the last one set
+		const hs = new Map();
+		for (const r of rules) {
+			if (r.exact !== undefined ? r.exact !== u : !u.startsWith(r.prefix)) continue;
+			for (const [k, v] of r.set) hs.set(k.toLowerCase(), [k, v]);
+		}
+		const set = [...hs.values()];
+		const bad = set.map(([k, v]) => [k, hostHeader(k, v)]).find(([, why]) => why);
+		if (bad) {
+			t.left.push([u, `a header of the app's homeport can't send (${bad[0]}: ${bad[1]})`]);
+			continue;
+		}
+		// none: the file goes out with exactly its set, the host adding no
+		// Cache-Control of its own (an exact set)
+		const cc = hs.get("cache-control");
+		const copies = copyExts.filter((c) => {
+			try {
+				return fs.lstatSync(src + c).isFile();
+			} catch {
+				return false;
+			}
+		});
+		t.put(u, src, !!cc && cc[1].toLowerCase() === IMMUTABLE, copies);
+		if (t.urls.has(u) && !t.header(u, set, !cc)) {
+			t.urls.delete(u);
+			t.left.push([u, "more headers, or header sets, than homeport sends from files"]);
+		}
+	}
+	return t;
+}
 
 // SvelteKit's adapter-node: its server answers its asset table - client
 // files, then prerendered pages - before SvelteKit runs (hooks included)
@@ -259,10 +410,14 @@ function astro(outDir) {
 }
 
 // Next.js standalone: the router answers /_next/static/<file> from
-// .next/static, Cache-Control a year and immutable (the service worker's
-// excepted) - after the config's headers and redirects, its middleware
-// (or proxy) and beforeFiles rewrites, so a URL any of those could take
-// is left to the app. assetPrefix and i18n: the app's, all of it.
+// .next/static, Cache-Control a year and immutable unless the config's
+// headers set one (the service worker's excepted) - after the config's
+// headers and redirects, its middleware (or proxy) and beforeFiles
+// rewrites. The config's headers go with the files they match, in
+// routes.json; a URL middleware, a rewrite, a redirect, onMatchHeaders or
+// a header rule with has or missing could take is left to the app. Its
+// redirects up to the first the host can't answer as Next does go in
+// routes.json too. assetPrefix and i18n: the app's, all of it.
 function next(dir) {
 	const nd = path.join(dir, ".next");
 	const read = (f) => JSON.parse(fs.readFileSync(path.join(nd, f), "utf8"));
@@ -277,10 +432,13 @@ function next(dir) {
 	if (cfg.assetPrefix) throw new Error("assetPrefix is set (" + cfg.assetPrefix + "): its assets are the app's to place");
 	if (cfg.i18n) throw new Error("i18n is set: its routing is the app's");
 	const base = typeof cfg.basePath === "string" ? cfg.basePath.replace(/\/+$/, "") : "";
-	// what runs before the files: each a regex (has/missing: may match)
-	const regexes = (list) => (Array.isArray(list) ? list : []).map((r) => r && r.regex).filter((r) => typeof r === "string");
+	// path-to-regexp's: case-insensitive unless the config says
+	const flags = routes.caseSensitive === true ? "" : "i";
+	const list = (l) => (Array.isArray(l) ? l : []).filter((r) => r && typeof r.regex === "string");
+	// what runs before the files and may take one: each a regex (has/missing:
+	// may match)
 	const rw = routes.rewrites && !Array.isArray(routes.rewrites) ? routes.rewrites.beforeFiles : [];
-	const config = [...regexes(routes.headers), ...regexes(routes.onMatchHeaders), ...regexes(routes.redirects), ...regexes(rw)];
+	const config = [...list(routes.onMatchHeaders), ...list(routes.redirects), ...list(rw)].map((r) => r.regex);
 	let mw = [];
 	const mm = (() => {
 		try {
@@ -308,6 +466,7 @@ function next(dir) {
 		}
 	};
 	const configRe = config.map(re).flat(), mwRe = mw.map((m) => re(m.regexp)).flat();
+	const headerRules = nextHeaderRules(Array.isArray(routes.headers) ? routes.headers : [], flags);
 	const static_ = path.join(nd, "static");
 	if (!isDir(static_)) throw new Error("no .next/static in " + dir);
 	const t = new Tree();
@@ -322,12 +481,193 @@ function next(dir) {
 			continue;
 		}
 		if (configRe.some((r) => r.test(u))) {
-			t.left.push([u, "the config's headers, redirects or rewrites may take it"]);
+			t.left.push([u, "the config's redirects or rewrites may take it"]);
+			continue;
+		}
+		const h = nextHeaders(headerRules, u);
+		if (typeof h === "string") {
+			t.left.push([u, h]);
 			continue;
 		}
 		t.put(u, path.join(static_, f), true);
+		if (t.urls.has(u) && !t.header(u, h)) {
+			t.urls.delete(u);
+			t.left.push([u, "more headers, or header sets, than homeport sends from files"]);
+		}
 	}
+	t.redirects = nextRedirects(Array.isArray(routes.redirects) ? routes.redirects : [], base, flags);
 	return t;
+}
+
+// pathKeys: path-to-regexp's params in source, in order - {name, repeat},
+// an unnamed group's name its index - or null for a source this can't read
+function pathKeys(source) {
+	if (source.includes("{")) return null;
+	const keys = [];
+	let unnamed = 0;
+	const group = (i) => {
+		for (let d = 0; i < source.length; i++) {
+			if (source[i] === "\\") i++;
+			else if (source[i] === "(") d++;
+			else if (source[i] === ")" && --d === 0) return i + 1;
+		}
+		return -1;
+	};
+	for (let i = 0; i < source.length; i++) {
+		let name = null, j = i;
+		if (source[i] === "\\") {
+			i++;
+			continue;
+		}
+		if (source[i] === ":") {
+			const m = /^\w+/.exec(source.slice(i + 1));
+			if (!m) return null;
+			name = m[0];
+			j = i + 1 + name.length;
+			if (source[j] === "(") j = group(j);
+		} else if (source[i] === "(") {
+			name = unnamed++;
+			j = group(i);
+		} else continue;
+		if (j < 0) return null;
+		keys.push({ name, repeat: source[j] === "*" || source[j] === "+" });
+		i = j - 1;
+	}
+	return keys;
+}
+
+// nextHeaderRules: the config's headers as its router matches them
+function nextHeaderRules(rules, flags) {
+	return rules.map((r) => {
+		let regex = null;
+		try {
+			regex = new RegExp(r.regex, flags);
+		} catch {}
+		return { r, regex, keys: typeof r.source === "string" ? pathKeys(r.source) : null };
+	});
+}
+
+// nextHeaders: the headers Next's router adds to url's answer, as
+// resolve-routes does - each matching rule's in order, a later one's value
+// replacing an earlier's (setHeader, by name in any case), :params
+// compiled - or why the host can't send them
+function nextHeaders(rules, url) {
+	const res = {};
+	for (const { r, regex, keys } of rules) {
+		if (!regex) return "a header rule this can't read";
+		const m = regex.exec(url);
+		if (!m) continue;
+		if (r.has || r.missing) return "a header rule with has or missing matches it";
+		// its named params (getPathMatch drops unnamed ones): those that matched
+		const params = new Map();
+		for (const [i, k] of (keys || []).entries()) if (typeof k.name === "string" && m[i + 1] !== undefined) params.set(k.name, k);
+		for (const h of Array.isArray(r.headers) ? r.headers : []) {
+			let { key, value } = h || {};
+			if (typeof key !== "string" || typeof value !== "string") return "a header rule this can't read";
+			if (params.size || !keys) {
+				// compileNonPath: :name is the param's value; anything else of
+				// path-to-regexp's in it, the app's
+				const compiled = [key, value].map((s) => {
+					if (!s.includes(":") && !s.includes("\\")) return s;
+					if (!keys || s.includes("\\")) return null;
+					let bad = false;
+					const out = s.replace(/:(\w+)([*?+])?/g, (all, name, mod) => {
+						const k = params.get(name);
+						if (!k) return all;
+						if (mod || k.repeat) bad = true;
+						return m[keys.indexOf(k) + 1];
+					});
+					return bad ? null : out;
+				});
+				if (compiled.includes(null)) return "a header with a :param this doesn't compile";
+				[key, value] = compiled;
+			}
+			if (key.toLowerCase() === "set-cookie") return "a header rule sets a cookie";
+			res[key] = value;
+		}
+	}
+	// as setHeader sends them: by name in any case, the last one set
+	const out = new Map();
+	for (const [k, v] of Object.entries(res)) out.set(k.toLowerCase(), [k, v]);
+	const set = [...out.values()];
+	for (const [k, v] of set) {
+		const why = hostHeader(k, v);
+		if (why) return `a header of the config's homeport can't send (${k}: ${why})`;
+	}
+	return set;
+}
+
+// nextRedirects: the config's redirects, in order, up to the first the host
+// can't answer as Next's router does (one with has or missing, a :param
+// with a pattern of its own, a destination with a query) - any after it
+// stays with the app, whose router tries that one first
+function nextRedirects(rules, base, flags) {
+	const out = [];
+	if (flags !== "i") return out; // caseSensitive: the host's match any case
+	for (const r of rules) {
+		const x = nextRedirect(r, base);
+		if (!x || out.length === MAX_REDIRECTS) break;
+		out.push(x);
+	}
+	return out;
+}
+
+// nextRedirect: one redirect as routes.json has it, or null. Its pattern is
+// checked against the regex Next built from it - path-to-regexp's, and
+// Next's: (?!<base>/_next) unless it's internal, an optional / at the end
+// unless it ends in one - so the host matches exactly the paths Next does.
+function nextRedirect(r, base) {
+	if (!r || r.has || r.missing || typeof r.source !== "string" || typeof r.destination !== "string" || typeof r.regex !== "string") return null;
+	if (![301, 302, 303, 307, 308].includes(r.statusCode)) return null;
+	const from = r.source;
+	if (!from.startsWith("/") || from.length > MAX_FROM) return null;
+	const trailing = from.length > 1 && from.endsWith("/");
+	const segs = from === "/" ? [] : from.slice(1, trailing ? -1 : undefined).split("/");
+	const params = new Map();
+	let body = "";
+	for (const [i, s] of segs.entries()) {
+		const p = /^:(\w+)([*+])?$/.exec(s);
+		if (p) {
+			if (params.has(p[1]) || (p[2] && i !== segs.length - 1)) return null;
+			params.set(p[1], p[2] || "");
+			body += p[2] === "*" ? "(?:/((?:[^/]+?)(?:/(?:[^/]+?))*))?" : p[2] === "+" ? "(?:/((?:[^/]+?)(?:/(?:[^/]+?))*))" : "(?:/([^/]+?))";
+		} else if (/^[A-Za-z0-9_~-][A-Za-z0-9._~-]*$/.test(s)) {
+			body += "/" + s.replace(/[.]/g, "\\.");
+		} else return null;
+	}
+	// a path under <base>/_next is never Next's to redirect (but internally):
+	// the host's pattern can't say so, so its segments to there are literal,
+	// and none is _next
+	if (!r.internal) {
+		const n = base ? base.split("/").length - 1 : 0;
+		for (let i = 0; i <= n && i < segs.length; i++) {
+			if (segs[i].startsWith(":")) return null;
+			if (i === n && segs[i].toLowerCase().startsWith("_next")) return null;
+		}
+	}
+	const want = "^" + (r.internal ? "" : "(?!" + base + "/_next)") + (body || "/") + (trailing ? "/$" : "(?:/)?$");
+	if (want !== r.regex) return null;
+	// the destination: a path or an http(s) URL with a host, its params where
+	// the source has them (a :name* after a /), nothing path-to-regexp or a
+	// URL would read another way
+	let to = r.destination, origin = "";
+	const abs = /^(https?:\/\/[a-z0-9]([a-z0-9.-]*[a-z0-9])?)(\/.*)?$/.exec(to);
+	if (abs) {
+		origin = abs[1];
+		to = abs[3] || "/"; // new URL's: https://example.com is https://example.com/
+	} else if (/^[a-z][a-z0-9+.-]*:/i.test(to)) return null;
+	if (!to.startsWith("/") || to.length > MAX_TO) return null;
+	for (const t of to.match(/:\w+[*+]?|[^:]+|:/g) || []) {
+		if (t.startsWith(":")) {
+			const p = /^:(\w+)([*+]?)$/.exec(t);
+			if (!p || !params.has(p[1]) || params.get(p[1]) !== p[2]) return null;
+		} else if (!/^[A-Za-z0-9._~/-]+$/.test(t)) return null;
+	}
+	if (/(^|\/)\.\.?(\/|$)/.test(to.replace(/:\w+[*+]?/g, "x")) || /:\w+\*/.test(to.replace(/\/:\w+\*/g, ""))) return null;
+	// Next's router matches literals in any case (without
+	// caseSensitiveRoutes, which stops the list) and router-server.js sends
+	// Refresh with a 308: routes.json says so, the host knows no framework
+	return { from, to: origin + to, status: r.statusCode, caseless: true, ...(r.statusCode === 308 && { refresh: true }) };
 }
 
 // react-router-serve and remix-serve (Vite builds): express.static on the
@@ -341,8 +681,9 @@ function reactRouter(server) {
 	} catch {
 		throw new Error("no server build at " + server);
 	}
+	// Vite 7 declares them with const, Vite 8's Rolldown with var
 	const str = (name) => {
-		const m = new RegExp("^const " + name + ' = ("(?:[^"\\\\]|\\\\.)*");$', "m").exec(s);
+		const m = new RegExp("^(?:const|var) " + name + ' = ("(?:[^"\\\\]|\\\\.)*");$', "m").exec(s);
 		try {
 			return m ? JSON.parse(m[1]) : null;
 		} catch {
@@ -429,13 +770,16 @@ const [kind, dir, marker, immutable] = process.argv.slice(2);
 const servers = { sveltekit: "adapter-node", astro: "Astro's node adapter", next: "Next.js standalone", "react-router": "react-router-serve", remix: "remix-serve", site: "the API server" };
 let wrote = false;
 try {
-	const kinds = { sveltekit, astro, next, "react-router": reactRouter, remix: reactRouter, site };
+	const kinds = { files, sveltekit, astro, next, "react-router": reactRouter, remix: reactRouter, site };
 	const t = Object.hasOwn(kinds, kind) ? kinds[kind](dir, immutable) : null;
 	if (!t) throw new Error("no framework " + kind);
 	const n = t.write();
 	const e = edgeMarker(t, marker);
 	wrote = !!e;
-	say(`served without the app, before any of its code runs (as ${servers[kind]} serves them): ${n.pages} prerendered page(s), ${n.files} file(s), ${n.immutable} immutable asset(s)`);
+	const as = kind === "files" ? "as its files manifest (" + dir + ") says its server serves them" : `as ${servers[kind]} serves them`;
+	say(`served without the app, before any of its code runs (${as}): ${n.pages} prerendered page(s), ${n.files} file(s), ${n.immutable} immutable asset(s)`);
+	if (n.headers) say(`  with the headers ${kind === "files" ? "its manifest" : "its config"} gives them: ${n.headers} of them`);
+	if (n.redirects) say(`  and its config's redirects, answered without the app: ` + t.redirects.slice(0, 10).map((r) => `${r.from} -> ${r.to} (${r.status})`).join(", ") + (n.redirects > 10 ? ` (and ${n.redirects - 10} more)` : ""));
 	const pages = [...t.urls].filter(([, [tr]]) => tr === "pages").map(([u]) => u);
 	if (pages.length) say("  pages: " + pages.slice(0, 20).join(" ") + (pages.length > 20 ? ` (and ${pages.length - 20} more)` : ""));
 	for (const [u, why] of t.left.slice(0, 20)) say(`  left to the app: ${u} - ${why}`);

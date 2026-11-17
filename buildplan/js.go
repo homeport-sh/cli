@@ -722,6 +722,15 @@ func prerendered(kind, dir string, ownRun bool) string {
 	return "{ printf '%s' '" + base64.StdEncoding.EncodeToString([]byte(publicMJS)) + "' | base64 -d > .homeport-public.mjs && (cd " + b + " && ./bin ../.homeport-public.mjs " + kind + " " + dir + " ../.output/edge.json) || rm -rf " + b + "/.homeport/public; rm -f .homeport-public.mjs; }"
 }
 
+// filesStep is the build step that puts what a files manifest
+// (.output/files.json, docs/edge-caching.md) lists in the app's folder's
+// .homeport/public, for the builder to ship with a binary that has no
+// folder of its own (Plan.Public). Run by Bun, after the build; no manifest,
+// or one it can't read, is no tree - it never fails the build.
+func filesStep() string {
+	return "{ printf '%s' '" + base64.StdEncoding.EncodeToString([]byte(publicMJS)) + "' | base64 -d > .homeport-public.mjs && bun .homeport-public.mjs files .output/files.json || rm -rf .homeport/public; rm -f .homeport-public.mjs; }"
+}
+
 // publicTree is the server whose files embed/public.mjs reads, and where
 // in the bundle ("" none): SvelteKit's adapter-node (its out), Astro's node
 // adapter (dist), Next.js standalone (the app's folder in it: a workspace
@@ -1405,6 +1414,9 @@ func assemble(layout string, m pm, rt, bin string, sums map[string]string, binNa
 		for _, d := range []string{".next/server/app", ".next/server/pages"} {
 			steps = append(steps, "{ [ ! -d "+b+at+"/"+d+" ] || echo "+strings.TrimPrefix(at+"/", "/")+d+" >> "+b+"/.homeport/writable; }")
 		}
+		// and the one Next.js 16.4 writes every revalidated response to
+		// (its ROUTE_CACHE_DIRECTORY), which no build makes: made, empty
+		steps = append(steps, "mkdir -p "+b+at+"/.next/server/route-cache && echo "+strings.TrimPrefix(at+"/", "/")+".next/server/route-cache >> "+b+"/.homeport/writable")
 	case "output":
 		steps = append(steps,
 			`{ [ -f .output/server/index.mjs ] || { echo 'homeport: the build made no .output/server/index.mjs' >&2; exit 1; }; }`,

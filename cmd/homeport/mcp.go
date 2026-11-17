@@ -778,9 +778,13 @@ func (a *app) mcpServer() *mcp.Server {
 			return result(d)
 		})
 
+	type addDomainIn struct {
+		domainIn
+		NoWWW bool `json:"no_www,omitempty" jsonschema:"the domain alone: not a root's www. (or a www.'s root) with it"`
+	}
 	mcp.AddTool(s, &mcp.Tool{Name: "add_domain", Annotations: changes("Add a domain"),
-		Description: "Adds a platform domain - a tenant's own - to an app, production unless another environment is named: once its DNS records are set, the app serves it, and the plan may bill for it. Answers its status and the DNS records to set. Removing one isn't a tool: the person does that." + asks},
-		func(ctx context.Context, req *mcp.CallToolRequest, in domainIn) (*mcp.CallToolResult, any, error) {
+		Description: "Adds a platform domain - a tenant's own - to an app, production unless another environment is named: once its DNS records are set, the app serves it, and the plan may bill for it. A root domain's www. (a www.'s root) is added with it as its companion, redirecting to it and not billed, unless no_www. Answers its status and the DNS records to set. Removing one isn't a tool: the person does that." + asks},
+		func(ctx context.Context, req *mcp.CallToolRequest, in addDomainIn) (*mcp.CallToolResult, any, error) {
 			name, err := domainArg([]string{in.Domain})
 			if err != nil {
 				return refused(err)
@@ -789,12 +793,16 @@ func (a *app) mcpServer() *mcp.Server {
 			if err != nil {
 				return refused(err)
 			}
-			if ask, err := approve(req, fmt.Sprintf("Add the domain %q to %s? Once its DNS records are set the app serves it, and your plan may bill for it.", name, envName(t))); err != nil {
+			also := ""
+			if !in.NoWWW {
+				also = " Its www. (or a www.'s root) comes with it, redirecting to it, not billed."
+			}
+			if ask, err := approve(req, fmt.Sprintf("Add the domain %q to %s? Once its DNS records are set the app serves it, and your plan may bill for it.%s", name, envName(t), also)); err != nil {
 				return refused(err)
 			} else if ask != nil {
 				return ask, nil, nil
 			}
-			d, err := c.AddDomain(ctx, t.link.Team, t.link.App, name)
+			d, err := c.AddDomain(ctx, t.link.Team, t.link.App, name, in.NoWWW)
 			if err != nil {
 				return refused(err)
 			}

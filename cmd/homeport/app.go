@@ -18,6 +18,7 @@ import (
 
 	"github.com/homeport-sh/cli/internal/cloud"
 	"github.com/homeport-sh/cli/internal/config"
+	"github.com/homeport-sh/cli/supervise"
 )
 
 // Exit codes, for scripts and CI to tell apart.
@@ -74,6 +75,10 @@ func (a *app) run(args []string) int {
 		return exitOK
 	}
 	cmd, rest := args[0], args[1:]
+	if cmd == "supervise" {
+		// hidden: what a bundle's web runs through, its exit its own
+		return supervise.Run(rest, a.err)
+	}
 	ctx := context.Background()
 	var err error
 	switch cmd {
@@ -97,6 +102,10 @@ func (a *app) run(args []string) int {
 		err = a.domains(ctx, rest)
 	case "queue":
 		err = a.queue(ctx, rest)
+	case "logs":
+		err = a.logs(ctx, rest)
+	case "audit":
+		err = a.audit(ctx, rest)
 	case "dev":
 		err = a.dev(ctx, rest)
 	case "build-plan":

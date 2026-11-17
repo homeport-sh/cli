@@ -66,29 +66,9 @@ func (a *app) resolveOr(ctx context.Context, c *cloud.Client, teamSlug, appName,
 	if err != nil {
 		return nil, err
 	}
-	if len(who.Teams) == 0 {
-		return nil, fmt.Errorf("you aren't in a team yet: make one at %s", orDefault(who.Dashboard))
-	}
-	var team cloud.Team
-	switch {
-	case teamSlug != "":
-		i := slices.IndexFunc(who.Teams, func(t cloud.Team) bool { return t.Slug == teamSlug || t.ID == teamSlug })
-		if i < 0 {
-			return nil, usageErr("you aren't in a team %q", teamSlug)
-		}
-		team = who.Teams[i]
-	case len(who.Teams) == 1:
-		team = who.Teams[0]
-	default:
-		var names []string
-		for _, t := range who.Teams {
-			names = append(names, t.Slug)
-		}
-		i, err := a.choose("team", "--team", names, -1)
-		if err != nil {
-			return nil, err
-		}
-		team = who.Teams[i]
+	team, err := a.pickTeam(who, teamSlug)
+	if err != nil {
+		return nil, err
 	}
 	apps, err := c.Apps(ctx, team.ID)
 	if err != nil {
@@ -168,6 +148,34 @@ func (a *app) resolveOr(ctx context.Context, c *cloud.Client, teamSlug, appName,
 	}
 	return &target{link: config.Link{Team: team.ID, TeamSlug: team.Slug, App: env.ID, Project: env.ProjectName, Environment: env.Environment},
 		domain: env.Domain, dashboard: orDefault(who.Dashboard)}, nil
+}
+
+// pickTeam is the team teamSlug names (by its address or id), else the
+// person's one team, else the one they choose - when there's a terminal to
+// ask in.
+func (a *app) pickTeam(who *cloud.WhoAmI, teamSlug string) (cloud.Team, error) {
+	if len(who.Teams) == 0 {
+		return cloud.Team{}, fmt.Errorf("you aren't in a team yet: make one at %s", orDefault(who.Dashboard))
+	}
+	switch {
+	case teamSlug != "":
+		i := slices.IndexFunc(who.Teams, func(t cloud.Team) bool { return t.Slug == teamSlug || t.ID == teamSlug })
+		if i < 0 {
+			return cloud.Team{}, usageErr("you aren't in a team %q", teamSlug)
+		}
+		return who.Teams[i], nil
+	case len(who.Teams) == 1:
+		return who.Teams[0], nil
+	}
+	var names []string
+	for _, t := range who.Teams {
+		names = append(names, t.Slug)
+	}
+	i, err := a.choose("team", "--team", names, -1)
+	if err != nil {
+		return cloud.Team{}, err
+	}
+	return who.Teams[i], nil
 }
 
 // linked is the environment a link's ids name, as the API names it. A

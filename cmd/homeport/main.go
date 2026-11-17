@@ -45,6 +45,22 @@ func (a *app) usage() {
                       build, as the dashboard's Roll back to this; asks
                       first [--yes] [--run-release] [--env <name>]
                       [--detach] [--timeout 30m]
+  homeport logs       an environment's runtime logs (what the app printed):
+                      its newest lines; --follow (-f) keeps reading
+                      what's new until Ctrl-C
+                      [--process <name>] [--errors]
+                      [--env <name>] [--team <slug> --app <name>]
+  homeport audit      who changed what, and when, newest first: the linked
+                      environment's (--all-envs: every environment of
+                      the app); --app an app's, every environment of it
+                      (--env: one); --team alone (or in a folder nothing
+                      links) the whole team's. For the team's owner, or
+                      a team token that may audit:read
+                      [--actor <email>|<token name>|support|homeport]
+                      [--kind <kind>] [--since 7d] [--until 2026-11-15]
+                      [--limit 50] [--json [--cursor <next>]]
+                      [--export csv|json [--output <file>|-]]
+                      [--env <name>] [--team <slug> [--app <name>]]
   homeport env set    sets an environment's variables: NAME=value…, or a
                       file variable (a certificate, a key, any multi-line
                       or binary value) the app reads at /run/secrets/NAME:
@@ -60,8 +76,10 @@ func (a *app) usage() {
   homeport domains ls an app's platform domains (its tenants' own, which
                       the app adds through the Domains API): each one's
                       status, and why it isn't live
-  homeport domains add <domain>
-                      adds one, and says the DNS records to set
+  homeport domains add <domain> [--no-www]
+                      adds one, and says the DNS records to set; a root's
+                      www. (a www.'s root) with it, redirecting to it, not
+                      billed, unless --no-www
   homeport domains get <domain>
                       one's status and DNS records
   homeport domains remove <domain>

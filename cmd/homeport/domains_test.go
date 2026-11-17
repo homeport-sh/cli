@@ -59,6 +59,43 @@ func TestDomainsAreAddedListedAndRemoved(t *testing.T) {
 	}
 }
 
+// A root domain's www. (a www.'s root) is added with it, redirecting to
+// it and unbilled - said, and listed with where it goes - unless --no-www;
+// a subdomain has none.
+func TestADomainsWWWComesWithIt(t *testing.T) {
+	f, h := linkedHarness(t)
+	if code := h.run("domains", "add", "acme.com"); code != 0 {
+		t.Fatalf("add: %d %s", code, h.said())
+	}
+	said := h.said()
+	for _, want := range []string{"Added acme.com", "Also added www.acme.com", "redirects to acme.com", "not billed", "--no-www"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("add didn't say %q: %s", want, said)
+		}
+	}
+	h.out.Reset()
+	if code := h.run("domains", "ls"); code != 0 || !strings.Contains(h.said(), "→ acme.com") {
+		t.Fatalf("ls: %d %s", code, h.said())
+	}
+	h.out.Reset()
+	if code := h.run("domains", "get", "www.acme.com"); code != 0 || !strings.Contains(h.said(), "Redirects to acme.com") {
+		t.Fatalf("get: %d %s", code, h.said())
+	}
+	h.out.Reset()
+	if code := h.run("domains", "add", "globex.com", "--no-www"); code != 0 || strings.Contains(h.said(), "Also added") {
+		t.Fatalf("--no-www: %d %s", code, h.said())
+	}
+	if code := h.run("domains", "add", "shop.initech.com"); code != 0 || strings.Contains(h.said(), "Also added") {
+		t.Fatalf("a subdomain: %d %s", code, h.said())
+	}
+	if !slices.Equal(f.noWWW, []bool{false, true, false}) {
+		t.Errorf("no_www sent %v", f.noWWW)
+	}
+	if len(f.domains) != 4 {
+		t.Errorf("domains %v", f.domains)
+	}
+}
+
 // A domain is checked here before anything is sent: one name, no scheme,
 // no path; and it reaches the API as a path segment.
 func TestDomainsRefusesWhatIsntOne(t *testing.T) {
@@ -165,13 +202,15 @@ func TestADomainConnectsAtItsDNSProvider(t *testing.T) {
 }
 
 // ls lists the app's own domains (its Domains tab's) too, before its
-// tenants': how each is reached and where it redirects.
+// tenants': how each is reached and where it redirects - and the www. (or root)
+// that reaches it but isn't added: no certificate there.
 func TestDomainsLsListsTheAppsOwnDomains(t *testing.T) {
 	f, h := linkedHarness(t)
 	f.customDomains = []cloud.CustomDomain{
 		{Domain: "blog.example.com", Status: "live", Proxied: true},
 		{Domain: "www.blog.example.com", Status: "live", RedirectTo: "blog.example.com"},
 		{Domain: "new.example.com", Status: "pending", Why: "it points at 192.0.2.1, not 203.0.113.50"},
+		{Domain: "clinic.example", Status: "live", MissingCompanion: "www.clinic.example"},
 	}
 	if code := h.run("domains", "ls"); code != 0 {
 		t.Fatalf("ls: %d %s", code, h.said())
@@ -181,6 +220,7 @@ func TestDomainsLsListsTheAppsOwnDomains(t *testing.T) {
 		"blog.example.com      live     proxied",
 		"www.blog.example.com  live     direct   → blog.example.com",
 		"new.example.com       pending           it points at 192.0.2.1",
+		"clinic.example        live     direct   www.clinic.example points here but isn't added (HTTPS fails there): add it as a redirect on the Domains tab",
 	} {
 		if !strings.Contains(said, want) {
 			t.Errorf("ls didn't say %q: %s", want, said)

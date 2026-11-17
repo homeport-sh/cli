@@ -36,6 +36,14 @@ func public(t *testing.T, kind, dir string, files map[string]string) ([]string, 
 // bundle ("" none); had: a marker the build left there before it.
 func publicMarker(t *testing.T, kind, dir string, files map[string]string, had string) ([]string, string, string) {
 	t.Helper()
+	got, out, m, _ := publicRun(t, kind, dir, files, had)
+	return got, out, m
+}
+
+// publicRun is publicMarker, with the routes.json the step wrote beside the
+// trees ("" none).
+func publicRun(t *testing.T, kind, dir string, files map[string]string, had string) ([]string, string, string, string) {
+	t.Helper()
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("no node")
@@ -71,6 +79,9 @@ func publicMarker(t *testing.T, kind, dir string, files map[string]string, had s
 			return nil
 		}
 		rel, _ := filepath.Rel(root, p)
+		if rel == "routes.json" {
+			return nil
+		}
 		tree, url, _ := strings.Cut(filepath.ToSlash(rel), "/")
 		url = "/" + url
 		if tree == "pages" {
@@ -81,7 +92,8 @@ func publicMarker(t *testing.T, kind, dir string, files map[string]string, had s
 	})
 	slices.Sort(got)
 	m, _ := os.ReadFile(marker)
-	return got, string(out), string(m)
+	routes, _ := os.ReadFile(filepath.Join(root, "routes.json"))
+	return got, string(out), string(m), string(routes)
 }
 
 func same(t *testing.T, got, want []string, out string) {

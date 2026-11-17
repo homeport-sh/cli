@@ -40,7 +40,7 @@ func TestInertiaSSRIsDetectedAndBuilt(t *testing.T) {
 		t.Errorf("install: %s", p.Install)
 	}
 	// the SSR bundle is one file, its packages in it: no node_modules ships
-	for _, want := range []string{"bun build", "--target=node", "bootstrap/ssr/ssr.mjs", ".homeport/wrap", ".homeport/beside.php", ".homeport/beside"} {
+	for _, want := range []string{"bun build", "--target=node", "bootstrap/ssr/ssr.mjs", ".homeport/wrap", ".homeport/supervise supervise", ".homeport/beside"} {
 		if !strings.Contains(p.Command, want) {
 			t.Errorf("command has no %q: %s", want, p.Command)
 		}
