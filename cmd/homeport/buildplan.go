@@ -130,7 +130,7 @@ func planBuild(dir string, s buildplan.Settings) (buildplan.Plan, error) {
 	}
 	procs := map[string]processConfig{}
 	for _, pr := range p.Processes {
-		procs[pr.Name] = processConfig{Run: pr.Run, Memory: pr.Memory, CPU: pr.CPU, StopGrace: pr.StopGrace}
+		procs[pr.Name] = processConfig{Run: pr.Run, StopGrace: pr.StopGrace}
 	}
 	if err := checkProcesses(procs); err != nil {
 		return buildplan.Plan{}, err

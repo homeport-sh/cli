@@ -47,12 +47,9 @@ func TestALaravelAppsProcessesStartWithItsConfigCached(t *testing.T) {
 	}
 
 	// the settings' processes, which replace the file's
-	p = detect(t, files, buildplan.Settings{Processes: []buildplan.Process{{Name: "mailer", Run: "php-cli artisan queue:work --queue=mail", Memory: "256M"}}})
+	p = detect(t, files, buildplan.Settings{Processes: []buildplan.Process{{Name: "mailer", Run: "php-cli artisan queue:work --queue=mail"}}})
 	if got := runs(p); got["mailer"] != runner+"php-cli artisan queue:work --queue=mail" || got["reverb"] != runner+buildplan.ReverbRun {
 		t.Errorf("settings: %v", got)
-	}
-	if i := slices.IndexFunc(p.Processes, func(x buildplan.Process) bool { return x.Name == "mailer" }); i < 0 || p.Processes[i].Memory != "256M" {
-		t.Errorf("its size: %+v", p.Processes)
 	}
 
 	// one that runs through it already (a plan's command, set again) isn't

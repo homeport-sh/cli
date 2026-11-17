@@ -32,16 +32,15 @@ func TestHowAnAppRunsIsCheckedForTheSandbox(t *testing.T) {
 			t.Errorf("release %q: %v", release, err)
 		}
 	}
-	good := map[string]processConfig{"worker": {Run: "queue:work", Memory: "256M", CPU: "50%"}}
+	good := map[string]processConfig{"worker": {Run: "queue:work"}}
 	if err := checkProcesses(good); err != nil {
 		t.Errorf("a worker: %v", err)
 	}
 	for name, procs := range map[string]map[string]processConfig{
-		"named web":  {"web": {Run: "x"}},
-		"no run":     {"worker": {}},
-		"a shell":    {"worker": {Run: "work && more"}},
-		"bad memory": {"worker": {Run: "x", Memory: "lots"}},
-		"too many":   {"a": {Run: "x"}, "b": {Run: "x"}, "c": {Run: "x"}, "d": {Run: "x"}, "e": {Run: "x"}},
+		"named web": {"web": {Run: "x"}},
+		"no run":    {"worker": {}},
+		"a shell":   {"worker": {Run: "work && more"}},
+		"too many":  {"a": {Run: "x"}, "b": {Run: "x"}, "c": {Run: "x"}, "d": {Run: "x"}, "e": {Run: "x"}},
 	} {
 		if err := checkProcesses(procs); err == nil || !strings.Contains(err.Error(), configFile) {
 			t.Errorf("%s: %v", name, err)

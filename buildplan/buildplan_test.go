@@ -432,7 +432,7 @@ func TestOctaneIsDetectedAndCanBeTurnedOff(t *testing.T) {
 // variables; at most four processes, named, never web or release.
 func TestHowItRunsIsCheckedByTheSandboxsRules(t *testing.T) {
 	ok := buildplan.Settings{Run: "serve --addr ${HOST}:$PORT", Release: buildplan.One("php-cli artisan migrate --force"),
-		Processes: []buildplan.Process{{Name: "worker", Run: "php-cli artisan queue:work", Memory: "256M", CPU: "50%"}}}
+		Processes: []buildplan.Process{{Name: "worker", Run: "php-cli artisan queue:work"}}}
 	if err := ok.Check(); err != nil {
 		t.Fatalf("ok: %v", err)
 	}
@@ -463,8 +463,6 @@ func TestHowItRunsIsCheckedByTheSandboxsRules(t *testing.T) {
 		"process with a backtick":  {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: "work `id`"}}}, "without a shell"},
 		"process with a newline":   {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: "work\nrm"}}}, "control characters"},
 		"process command too long": {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: strings.Repeat("x", 1001)}}}, "1000"},
-		"process memory":           {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: "x", Memory: "lots"}}}, "memory"},
-		"process cpu":              {buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: "x", CPU: "half"}}}, "cpu"},
 		"five processes":           {buildplan.Settings{Processes: five}, "at most 4"},
 	} {
 		err := c.s.Check()
@@ -498,25 +496,6 @@ func TestTheOctaneSwitchWinsOverTheFilesRun(t *testing.T) {
 	}
 }
 
-// A process's memory and CPU are bounded as homeportd bounds them: 1M to
-// 16384M (K counts in whole MB, so less than 1024K is none), 1% to 1600%.
-func TestAProcesssLimitsAreHomeportdsLimits(t *testing.T) {
-	with := func(mem, cpu string) buildplan.Settings {
-		return buildplan.Settings{Processes: []buildplan.Process{{Name: "worker", Run: "work", Memory: mem, CPU: cpu}}}
-	}
-	for _, ok := range []buildplan.Settings{with("1M", ""), with("16384M", ""), with("16G", ""), with("1024K", ""), with("", "1%"), with("", "1600%"), with("256M", "50%")} {
-		if err := ok.Check(); err != nil {
-			t.Errorf("%+v: %v", ok.Processes[0], err)
-		}
-	}
-	for _, bad := range []buildplan.Settings{with("0M", ""), with("512K", ""), with("16385M", ""), with("17G", ""), with("99999999G", ""),
-		with("123456789M", ""), with("", "0%"), with("", "1601%"), with("", "9999%"), with("", "00000%")} {
-		if err := bad.Check(); err == nil {
-			t.Errorf("%+v accepted", bad.Processes[0])
-		}
-	}
-}
-
 // Nothing in settings holds a control character - DEL included: none is
 // ever meant, and the builder's jq would write one larger than Go counts it.
 func TestSettingsHoldNoControlCharacters(t *testing.T) {
@@ -530,7 +509,6 @@ func TestSettingsHoldNoControlCharacters(t *testing.T) {
 		"release BEL":  {Release: buildplan.One("migrate\x07")},
 		"process name": {Processes: []buildplan.Process{{Name: "work\x7f", Run: "x"}}},
 		"process run":  {Processes: []buildplan.Process{{Name: "worker", Run: "x\x7f"}}},
-		"memory":       {Processes: []buildplan.Process{{Name: "worker", Run: "x", Memory: "1M\x7f"}}},
 		"bad utf-8":    {Command: "bun run \xff"},
 	} {
 		err := s.Check()
@@ -634,5 +612,25 @@ func TestAGoProgramInAFolderOfItsModule(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("WorkspaceFiles doesn't fetch go.mod above the app")
+	}
+}
+
+// Homeport sizes each process itself, at the app's memory, which follows
+// the app (zero knobs, 2026-11-17): homeport.yaml's processes.<name>.memory
+// and .cpu are refused, saying so, never taken.
+func TestAProcessSizeInHomeportYamlIsRefused(t *testing.T) {
+	for _, body := range []string{
+		"processes:\n  worker:\n    run: work\n    memory: 256M\n",
+		"processes:\n  worker:\n    run: work\n    cpu: 50%\n",
+	} {
+		_, err := buildplan.Detect(repo(map[string]string{"go.mod": "module x\n\ngo 1.22\n", "main.go": "package main\n", "homeport.yaml": body}), buildplan.Settings{})
+		if err == nil || !strings.Contains(err.Error(), `homeport.yaml: process "worker"`) || !strings.Contains(err.Error(), "homeport sizes each process itself") {
+			t.Errorf("%q: %v", body, err)
+		}
+	}
+	p := detect(t, map[string]string{"go.mod": "module x\n\ngo 1.22\n", "main.go": "package main\n",
+		"homeport.yaml": "processes:\n  worker:\n    run: work\n    stop_grace: 10m\n"}, buildplan.Settings{})
+	if len(p.Processes) != 1 || p.Processes[0].Run != "work" || p.Processes[0].StopGrace != "10m" {
+		t.Errorf("a process without a size: %+v", p.Processes)
 	}
 }

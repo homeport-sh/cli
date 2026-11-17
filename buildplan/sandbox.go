@@ -19,24 +19,14 @@ import (
 // slot for the release command and four processes.
 const MaxProcesses = 4
 
-// A process's memory and CPU, as homeportd bounds them (PROC_MAX_MEMORY_MB,
-// PROC_MAX_CPU_PCT: the registry's per-app ceilings).
-const (
-	MaxProcessMemoryMB = 16384
-	MaxProcessCPUPct   = 1600
-)
-
 var (
 	// run: args to the bin, which may name only $PORT and $HOST (homeportd
 	// substitutes them, without a shell)
 	runRe    = regexp.MustCompile(`^[A-Za-z0-9 ._:/=@,+${}-]*$`)
 	runVarRe = regexp.MustCompile(`\$(\{(PORT|HOST)\}|(PORT|HOST)\b)`)
 	// a release command and a process: args to the bin, no variables at all
-	binArgsRe  = regexp.MustCompile(`^[A-Za-z0-9 ._:/=@,+-]+$`)
-	procNameRe = regexp.MustCompile(`^[a-z][a-z0-9]{0,14}$`)
-	// mem_mb's shape: at most 8 digits, then K, M or G; cpu: at most 4 digits
-	procMemRe    = regexp.MustCompile(`^([0-9]{1,8})([KMG])$`)
-	procCPURe    = regexp.MustCompile(`^([0-9]{1,4})%$`)
+	binArgsRe    = regexp.MustCompile(`^[A-Za-z0-9 ._:/=@,+-]+$`)
+	procNameRe   = regexp.MustCompile(`^[a-z][a-z0-9]{0,14}$`)
 	binArgsSays  = "letters, digits, spaces and . _ : / = @ , + - only; no ; && | or variables"
 	procArgsSays = "letters, digits, spaces and . _ : / = @ , + - ${} only; no ; && |"
 )
@@ -100,10 +90,6 @@ func CheckProcesses(procs []Process) error {
 			return fmt.Errorf("process %q: its command is at most %d characters", p.Name, maxCommandSz)
 		case !runRe.MatchString(p.Run) || strings.Contains(runVarRe.ReplaceAllString(p.Run, ""), "$"):
 			return fmt.Errorf("process %q: args to the app's binary, without a shell (%s; $PORT and $HOST, its own, are the only variables)", p.Name, procArgsSays)
-		case p.Memory != "" && !memoryOK(p.Memory):
-			return fmt.Errorf("process %q: memory must be 1M to %dM, like 256M or 1G", p.Name, MaxProcessMemoryMB)
-		case p.CPU != "" && !cpuOK(p.CPU):
-			return fmt.Errorf("process %q: cpu must be 1%% to %d%%, like 50%%", p.Name, MaxProcessCPUPct)
 		}
 		if err := CheckStopGrace("process "+strconv.Quote(p.Name), p.StopGrace); err != nil {
 			return err
@@ -111,28 +97,6 @@ func CheckProcesses(procs []Process) error {
 		seen[p.Name] = true
 	}
 	return nil
-}
-
-// memoryOK is homeportd's mem_mb and its bounds: K counts in whole MB (so
-// under 1024K is none), and 1 to MaxProcessMemoryMB MB.
-func memoryOK(m string) bool {
-	g := procMemRe.FindStringSubmatch(m)
-	if g == nil {
-		return false
-	}
-	n, _ := strconv.Atoi(g[1]) // at most 8 digits: no overflow
-	mb := map[string]int{"K": n / 1024, "M": n, "G": n * 1024}[g[2]]
-	return mb >= 1 && mb <= MaxProcessMemoryMB
-}
-
-// cpuOK is homeportd's cpu bounds: 1% to MaxProcessCPUPct.
-func cpuOK(c string) bool {
-	g := procCPURe.FindStringSubmatch(c)
-	if g == nil {
-		return false
-	}
-	n, _ := strconv.Atoi(g[1])
-	return n >= 1 && n <= MaxProcessCPUPct
 }
 
 // checkText says whether a value is text: valid UTF-8 with no control

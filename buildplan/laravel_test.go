@@ -232,9 +232,9 @@ func TestReverbRunsAsAProcess(t *testing.T) {
 		t.Errorf("with the settings': %v", names)
 	}
 	// one the app names reverb is its own
-	own := laravel([]string{"laravel/reverb"}, "homeport.yaml", "processes:\n  reverb:\n    run: php-cli artisan reverb:start --host=0.0.0.0 --port=$PORT --debug\n    memory: 256M\n")
+	own := laravel([]string{"laravel/reverb"}, "homeport.yaml", "processes:\n  reverb:\n    run: php-cli artisan reverb:start --host=0.0.0.0 --port=$PORT --debug\n")
 	p = detect(t, own, buildplan.Settings{})
-	if r := reverb(p); r == nil || !strings.HasSuffix(r.Run, "--debug") || r.Memory != "256M" || len(p.Processes) != 1 {
+	if r := reverb(p); r == nil || !strings.HasSuffix(r.Run, "--debug") || len(p.Processes) != 1 {
 		t.Errorf("its own: %+v", p.Processes)
 	}
 	// four of the app's own leave no room for Reverb: it's left out, and
@@ -243,15 +243,6 @@ func TestReverbRunsAsAProcess(t *testing.T) {
 	p = detect(t, laravel([]string{"laravel/reverb"}), buildplan.Settings{Processes: four})
 	if reverb(p) != nil || len(p.Processes) != 4 || !slices.ContainsFunc(p.Warnings, func(w string) bool { return strings.Contains(w, "Reverb") }) {
 		t.Errorf("five: %+v %v", p.Processes, p.Warnings)
-	}
-}
-
-// Reverb's process is sized for itself, not at the app's memory: 128M (an
-// app's smallest size is 256M), unless the app declares its own reverb.
-func TestReverbIsSizedForItself(t *testing.T) {
-	p := detect(t, laravel([]string{"laravel/reverb"}), buildplan.Settings{})
-	if len(p.Processes) != 1 || p.Processes[0].Memory != buildplan.ReverbMemory || buildplan.ReverbMemory != "128M" {
-		t.Errorf("size: %+v", p.Processes)
 	}
 }
 

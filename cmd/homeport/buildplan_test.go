@@ -134,12 +134,12 @@ func TestThePlanSaysHowTheAppRuns(t *testing.T) {
 	p := plan(t, map[string]string{
 		"go.mod": "module example.com/app\n\ngo 1.24.2\n",
 		"homeport.yaml": "run: serve --port $PORT\nrelease: migrate\npost_release: ./bin warm\n" +
-			"processes:\n  worker: work --queue default\n  ticker:\n    run: tick\n    memory: 128M\n",
+			"processes:\n  worker: work --queue default\n  ticker:\n    run: tick\n",
 	})
 	if p.Run != "serve --port $PORT" || p.Release.String() != "migrate" {
 		t.Fatalf("run/release: %+v", p)
 	}
-	want := []buildplan.Process{{Name: "ticker", Run: "tick", Memory: "128M"}, {Name: "worker", Run: "work --queue default"}}
+	want := []buildplan.Process{{Name: "ticker", Run: "tick"}, {Name: "worker", Run: "work --queue default"}}
 	if len(p.Processes) != 2 || p.Processes[0] != want[0] || p.Processes[1] != want[1] {
 		t.Fatalf("processes: %+v", p.Processes)
 	}
