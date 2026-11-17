@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/homeport-sh/cli/envfile"
 	"github.com/homeport-sh/cli/internal/cloud"
@@ -57,7 +58,68 @@ func (a *app) env(ctx context.Context, args []string) error {
 }
 
 // envFlags are the flags naming the environment, every env command's.
-type envFlags struct{ env, team, app *string }
+type envFlags struct {
+	env, team, app *string
+	// noWait: a change doesn't wait for the app to start on it (set, unset)
+	noWait *bool
+}
+
+// waitFlag is --no-wait, for a change the app restarts with.
+func (f *envFlags) waitFlag(fs *flag.FlagSet) {
+	f.noWait = fs.Bool("no-wait", false, "don't wait for the app to start with the new values")
+}
+
+// deliveryWait is how long a change waits for the app to start on it: a
+// deploy's activation, which it is.
+const deliveryWait = 15 * time.Minute
+
+// envDelivered waits for the app to start on its new values and says how
+// it went: live, or refused - the old values still live - which fails.
+// Nothing's waited for with --no-wait, from a platform before it, or when
+// the next deploy takes them.
+func (a *app) envDelivered(ctx context.Context, c *cloud.Client, t *target, f envFlags) error {
+	if f.noWait != nil && *f.noWait {
+		return nil
+	}
+	started := false
+	for i := 0; ; i++ {
+		env, err := c.Env(ctx, t.link.Team, t.link.App)
+		if err != nil {
+			return err
+		}
+		d := env.Delivery
+		if d == nil {
+			return nil
+		}
+		if d.State == "deploy" {
+			fmt.Fprintln(a.out, "Its next deploy starts it with them.")
+			return nil
+		}
+		if !started {
+			fmt.Fprint(a.out, "Starting the app with the new values… ")
+			started = true
+		}
+		switch d.State {
+		case "live":
+			fmt.Fprintln(a.out, "live.")
+			return nil
+		case "rejected":
+			fmt.Fprintln(a.out, "refused.")
+			for l := range strings.Lines(strings.TrimRight(d.Detail, "\n") + "\n") {
+				fmt.Fprint(a.out, "  "+l)
+			}
+			fmt.Fprintln(a.out, "The old values are still live. Fix the value and set it again.")
+			return withCode(1, errors.New("the app wouldn't start with the new values"))
+		}
+		if time.Duration(i)*pollEvery >= deliveryWait {
+			fmt.Fprintln(a.out, "still starting.\n`homeport env ls` says when they're live.")
+			return nil
+		}
+		if err := a.sleep(ctx, pollEvery); err != nil {
+			return err
+		}
+	}
+}
 
 func (a *app) envFlagSet(name string) (*flag.FlagSet, envFlags) {
 	fs := a.flags(name)
@@ -282,6 +344,9 @@ func (a *app) envSetFor(ctx context.Context, f envFlags, pos []string, roles rol
 	}
 	fmt.Fprintf(a.out, "Set %s for %s on %s: %s.\n%s", strings.Join(names, ", "),
 		strings.Join(says, ", "), envWhere(t), strings.Join(next, "; "), kindSays(secret, names))
+	if slices.ContainsFunc(sorted, func(r string) bool { return r != "release" }) {
+		return a.envDelivered(ctx, c, t, f)
+	}
 	return nil
 }
 
@@ -294,6 +359,7 @@ func (a *app) envSetFor(ctx context.Context, f envFlags, pos []string, roles rol
 // refuse is refused before anything is sent; a value is never printed.
 func (a *app) envSet(ctx context.Context, args []string) error {
 	fs, f := a.envFlagSet("env set")
+	f.waitFlag(fs)
 	fromFile := fs.String("from-file", "", "a file variable from this file: the app reads it at "+envfile.SecretsDir+"/NAME, $NAME holds that path")
 	build := fs.Bool("build", false, "available to its build and its running app")
 	buildOnly := fs.Bool("build-only", false, "available to its build alone")
@@ -422,7 +488,7 @@ func (a *app) envSet(ctx context.Context, args []string) error {
 	if fileName != "" {
 		fmt.Fprintf(a.out, "Set %s on %s: %s.\nThe app reads it at %s ($%s holds that path), and restarts to get it.\n",
 			fileName, envWhere(t), envfile.Inspect(content).Summary(), secretPath(fileName), fileName)
-		return nil
+		return a.envDelivered(ctx, c, t, f)
 	}
 	// who sees each, as the platform has it now (a name's own, kept, when
 	// none was chosen)
@@ -470,6 +536,9 @@ func (a *app) envSet(ctx context.Context, args []string) error {
 	if env.NeedsRebuild {
 		fmt.Fprintf(a.out, "Its build sees a change: rebuild to put it in the built app: `homeport env rebuild`.\n")
 	}
+	if restarts {
+		return a.envDelivered(ctx, c, t, f)
+	}
 	return nil
 }
 
@@ -491,6 +560,7 @@ func publicPrefix(name string) string {
 // --for, those roles' own values alone.
 func (a *app) envUnset(ctx context.Context, args []string) error {
 	fs, f := a.envFlagSet("env unset")
+	f.waitFlag(fs)
 	var roles roleFlags
 	fs.Var(&roles, "for", "remove one part of the app's own value alone (web, release or a process's name); once for each")
 	pos, err := parseMixed(fs, args)
@@ -521,13 +591,13 @@ func (a *app) envUnset(ctx context.Context, args []string) error {
 		}
 		fmt.Fprintf(a.out, "Removed %s's value of %s from %s: it gets the value for all, if any.\n",
 			strings.Join(says, ", "), strings.Join(pos, ", "), envWhere(t))
-		return nil
+		return a.envDelivered(ctx, c, t, f)
 	}
 	if _, err := c.SetEnv(ctx, t.link.Team, t.link.App, nil, nil, pos); err != nil {
 		return err
 	}
 	fmt.Fprintf(a.out, "Removed %s from %s: the app restarts without them.\n", strings.Join(pos, ", "), envWhere(t))
-	return nil
+	return a.envDelivered(ctx, c, t, f)
 }
 
 // envLs is `homeport env ls`: every variable an environment gets, by name,
