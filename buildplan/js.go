@@ -409,7 +409,8 @@ func parseStart(scripts map[string]string, name string, depth int) (start, error
 
 // js plans a JavaScript app (a package.json and its package manager's
 // lockfile). runtime is what the build settings, else homeport.yaml, said.
-func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun string) error {
+func (r reader) js(p *Plan, cfg fileConfig, s Settings, runtime, runtimeFrom string) error {
+	settingsRun := s.Run
 	pkg := r.pkg()
 	deps := r.deps()
 	// the lockfile, and the packageManager that picks among lockfiles, are
@@ -517,8 +518,19 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 	if cfg.Static != "" || cfg.Build.Artifact != "" {
 		return r.siteToolchain(p, pkg, pmName)
 	}
-	// a static site
-	if r.site(p, cfg) || r.nextExport(p, cfg, deps) {
+	// a static site - and the server of its api/ folder's handlers, when
+	// there are some (api.go)
+	if r.site(p, cfg) {
+		if err := r.siteToolchain(p, pkg, pmName); err != nil {
+			return err
+		}
+		a, err := r.apiAt(cfg, s, p.Artifact)
+		if a == nil || err != nil {
+			return err
+		}
+		return r.apiApp(p, a, cfg, p.Artifact, pmName, runtime, runtimeFrom)
+	}
+	if r.nextExport(p, cfg, deps) {
 		return r.siteToolchain(p, pkg, pmName)
 	}
 
@@ -595,8 +607,15 @@ func (r reader) js(p *Plan, cfg fileConfig, runtime, runtimeFrom, settingsRun st
 		case pr != nil:
 			return fmt.Errorf("can't tell how this %s app starts: add a start script (like `%s server.js`), or set a start command", pr.name, rt)
 		}
-		// nothing says it's a server: a guess, as before - a binary its
-		// build makes, else a site folder
+		// nothing says it's a server: its api/ folder's handlers, else a
+		// guess, as before - a binary its build makes, else a site folder
+		a, err := r.apiAt(cfg, s, "")
+		if err != nil {
+			return err
+		}
+		if a != nil {
+			return r.apiApp(p, a, cfg, "", pmName, runtime, runtimeFrom)
+		}
 		return r.guess(p, pkg, pmName)
 	}
 	if entry != "" && (!relPath(entry) || strings.HasPrefix(entry, "/")) {

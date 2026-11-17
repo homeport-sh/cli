@@ -7,6 +7,9 @@
 //   files/<url>       any other file, at its exact URL (never one ending in /)
 //   pages/<url>.html  an HTML page: /about is pages/about.html, /about/ is
 //                     pages/about/.html, / is pages/.html
+//   fallback/<name>   the site kind's one page for a path that isn't a file:
+//                     200.html (an SPA's shell, answered 200) or 404.html
+//                     (answered 404) - GET and HEAD, never under /api
 //
 // Only what the framework's server would answer itself, byte for byte: a URL
 // it redirects (the other trailing-slash form), answers with headers of the
@@ -24,6 +27,7 @@
 //   bin public.mjs next <standalone app folder> <marker>
 //   bin public.mjs react-router <server build> <marker>
 //   bin public.mjs remix <server build> <marker>
+//   bin public.mjs site <site folder> <marker> <immutable> [fallback folder]
 //
 // files: homeport's files manifest (docs/edge-caching.md, "The files
 // manifest"), which a framework writes to say itself what its server answers
@@ -33,6 +37,12 @@
 // Next.js, react-router-serve and remix-serve: their content-hashed assets
 // alone (immutable/), which their servers answer from files with the same
 // year-long immutable Cache-Control.
+//
+// The site: the frontend an api/ folder's server keeps (api-server.mjs),
+// which it answers as a static site's host does - <immutable> is the URL
+// paths cached a year, the static site's rule (buildplan.StaticImmutableRe);
+// [fallback folder] holds the page the server answers a path that isn't a
+// file with, as its build chose it (200.html or 404.html).
 //
 // <marker> is the app's .output/edge.json (the edge contract, v2), written
 // from the same tree for the edge to keep its pages: "static" lists the
@@ -138,6 +148,12 @@ class Tree {
 			fs.copyFileSync(src, dst);
 			for (const c of copies) fs.copyFileSync(src + c, dst + c);
 			n[tree]++;
+		}
+		if (this.fallback) {
+			const [name, src] = this.fallback;
+			fs.mkdirSync(path.join(OUT, "fallback"), { recursive: true });
+			fs.copyFileSync(src, path.join(OUT, "fallback", name));
+			n.fallback = name;
 		}
 		if (routes) {
 			fs.mkdirSync(OUT, { recursive: true });
@@ -696,6 +712,32 @@ function reactRouter(server) {
 	return t;
 }
 
+// site: the frontend of an api/ folder's server, which answers a URL with
+// its file, else its .html, else its folder's index.html - in that order,
+// as a static site's host does - and nothing under /api (the handlers')
+function site(dir, immutable, fallback) {
+	if (!isDir(dir)) throw new Error("no site at " + dir);
+	const re = new RegExp(immutable);
+	const t = new Tree("/.well-known/");
+	if (fallback) {
+		const names = fs.readdirSync(fallback).filter((n) => n === "200.html" || n === "404.html");
+		if (names.length !== 1) throw new Error(fallback + ": not one fallback page");
+		t.fallback = [names[0], path.join(fallback, names[0])];
+	}
+	const files = walk(dir).filter((f) => !f.startsWith("api/")).sort();
+	const put = (u, f) => t.put(u, path.join(dir, f), re.test(u));
+	for (const f of files) put("/" + f, f);
+	const index = (f) => f === "index.html" || f.endsWith("/index.html");
+	for (const f of files) if (f.endsWith(".html") && !index(f)) put("/" + f.slice(0, -".html".length), f);
+	for (const f of files) {
+		if (!index(f)) continue;
+		const d = f.slice(0, -"index.html".length); // "" or "x/"
+		put("/" + d, f);
+		if (d) put("/" + d.slice(0, -1), f);
+	}
+	return t;
+}
+
 // jsonAt: the JSON value starting at i in s
 function jsonAt(s, i) {
 	if (s[i] !== "{") return null;
@@ -740,18 +782,18 @@ function edgeMarker(t, marker) {
 	return { listed: m.static.length, of: pages.length };
 }
 
-const [kind, dir, marker] = process.argv.slice(2);
-const servers = { sveltekit: "adapter-node", astro: "Astro's node adapter", next: "Next.js standalone", "react-router": "react-router-serve", remix: "remix-serve" };
+const [kind, dir, marker, immutable, fallback] = process.argv.slice(2);
+const servers = { sveltekit: "adapter-node", astro: "Astro's node adapter", next: "Next.js standalone", "react-router": "react-router-serve", remix: "remix-serve", site: "the API server" };
 let wrote = false;
 try {
-	const kinds = { files, sveltekit, astro, next, "react-router": reactRouter, remix: reactRouter };
-	const t = Object.hasOwn(kinds, kind) ? kinds[kind](dir) : null;
+	const kinds = { files, sveltekit, astro, next, "react-router": reactRouter, remix: reactRouter, site };
+	const t = Object.hasOwn(kinds, kind) ? kinds[kind](dir, immutable, fallback) : null;
 	if (!t) throw new Error("no framework " + kind);
 	const n = t.write();
 	const e = edgeMarker(t, marker);
 	wrote = !!e;
 	const as = kind === "files" ? "as its files manifest (" + dir + ") says its server serves them" : `as ${servers[kind]} serves them`;
-	say(`served without the app, before any of its code runs (${as}): ${n.pages} prerendered page(s), ${n.files} file(s), ${n.immutable} immutable asset(s)`);
+	say(`served without the app, before any of its code runs (${as}): ${n.pages} prerendered page(s), ${n.files} file(s), ${n.immutable} immutable asset(s)${n.fallback ? ", and " + n.fallback + " for a path that isn't a file" : ""}`);
 	if (n.headers) say(`  with the headers ${kind === "files" ? "its manifest" : "its config"} gives them: ${n.headers} of them`);
 	if (n.redirects) say(`  and its config's redirects, answered without the app: ` + t.redirects.slice(0, 10).map((r) => `${r.from} -> ${r.to} (${r.status})`).join(", ") + (n.redirects > 10 ? ` (and ${n.redirects - 10} more)` : ""));
 	const pages = [...t.urls].filter(([, [tr]]) => tr === "pages").map(([u]) => u);
