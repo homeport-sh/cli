@@ -615,9 +615,9 @@ for `laravel-vite-plugin` or `@inertiajs/vite`). Then:
   the app logs why.
 
 **Its memory is the app's.** The renderer runs within the app's memory,
-beside the web: about 60-70 MB for a small app, more as its pages grow. Size
-the app with that in mind (the plan says so). An app at the smallest size,
-256 MB, renders, with less room left for the web.
+beside the web: about 60-70 MB for a small app, more as its pages grow. An
+app at the smallest size, 256 MB, renders, with less room left for the web;
+on a paid plan homeport raises the app's memory if it runs out.
 
 - **On Node**, its heap is capped at a quarter of the app's memory, and at
   least 64 MB (`--max-old-space-size`). Past that, it's Node that stops,
@@ -687,14 +687,12 @@ it into the page. While `REVERB_HOST` is still the value homeport set, a
 change of the app's domain changes it too, at the next deploy. One you set
 yourself is left as it is.
 
-Reverb's process has 128 MB of its own, not the app's whole size, and is
-billed as any process is, for its memory the whole time it runs.
-Processes run only while the app is always on (at least 1 copy), so
-Reverb does too, and an open connection never finds it asleep. **On a plan
-where apps sleep when idle (Free), processes don't run, so Reverb doesn't
-either, and Echo won't connect.**
+Reverb's process runs at the app's memory, as every process does:
+homeport sizes it, and on a paid plan raises it with the app if it runs out. It's billed
+as any process is, for the memory it uses while it runs. It sleeps while
+no client is connected and wakes when one connects.
 
-To run Reverb with options of your own, or another size, declare a process
+To run Reverb with options of your own, declare a process
 named `reverb`: yours replaces homeport's. It must listen on `$PORT`
 (`--port=$PORT`) and every address (`--host=$HOST`), since that's where its
 requests go. It counts toward the four processes an app may have; when the
@@ -869,7 +867,7 @@ backend again: your build makes the bundle. The plan says
   `RSC_HOST_CALL_SECRET_PREVIOUS`, which both read.
 
 **Its memory is the app's.** The renderer runs within the app's memory,
-beside the backend: size the app for both (the plan says so).
+beside the backend: on a paid plan homeport raises the app's memory if the two run out.
 
 ## Assets kept for the next release
 

@@ -47,13 +47,8 @@ import (
 // $PORT).
 const ReverbRun = "php-cli artisan reverb:start --host=$HOST --port=$PORT"
 
-// ReverbMemory is the reverb process's size: one PHP process holding
-// connections, billed at it rather than at the whole app's (an app's
-// smallest size is 256M). An app that declares its own reverb sizes it.
-const ReverbMemory = "128M"
-
 // ssrMemoryNote: the renderer runs in the app's memory.
-const ssrMemoryNote = "Inertia's SSR renderer runs in the app's memory, beside the web: about 60-70 MB for a small app, more as its pages grow - size the app with it in mind"
+const ssrMemoryNote = "Inertia's SSR renderer runs in the app's memory, beside the web: about 60-70 MB for a small app, more as its pages grow"
 
 // SSRInertia is Plan.SSR for Inertia's server-side rendering.
 const SSRInertia = "inertia"
@@ -383,7 +378,7 @@ func reverbProcess(p *Plan) error {
 			"or run Reverb as one of them (named reverb, listening on $PORT)", len(p.Processes)))
 		return nil
 	}
-	p.Processes = slices.SortedFunc(slices.Values(append(slices.Clone(p.Processes), Process{Name: "reverb", Run: ReverbRun, Memory: ReverbMemory})),
+	p.Processes = slices.SortedFunc(slices.Values(append(slices.Clone(p.Processes), Process{Name: "reverb", Run: ReverbRun})),
 		func(a, b Process) int { return strings.Compare(a.Name, b.Name) })
 	return nil
 }

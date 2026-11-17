@@ -269,12 +269,11 @@ type Plan struct {
 
 // Process is one of the app's processes beside the web. StopGrace is how
 // long it gets to finish after SIGTERM before it's killed (CheckStopGrace),
-// empty homeportd's default.
+// empty homeportd's default. It has no size of its own: homeport runs each
+// at the app's memory, which follows the app.
 type Process struct {
 	Name      string `json:"name"`
 	Run       string `json:"run"`
-	Memory    string `json:"memory,omitempty"`
-	CPU       string `json:"cpu,omitempty"`
 	StopGrace string `json:"stop_grace,omitempty"`
 }
 
@@ -367,15 +366,21 @@ type fileConfig struct {
 
 type processConfig struct {
 	Run       string `yaml:"run"`
-	Memory    string `yaml:"memory"`
-	CPU       string `yaml:"cpu"`
 	StopGrace string `yaml:"stop_grace"`
+	// sized: the memory or cpu it said, which homeport refuses (Detect)
+	sized string
 }
 
-// UnmarshalYAML: a process is its args ("worker: queue:work") or run + limits.
+// UnmarshalYAML: a process is its args ("worker: queue:work") or run and
+// stop grace. A memory or cpu is noted, to be refused with its name.
 func (p *processConfig) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.ScalarNode {
 		return n.Decode(&p.Run)
+	}
+	for i := 0; i+1 < len(n.Content) && n.Kind == yaml.MappingNode; i += 2 {
+		if k := n.Content[i].Value; (k == "memory" || k == "cpu") && p.sized == "" {
+			p.sized = k
+		}
 	}
 	type plain processConfig
 	return n.Decode((*plain)(p))
@@ -390,8 +395,7 @@ func (s Settings) Check() error {
 		}
 	}
 	for _, p := range s.Processes {
-		for name, v := range map[string]string{"process name": p.Name, "process command": p.Run, "process memory": p.Memory, "process cpu": p.CPU,
-			"process stop grace": p.StopGrace} {
+		for name, v := range map[string]string{"process name": p.Name, "process command": p.Run, "process stop grace": p.StopGrace} {
 			if err := checkText(name, v); err != nil {
 				return err
 			}
@@ -518,6 +522,9 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	if err := checkFileHealth(cfg.Health); err != nil {
 		return Plan{}, err
 	}
+	if err := checkUnsized(cfg.Processes); err != nil {
+		return Plan{}, err
+	}
 	p, err := r.detect(cfg, s)
 	if err != nil {
 		return Plan{}, err
@@ -547,7 +554,7 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	}
 	for _, name := range slices.Sorted(maps.Keys(cfg.Processes)) {
 		pc := cfg.Processes[name]
-		p.Processes = append(p.Processes, Process{Name: name, Run: pc.Run, Memory: pc.Memory, CPU: pc.CPU, StopGrace: pc.StopGrace})
+		p.Processes = append(p.Processes, Process{Name: name, Run: pc.Run, StopGrace: pc.StopGrace})
 	}
 	p.StopGrace = cfg.StopGrace
 
@@ -1098,4 +1105,17 @@ func (r *reader) goModuleAbove() bool {
 		}
 	}
 	return false
+}
+
+// checkUnsized refuses a process homeport.yaml gives a memory or cpu:
+// homeport sizes each process itself, at the app's memory, which follows
+// the app (raised when it runs out).
+func checkUnsized(procs map[string]processConfig) error {
+	for _, name := range slices.Sorted(maps.Keys(procs)) {
+		if k := procs[name].sized; k != "" {
+			return fmt.Errorf("%s: process %q: %s isn't set in homeport.yaml any more: homeport sizes each process itself, at the app's memory, which follows the app; remove memory and cpu from processes.%s",
+				ConfigFile, name, k, name)
+		}
+	}
+	return nil
 }
