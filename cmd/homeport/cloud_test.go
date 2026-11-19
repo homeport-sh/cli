@@ -1014,6 +1014,18 @@ func TestDeployingSaysWhatSecretsItLeftOut(t *testing.T) {
 	}
 }
 
+// `homeport token create --help` says where the token is listed: the team's
+// API tokens page, not Account → CLI sessions (a person's devices).
+func TestTokenCreateHelpNamesTheAPITokensPage(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.run("token", "create", "--help")
+	said := h.said()
+	if !strings.Contains(said, "its name on the team's API tokens page") || strings.Contains(said, "CLI sessions") {
+		t.Fatalf("token create --help: %s", said)
+	}
+}
+
 // `homeport token create`: a named token for CI, printed once to stdout and
 // nowhere else - for one environment, picked as deploy picks one: the
 // flags, else this folder's link, else asked.

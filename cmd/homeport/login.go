@@ -158,7 +158,7 @@ func (a *app) token(ctx context.Context, args []string) error {
 		return usageErr("usage: homeport token create --name <where it's used> [--team <team>] [--app <app>] [--env <environment>]")
 	}
 	fs := a.flags("token create")
-	name := fs.String("name", "", "where it's used (github-actions, say): its name in Account → CLI sessions")
+	name := fs.String("name", "", "where it's used (github-actions, say): its name on the team's API tokens page")
 	team := fs.String("team", "", "the team, by its address (slug)")
 	appName := fs.String("app", "", "the app it's for, by name (instead of the link)")
 	env := fs.String("env", "", "the environment (with --app; default production)")
