@@ -299,11 +299,8 @@ const PHPVersion = "8.5"
 // front-end assets. A Laravel bundle's php.ini has opcache skip timestamp
 // checks and keep what it compiles, in the release's storage/, across
 // wakes. Pinned by digest: a tag can be pushed again.
-//
-// TODO(release): the digest of 8.5-1.13.6-bun1.4.4 once homeport-sh/homeport's
-// frankenphp-base workflow publishes it from main (homeport#92); this
-// placeholder is not a digest and must not ship.
-const FrankenPHPImage = "ghcr.io/homeport-sh/frankenphp:" + PHPVersion + "-1.13.6-bun1.4.4@sha256:TODO-digest-of-8.5-1.13.6-bun1.4.4"
+
+const FrankenPHPImage = "ghcr.io/homeport-sh/frankenphp:" + PHPVersion + "-1.13.6-bun1.4.4@sha256:5abfa37d8a0c229f92781c5088cc4290092e0798f35d0641de63ed31c4c541f3"
 
 // BundleDir is where a PHP app's build puts its bundle, in the app's folder.
 const BundleDir = ".homeport-bundle"
