@@ -1,24 +1,21 @@
-// Type checks, run by `tsc` in CI: what a handler is given follows the boss.
-import { drain, type Boss, type Job } from "./index.js";
+// Type checks, run by `tsc` in CI: what drain() takes and a handler is given.
+import { drain, retryFailed, type Boss } from "./index.js";
 
-const rest: Omit<Boss, "fetch"> = {
-  complete: async () => {},
-  fail: async () => {},
+const boss: Boss = {
+  work: async () => "w1",
+  offWork: async () => {},
+  drain: async () => ({ processed: 0, failed: 0, timedOut: false }),
   retry: async () => {},
   getDb: () => ({ executeSql: async () => ({ rows: [] }) }),
 };
 
-// pg-boss 12's fetch() gives each job its retryCount: a handler reads it.
-const v12 = { ...rest, fetch: async (): Promise<(Job & { retryCount: number })[]> => [] };
-void drain(v12, {
-  handlers: {
-    resize: (jobs) => jobs.map((j) => j.retryCount.toFixed()),
-  },
-});
+// a handler reads each job's retryCount, as pg-boss 12 gives it
+void drain(boss, { handlers: { resize: (jobs) => jobs.map((j) => j.retryCount.toFixed() + j.data.anything) } });
 
-// pg-boss 11's has none: still a boss drain() takes.
-const v11 = { ...rest, fetch: async (): Promise<Job[]> => [] };
-void drain(v11, { handlers: { resize: (jobs) => jobs.map((j) => j.id) } });
+// a pg-boss before 12.39.0, with no drain(), isn't one drain() takes
+const { drain: _, ...old } = boss;
+// @ts-expect-error no drain()
+void drain(old, { handlers: { resize: () => {} } });
 
-// @ts-expect-error a job without a retryCount doesn't claim one
-void drain(v11, { handlers: { resize: (jobs) => jobs.map((j) => j.retryCount.toFixed()) } });
+// retryFailed needs only retry() and getDb()
+void retryFailed({ retry: boss.retry, getDb: boss.getDb }, ["resize"]);
