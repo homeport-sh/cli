@@ -24,9 +24,10 @@ export default async () => {
 };
 ```
 
-`drain(boss, { handlers })` fetches each queue a handler is given for and
-hands the handler the batch, as pg-boss's `work()` does. A batch is
-completed when the handler returns, and failed (pg-boss retries it as the
+`drain(boss, { handlers })` runs pg-boss's own `drain()` (pg-boss 12.39.0
+or later): a `work()` worker per queue a handler is given for, back to
+back until none finds a ready job, then the workers stopped. A batch is
+completed when its handler returns, and failed (pg-boss retries it as the
 queue says) when it throws. When a pass finds nothing, or its time is up,
 it prints one line, last:
 
@@ -36,7 +37,8 @@ homeport-queue: processed=12 failed=1 waiting=0 next_due=1793481600
 
 `waiting` is the jobs ready now and `next_due` the earliest one due later
 (a delayed job, a retry's backoff), read from pg-boss's job table. homeport
-runs the drain with `--max-time=<seconds>` and drain() stops fetching then.
+runs the drain with `--max-time=<seconds>` and drain() stops fetching then,
+letting the batches still running finish.
 Options: `queues`, `maxSeconds`, `schema` (pg-boss's, `pgboss` by default),
 `batchSize` (10), `signal`.
 

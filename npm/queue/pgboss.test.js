@@ -8,12 +8,24 @@ import { drain, retryFailed } from "./index.js";
 // The package has no dependencies, so pg-boss is the one you point at.
 const url = process.env.HOMEPORT_QUEUE_TEST_DATABASE_URL;
 
-test.skipIf(!url)("drain works pg-boss's queue and reads what's left from its table", async () => {
+// a fresh schema's first start, against a database far away, takes seconds
+const slow = 30_000;
+
+async function withBoss(fn) {
   const { PgBoss } = await import(process.env.PGBOSS_MODULE ?? "pg-boss");
   const schema = `hq_${Date.now()}`;
   const boss = new PgBoss({ connectionString: url, schema, supervise: false, schedule: false });
   await boss.start();
   try {
+    await fn(boss, schema);
+  } finally {
+    await boss.getDb().executeSql(`drop schema ${schema} cascade`);
+    await boss.stop({ graceful: false });
+  }
+}
+
+test.skipIf(!url)("drain works pg-boss's queue and reads what's left from its table", () =>
+  withBoss(async (boss, schema) => {
     await boss.createQueue("email");
     await boss.createQueue("resize", { retryLimit: 0 });
     await boss.send("email", { to: "a" });
@@ -41,8 +53,27 @@ test.skipIf(!url)("drain works pg-boss's queue and reads what's left from its ta
     expect(await retryFailed(boss, ["email", "resize"], { schema })).toBe(1);
     const again = await drain(boss, { schema, handlers: { email: async () => {}, resize: async () => {} }, maxSeconds: 0, log: () => {} });
     expect(again.waiting).toBe(1);
-  } finally {
-    await boss.getDb().executeSql(`drop schema ${schema} cascade`);
-    await boss.stop({ graceful: false });
-  }
-});
+  }), slow);
+
+test.skipIf(!url)("drain stops pg-boss's workers when its signal aborts", () =>
+  withBoss(async (boss, schema) => {
+    await boss.createQueue("email");
+    for (let i = 0; i < 5; i++) await boss.send("email", { i });
+    const ac = new AbortController();
+    const counts = await drain(boss, { schema, batchSize: 1, signal: ac.signal, log: () => {}, handlers: { email: async () => ac.abort() } });
+    expect(counts).toEqual({ processed: 1, failed: 0, waiting: 4, nextDue: 0 });
+  }), slow);
+
+test.skipIf(!url)("drain's time up: the batch running finishes, and nothing more is fetched", () =>
+  withBoss(async (boss, schema) => {
+    await boss.createQueue("email");
+    for (let i = 0; i < 4; i++) await boss.send("email", { i });
+    const counts = await drain(boss, {
+      schema,
+      batchSize: 1,
+      maxSeconds: 1,
+      log: () => {},
+      handlers: { email: () => new Promise((r) => setTimeout(r, 2500)) },
+    });
+    expect(counts).toEqual({ processed: 1, failed: 0, waiting: 3, nextDue: 0 });
+  }), slow);

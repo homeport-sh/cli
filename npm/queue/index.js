@@ -12,6 +12,8 @@
 //
 // waiting is the jobs ready now, next_due the earliest one due later (a
 // delayed job, a retry's backoff), both read from pg-boss's job table.
+//
+// It needs pg-boss 12.39.0 or later: the draining is pg-boss's drain().
 
 const schemaRe = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -32,43 +34,58 @@ function table(schema) {
   return `${schema}.job`;
 }
 
+// drain() is pg-boss's own (12.39.0 and later): a worker per queue, as
+// work() runs it, back to back until a pass finds nothing ready, then the
+// workers stopped. What's left is read from pg-boss's job table.
 export async function drain(boss, options = {}) {
-  const { handlers = {}, schema = "pgboss", batchSize = 10, signal, now = Date.now, log = console.log, warn = console.error } = options;
+  const { handlers = {}, schema = "pgboss", batchSize = 10, signal, log = console.log, warn = console.error } = options;
   const names = options.queues ?? Object.keys(handlers);
   if (names.length === 0) throw new Error("@homeport-sh/queue: drain needs a handler for each queue it works");
   for (const n of names) {
     if (typeof handlers[n] !== "function") throw new Error(`@homeport-sh/queue: no handler for the queue ${JSON.stringify(n)}`);
   }
+  if (typeof boss.drain !== "function") throw new Error("@homeport-sh/queue: drain needs pg-boss 12.39.0 or later, for its drain()");
   const jobs = table(schema);
   const maxSeconds = options.maxSeconds ?? maxTimeArg(process.argv) ?? defaultMaxSeconds;
-  const deadline = now() + maxSeconds * 1000;
-  const over = () => signal?.aborted || now() >= deadline;
 
+  // counted here, not from pg-boss's drain(): a worker's first batch can
+  // start as work() returns, before the drain does
   let processed = 0;
   let failed = 0;
   let counts;
+  const workers = [];
+  const stop = () => Promise.all(workers.map(([name, id]) => boss.offWork(name, { id, wait: true })));
+  const onAbort = () => {
+    for (const [name, id] of workers) void boss.offWork(name, { id }).catch(() => {});
+  };
   try {
-    for (let got = 1; got > 0 && !over(); ) {
-      got = 0;
+    if (maxSeconds > 0 && !signal?.aborted) {
+      signal?.addEventListener("abort", onAbort, { once: true });
       for (const name of names) {
-        while (!over()) {
-          const batch = await boss.fetch(name, { batchSize });
-          if (!batch?.length) break;
-          got += batch.length;
-          const ids = batch.map((j) => j.id);
+        const handler = handlers[name];
+        const id = await boss.work(name, { batchSize }, async (batch) => {
           try {
-            await handlers[name](batch);
+            await handler(batch);
           } catch (err) {
-            await boss.fail(name, ids, { message: String(err?.message ?? err), stack: err?.stack });
             failed += batch.length;
-            continue;
+            throw err;
           }
-          await boss.complete(name, ids);
           processed += batch.length;
-        }
+        });
+        workers.push([name, id]);
+        if (signal?.aborted) onAbort();
       }
+      if (!signal?.aborted) await boss.drain({ timeoutSeconds: maxSeconds });
     }
   } finally {
+    signal?.removeEventListener("abort", onAbort);
+    // the batches still running finish (a drain that ran out of time
+    // doesn't wait for them), then nothing more is fetched
+    try {
+      await stop();
+    } catch (err) {
+      warn(`homeport: couldn't stop the queue's workers: ${err?.message ?? err}`);
+    }
     let waiting = 0;
     let nextDue = 0;
     try {

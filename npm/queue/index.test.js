@@ -17,13 +17,64 @@ function fakeBoss(queues, { now = 1793481600 } = {}) {
     failed: [],
     retried: [],
     sql: [],
+    workers: [],
+    clock: 0, // ms, moved by fetchMs on each fetch
+    fetchMs: 0,
     async fetch(name, opts) {
+      if (boss.fetchFails) throw new Error(boss.fetchFails);
       boss.fetches.push([name, opts?.batchSize]);
+      boss.clock += boss.fetchMs;
       const ready = jobs.filter((j) => j.name === name && (j.state === "created" || j.state === "retry") && j.startAfter <= now);
       const batch = ready.slice(0, opts?.batchSize ?? 1);
       for (const j of batch) j.state = "active";
       return batch.map(({ id, name, data }) => ({ id, name, data }));
     },
+    // work() as pg-boss's: a worker of the queue, its handler given each
+    // batch, which it completes or fails whole
+    async work(name, opts, handler) {
+      if (!queues[name]) throw new Error(`Queue ${name} not found`);
+      const w = { id: `w${boss.workers.length + 1}`, name, batchSize: opts?.batchSize, handler, stopped: false, running: null };
+      boss.workers.push(w);
+      return w.id;
+    },
+    async offWork(name, opts) {
+      for (const w of boss.workers.filter((w) => w.name === name && (!opts?.id || w.id === opts.id))) {
+        w.stopped = true;
+        if (opts?.wait && w.running) await w.running;
+      }
+    },
+    // drain() as pg-boss 12.39's: the workers back to back until a pass
+    // finds nothing, or timeoutSeconds is up (the batch running then goes on)
+    async drain(options) {
+      boss.drains.push(options);
+      const over = () => options?.timeoutSeconds !== undefined && boss.clock >= options.timeoutSeconds * 1000;
+      for (let got = 1; got > 0; ) {
+        got = 0;
+        for (const w of boss.workers) {
+          for (;;) {
+            await new Promise((r) => setTimeout(r, 0));
+            if (w.stopped || over()) break;
+            const batch = await boss.fetch(w.name, { batchSize: w.batchSize });
+            if (!batch.length) break;
+            got += batch.length;
+            const ids = batch.map((j) => j.id);
+            w.running = (async () => {
+              try {
+                await w.handler(batch);
+                await boss.complete(w.name, ids);
+              } catch (err) {
+                await boss.fail(w.name, ids, { message: String(err?.message ?? err) });
+              }
+            })();
+            await w.running;
+            w.running = null;
+          }
+        }
+        if (over()) return { timedOut: true };
+      }
+      return { timedOut: false };
+    },
+    drains: [],
     async complete(name, ids) {
       for (const i of [].concat(ids)) jobs.find((j) => j.id === i).state = "completed";
       boss.completed.push([name, [].concat(ids)]);
@@ -79,6 +130,9 @@ test("drain works each queue until a pass finds nothing, then prints the line", 
   expect(boss.completed).toEqual([["email", ["j1", "j2"]], ["email", ["j3"]]]);
   expect(boss.failed.map(([n, ids, d]) => [n, ids, d.message])).toEqual([["resize", ["j4", "j5"], "bad image"]]);
   expect(boss.fetches.every(([, b]) => b === 2)).toBe(true);
+  // pg-boss's own drain() ran the workers, and they're stopped after
+  expect(boss.drains).toEqual([{ timeoutSeconds: 540 }]);
+  expect(boss.workers.map((w) => [w.name, w.stopped])).toEqual([["email", true], ["resize", true]]);
   // the count reads pg-boss's job table, of these queues
   const [text, values] = boss.sql[0];
   expect(text).toContain("from pgboss.job");
@@ -87,15 +141,15 @@ test("drain works each queue until a pass finds nothing, then prints the line", 
 
 test("drain stops at its time, and says what's still waiting", async () => {
   const boss = fakeBoss({ email: [{}, {}, {}, {}] });
+  boss.fetchMs = 3000; // each fetch takes 3s
   const out = quiet();
-  let t = 0;
   const counts = await drain(boss, {
     handlers: { email: async () => {} },
     maxSeconds: 5,
     batchSize: 1,
-    now: () => (t += 3000), // each fetch takes 3s
     log: out.log,
   });
+  expect(boss.drains).toEqual([{ timeoutSeconds: 5 }]);
   expect(counts.processed).toBeLessThan(4);
   expect(counts.waiting).toBe(4 - counts.processed);
   expect(out.lines.at(-1)).toBe(`homeport-queue: processed=${counts.processed} failed=0 waiting=${counts.waiting} next_due=0`);
@@ -108,6 +162,8 @@ test("drain takes --max-time from its args, as homeport runs it", async () => {
     const boss = fakeBoss({ email: [{}] });
     const counts = await drain(boss, { handlers: { email: async () => {} }, log: () => {} });
     expect(counts).toEqual({ processed: 0, failed: 0, waiting: 1, nextDue: 0 });
+    expect(boss.workers).toEqual([]);
+    expect(boss.drains).toEqual([]);
   } finally {
     process.argv = argv;
   }
@@ -145,12 +201,33 @@ test("drain prints its line even when the queue can't be read, or a fetch throws
   expect(errs.join()).toContain("connection lost");
 
   const broken = fakeBoss({ email: [{}] });
-  broken.fetch = async () => {
-    throw new Error("no such queue");
-  };
   const lines = quiet();
-  await expect(drain(broken, { handlers: { email: async () => {} }, log: lines.log })).rejects.toThrow("no such queue");
+  await expect(drain(broken, { handlers: { email: async () => {}, gone: async () => {} }, log: lines.log })).rejects.toThrow("Queue gone not found");
   expect(lines.lines).toEqual(["homeport-queue: processed=0 failed=0 waiting=1 next_due=0"]);
+  // the worker it did start is stopped
+  expect(broken.workers.map((w) => [w.name, w.stopped])).toEqual([["email", true]]);
+});
+
+test("drain needs pg-boss 12.39.0 or later: its drain()", async () => {
+  const old = fakeBoss({ email: [{}] });
+  delete old.drain;
+  await expect(drain(old, { handlers: { email: async () => {} }, log: () => {} })).rejects.toThrow(/pg-boss 12\.39\.0/);
+});
+
+test("drain counts a batch its worker took before pg-boss's drain() began", async () => {
+  // a worker's first fetch can run as work() returns: pg-boss's drain()
+  // counts only what's handled after it starts, the package all of it
+  const boss = fakeBoss({ email: [{}, {}] });
+  const work = boss.work;
+  boss.work = async (name, opts, handler) => {
+    const id = await work(name, opts, handler);
+    const batch = await boss.fetch(name, opts);
+    await handler(batch);
+    await boss.complete(name, batch.map((j) => j.id));
+    return id;
+  };
+  const counts = await drain(boss, { handlers: { email: async () => {} }, batchSize: 1, log: () => {} });
+  expect(counts.processed).toBe(2);
 });
 
 test("drain reads its schema's table, and refuses one that isn't a name", async () => {
