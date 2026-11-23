@@ -1,0 +1,7 @@
+{"packages":[
+ {"name":"laravel/framework","version":"v11.9.0","notification-url":"https://packagist.org/downloads/"},
+ {"name":"acme/secret","version":"1.0.0","dist":{"url":"https://repo.acme.dev/x.zip"}}
+],"packages-dev":[
+ {"name":"phpunit/phpunit","version":"10.5.0","notification-url":"https://packagist.org/downloads/"},
+ {"name":"acme/fork","version":"dev-main","notification-url":"https://packagist.org/downloads/"}
+]}
