@@ -1,0 +1,6 @@
+lockfileVersion: '6.0'
+packages:
+  /lodash@4.17.20:
+    resolution: {integrity: sha512-a}
+  /@babel/core@7.24.0(supports-color@8.1.1):
+    resolution: {integrity: sha512-b}

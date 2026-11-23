@@ -1,0 +1,15 @@
+lockfileVersion: '9.0'
+importers:
+  .:
+    dependencies:
+      react: {specifier: ^18, version: 18.2.0}
+packages:
+  react@18.2.0:
+    resolution: {integrity: sha512-a}
+  '@babel/core@7.24.0':
+    resolution: {integrity: sha512-b}
+  '@acme/secret@1.0.0':
+    resolution: {tarball: https://npm.acme.dev/@acme/secret/-/secret-1.0.0.tgz}
+snapshots:
+  react-dom@18.2.0(react@18.2.0):
+    dependencies: {}

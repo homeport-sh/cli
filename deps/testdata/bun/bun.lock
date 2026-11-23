@@ -1,0 +1,11 @@
+{
+  "lockfileVersion": 1,
+  "workspaces": { "": { "name": "app", "dependencies": { "next": "15.0.0" } } },
+  "packages": {
+    "next": ["next@15.0.0", "", { "dependencies": {} }, "sha512-x"],
+    "@types/node": ["@types/node@22.1.0", "", {}, "sha512-y"],
+    "@acme/secret": ["@acme/secret@1.0.0", "https://npm.acme.dev/@acme/secret/-/secret-1.0.0.tgz", {}, "sha512-z"],
+    "ws": ["ws@github:websockets/ws#abc", {}],
+    "app-ui": ["app-ui@workspace:packages/ui"],
+  },
+}
