@@ -34,8 +34,8 @@ type Dep struct {
 	Version   string `json:"version"`
 }
 
-// maxLockfile is past any real lockfile; a bigger one isn't read.
-const maxLockfile = 64 << 20
+// MaxLockfile is past any real lockfile; a bigger one isn't read.
+const MaxLockfile = 64 << 20
 
 // MaxDeps is past any real project's packages; past it, the rest aren't
 // listed.
@@ -54,21 +54,42 @@ var lockfiles = []struct {
 // Read lists what the lockfiles at fsys's top install, sorted, each once.
 // No lockfile is nothing; one that isn't readable is an error naming it.
 func Read(fsys fs.FS) ([]Dep, error) {
+	return ReadWith(func(name string) ([]byte, bool, error) {
+		st, err := fs.Stat(fsys, name)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, false, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		if !st.Mode().IsRegular() || st.Size() > MaxLockfile {
+			return nil, false, nil
+		}
+		b, err := fs.ReadFile(fsys, name)
+		return b, err == nil, err
+	})
+}
+
+// Lockfiles are the files Read reads, at a project's top.
+func Lockfiles() []string {
+	out := make([]string, len(lockfiles))
+	for i, l := range lockfiles {
+		out[i] = l.file
+	}
+	return out
+}
+
+// ReadWith is Read, each lockfile read by read: (its bytes, true), or
+// false when there's none. A read past MaxLockfile isn't parsed.
+func ReadWith(read func(name string) ([]byte, bool, error)) ([]Dep, error) {
 	var all []Dep
 	for _, l := range lockfiles {
-		st, err := fs.Stat(fsys, l.file)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
+		b, ok, err := read(l.file)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", l.file, err)
 		}
-		if !st.Mode().IsRegular() || st.Size() > maxLockfile {
+		if !ok || len(b) > MaxLockfile {
 			continue
-		}
-		b, err := fs.ReadFile(fsys, l.file)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", l.file, err)
 		}
 		ds, err := l.parse(b)
 		if err != nil {

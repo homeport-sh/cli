@@ -48,3 +48,23 @@ func TestReadWithoutALockfile(t *testing.T) {
 		t.Fatal("an unreadable composer.lock: no error")
 	}
 }
+
+// ReadWith reads the same lockfiles from anywhere - a repository a
+// provider serves, an uploaded tree - by name.
+func TestReadWithReadsByName(t *testing.T) {
+	var asked []string
+	got, err := ReadWith(func(name string) ([]byte, bool, error) {
+		asked = append(asked, name)
+		if name != "composer.lock" {
+			return nil, false, nil
+		}
+		b, err := os.ReadFile("testdata/composer/composer.lock")
+		return b, true, err
+	})
+	if err != nil || !slices.Equal(got, []Dep{{"Packagist", "laravel/framework", "11.9.0"}, {"Packagist", "phpunit/phpunit", "10.5.0"}}) {
+		t.Fatalf("ReadWith = %v, %v", got, err)
+	}
+	if !slices.Equal(asked, Lockfiles()) {
+		t.Fatalf("asked for %v, want %v", asked, Lockfiles())
+	}
+}
