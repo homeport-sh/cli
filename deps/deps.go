@@ -1,8 +1,7 @@
 // Package deps reads what a project's lockfiles install - each package by
 // name and exact version, as OSV (osv.dev) knows them - and asks OSV which
 // have known vulnerabilities. A build sends its list to the control plane,
-// which checks each live release at build time and again as advisories
-// are published; `homeport audit` checks a folder from the terminal.
+// which checks it at build time and again as advisories are published.
 //
 // Only packages from the public registries are listed (npm's, Packagist):
 // one from a company's own registry, a git repository or the project's own
