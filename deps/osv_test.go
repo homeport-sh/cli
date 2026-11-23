@@ -103,3 +103,20 @@ func TestCheckWhenOSVIsDown(t *testing.T) {
 		t.Fatalf("Check = %v, %v; want an error", got, err)
 	}
 }
+
+// The fix to name is the lowest fixed version past the one installed: an
+// advisory lists one for each line it was fixed on.
+func TestFixForIsTheNearestFixAbove(t *testing.T) {
+	v := Vuln{Fixed: []string{"10.48.23", "11.31.0", "9.52.17"}}
+	for installed, want := range map[string]string{
+		"11.9.0": "11.31.0", "10.1.0": "10.48.23", "9.0.0": "9.52.17", "11.31.0": "", "12.0.0": "",
+		"11.9.0-rc.1": "11.31.0", "v11.9.0": "11.31.0",
+	} {
+		if got := v.FixFor(installed); got != want {
+			t.Errorf("FixFor(%s) = %q, want %q", installed, got, want)
+		}
+	}
+	if got := (Vuln{}).FixFor("1.0.0"); got != "" {
+		t.Errorf("no fix: %q", got)
+	}
+}

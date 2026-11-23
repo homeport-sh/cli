@@ -239,3 +239,60 @@ func (o *OSV) do(ctx context.Context, method, path string, body []byte, v any) e
 	}
 	return nil
 }
+
+// FixFor is the lowest of v's fixed versions past installed - the fix on
+// its own line, when the advisory was fixed on several - or "" when none
+// is: unfixed, or fixed only on lines it's past.
+func (v Vuln) FixFor(installed string) string {
+	best := ""
+	for _, f := range v.Fixed {
+		if compareVersions(f, installed) > 0 && (best == "" || compareVersions(f, best) < 0) {
+			best = f
+		}
+	}
+	return best
+}
+
+// compareVersions orders two versions by their numbers, dot by dot; a
+// pre-release (1.2.0-rc.1) comes before its release. Close enough to npm's
+// and Composer's orders to pick a fix to name.
+func compareVersions(a, b string) int {
+	core := func(s string) ([]int, bool) {
+		s = strings.TrimPrefix(s, "v")
+		c, rest, found := strings.Cut(s, "-")
+		c, _, _ = strings.Cut(c, "+")
+		var ns []int
+		for _, p := range strings.Split(c, ".") {
+			n := 0
+			for _, r := range p {
+				if r < '0' || r > '9' {
+					break
+				}
+				n = n*10 + int(r-'0')
+			}
+			ns = append(ns, n)
+		}
+		return ns, found && rest != ""
+	}
+	an, apre := core(a)
+	bn, bpre := core(b)
+	for i := range max(len(an), len(bn)) {
+		x, y := 0, 0
+		if i < len(an) {
+			x = an[i]
+		}
+		if i < len(bn) {
+			y = bn[i]
+		}
+		if c := cmp.Compare(x, y); c != 0 {
+			return c
+		}
+	}
+	switch {
+	case apre && !bpre:
+		return -1
+	case !apre && bpre:
+		return 1
+	}
+	return 0
+}
