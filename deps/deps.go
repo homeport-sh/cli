@@ -1,8 +1,7 @@
 // Package deps reads what a project's lockfiles install - each package by
 // name and exact version, as OSV (osv.dev) knows them - and asks OSV which
 // have known vulnerabilities. A build sends its list to the control plane,
-// which checks each live release at build time and again as advisories
-// are published; `homeport audit` checks a folder from the terminal.
+// which checks it at build time and again as advisories are published.
 //
 // Only packages from the public registries are listed (npm's, Packagist):
 // one from a company's own registry, a git repository or the project's own
@@ -22,6 +21,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -109,10 +109,16 @@ func ReadWith(read func(name string) ([]byte, bool, error)) ([]Dep, error) {
 
 // exact is a published version: 1.2.3, 1.2.3-rc.1+build - not a range, a
 // path, a URL or a git ref.
-var exact = regexp.MustCompile(`^v?[0-9]+(\.[0-9]+)*([-+][0-9A-Za-z.+-]*)?$`)
+// Built on first use: homeportd links this package and starts on every SSH
+// call.
+var exact = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^v?[0-9]+(\.[0-9]+)*([-+][0-9A-Za-z.+-]*)?$`)
+})
 
 // npmName is a package name npm's registry could have.
-var npmName = regexp.MustCompile(`^(@[a-z0-9][a-z0-9._~-]*/)?[a-z0-9][a-z0-9._~-]*$`)
+var npmName = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^(@[a-z0-9][a-z0-9._~-]*/)?[a-z0-9][a-z0-9._~-]*$`)
+})
 
 // publicNPM: a tarball from npm's registry (or Yarn's mirror of it), or
 // none said - the default registry.
@@ -127,7 +133,7 @@ func publicNPM(resolved string) bool {
 // npmDep is name@version as npm's, when it's one OSV could know.
 func npmDep(name, version, resolved string) (Dep, bool) {
 	version = strings.TrimPrefix(version, "v")
-	if !npmName.MatchString(name) || !exact.MatchString(version) || !publicNPM(resolved) {
+	if !npmName().MatchString(name) || !exact().MatchString(version) || !publicNPM(resolved) {
 		return Dep{}, false
 	}
 	return Dep{"npm", name, version}, true
@@ -371,7 +377,7 @@ func composerLock(b []byte) ([]Dep, error) {
 	for _, p := range slices.Concat(l.Packages, l.PackagesDev) {
 		v := strings.TrimPrefix(p.Version, "v")
 		u, err := url.Parse(p.Notify)
-		if err != nil || u.Host != "packagist.org" || !exact.MatchString(v) || !strings.Contains(p.Name, "/") {
+		if err != nil || u.Host != "packagist.org" || !exact().MatchString(v) || !strings.Contains(p.Name, "/") {
 			continue
 		}
 		out = append(out, Dep{"Packagist", p.Name, v})
