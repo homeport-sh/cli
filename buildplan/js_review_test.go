@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -280,6 +281,27 @@ func TestAnAppInAFolderBelowTheRootIsNamed(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), s) {
 				t.Errorf("%s: want %q in %v", name, s, err)
 			}
+		}
+	}
+}
+
+// FoldersBelow is those folders, for a deploy or a new app to start at:
+// none when the folder itself holds a project.
+func TestFoldersBelowAFolderWithNoProject(t *testing.T) {
+	for name, c := range map[string]struct {
+		files map[string]string
+		root  string
+		want  []string
+	}{
+		"one below":        {map[string]string{"README.md": "x", "owl-app/package.json": "{}"}, "", []string{"owl-app"}},
+		"two below":        {map[string]string{"web/package.json": "{}", "server/go.mod": "module x"}, "", []string{"server", "web"}},
+		"the root has one": {map[string]string{"package.json": "{}", "web/package.json": "{}"}, "", nil},
+		"none anywhere":    {map[string]string{"README.md": "x", "docs/notes.md": "x"}, "", nil},
+		"below a folder":   {map[string]string{"apps/README.md": "x", "apps/site/index.html": "x"}, "apps", []string{"apps/site"}},
+		"skipped folders":  {map[string]string{"node_modules/x/package.json": "{}", ".github/package.json": "{}"}, "", nil},
+	} {
+		if got := buildplan.FoldersBelow(repo(c.files), c.root); !slices.Equal(got, c.want) {
+			t.Errorf("%s: %q, want %q", name, got, c.want)
 		}
 	}
 }

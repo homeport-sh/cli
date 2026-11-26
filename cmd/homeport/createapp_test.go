@@ -188,3 +188,67 @@ func TestTheMCPMakesAnApp(t *testing.T) {
 		t.Fatalf("taken: %v %s", isErr, text)
 	}
 }
+
+// below makes the harness's folder name, with no project in it and its app
+// in owl-app/ (a repository whose app is a folder down): not yet deployed.
+func below(t *testing.T, h *harness, name string) {
+	t.Helper()
+	h.a.wd = filepath.Join(t.TempDir(), name)
+	if err := os.MkdirAll(filepath.Join(h.a.wd, "owl-app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for f, s := range map[string]string{"README.md": "owl\n", "owl-app/go.mod": "module owl\n", "owl-app/main.go": "package main\n"} {
+		if err := os.WriteFile(filepath.Join(h.a.wd, f), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A first deploy from a folder that builds nothing, its app one folder
+// down, asks to deploy that folder: the app is named after it, and it's
+// what's linked.
+func TestDeployOffersTheFolderBelowThatBuilds(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	below(t, h, "owl")
+	h.a.tty = true
+	h.a.in = strings.NewReader("\ny\n")
+	app := filepath.Join(h.a.wd, "owl-app")
+	if code := h.run("deploy", "--detach"); code != 0 {
+		t.Fatalf("deploy: %d %s", code, h.said())
+	}
+	if !strings.Contains(h.said(), `Nothing in this folder builds, but owl-app/ does. Deploy owl-app/? [Y/n]`) {
+		t.Fatalf("asked %s", h.said())
+	}
+	if len(f.created) != 1 || f.created[0].Name != "owl-app" || len(f.deploys) != 1 {
+		t.Fatalf("created %+v, deploys %d", f.created, len(f.deploys))
+	}
+	if _, at, err := config.FindLink(app); err != nil || at != app {
+		t.Fatalf("link at %s %v", at, err)
+	}
+}
+
+func TestDeployMakesNothingWhenTheFolderBelowIsDeclined(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	below(t, h, "owl")
+	h.a.tty = true
+	h.a.in = strings.NewReader("n\n")
+	if code := h.run("deploy"); code != 0 || len(f.created) != 0 || len(f.deploys) != 0 || !strings.Contains(h.said(), "Not deployed") {
+		t.Fatalf("%d %+v %s", code, f.created, h.said())
+	}
+}
+
+// With --yes (or no terminal) nothing is asked: it refuses, naming the
+// folder to deploy from, and makes no app that can't build.
+func TestDeployYesRefusesAFolderThatBuildsNothing(t *testing.T) {
+	f := newFakeAPI(t)
+	h := newHarness(t, f)
+	h.login(t)
+	below(t, h, "owl")
+	if code := h.run("deploy", "--yes"); code == 0 || len(f.created) != 0 || !strings.Contains(h.said(), "owl-app/") {
+		t.Fatalf("%d %+v %s", code, f.created, h.said())
+	}
+}

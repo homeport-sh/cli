@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/homeport-sh/cli/buildplan"
 	"github.com/homeport-sh/cli/internal/cloud"
 )
 
@@ -61,6 +63,33 @@ func (a *app) folderApp() (string, error) {
 		return "", usageErr("%q can't name an app: name it with --app (lowercase letters, digits and dashes)", base)
 	}
 	return name, nil
+}
+
+// folderBelow: a folder deployed for the first time that builds nothing,
+// with its app in the one folder below it that does (owl-app/), deploys
+// that folder, asked first - false if the person says no. With yes, or no
+// terminal, it refuses, so no app that can't build is made.
+func (a *app) folderBelow(yes bool) (bool, error) {
+	below := buildplan.FoldersBelow(os.DirFS(a.wd), "")
+	switch {
+	case len(below) == 0:
+		return true, nil
+	case len(below) > 1:
+		return false, usageErr("nothing in this folder builds, but %s/ do: run `homeport deploy` from the app's folder", strings.Join(below, "/, "))
+	case yes || !a.tty:
+		return false, usageErr("nothing in this folder builds, but %s/ does: run `homeport deploy` from %s/", below[0], below[0])
+	}
+	fmt.Fprintf(a.out, "Nothing in this folder builds, but %s/ does. Deploy %s/? [Y/n] ", below[0], below[0])
+	answer, err := a.line()
+	if err != nil {
+		return false, err
+	}
+	if no := strings.ToLower(strings.TrimSpace(answer)); no != "" && no != "y" && no != "yes" {
+		fmt.Fprintln(a.out, "Not deployed.")
+		return false, nil
+	}
+	a.wd = filepath.Join(a.wd, below[0])
+	return true, nil
 }
 
 // create makes team the app name - its environment env ("" production) -
