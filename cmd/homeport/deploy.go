@@ -81,6 +81,13 @@ func (a *app) deploy(ctx context.Context, args []string) error {
 	if err != nil && !unlinked {
 		return err
 	}
+	if unlinked && *appName == "" {
+		moved, err := a.folderBelow(*yes)
+		if err != nil || !moved {
+			return err
+		}
+		dir = a.wd
+	}
 	if *appName != "" || *team != "" || unlinked {
 		o := &offer{yes: *yes, root: source.Folder(a.wd)}
 		name := *appName

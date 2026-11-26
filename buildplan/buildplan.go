@@ -952,15 +952,8 @@ var projectFiles = []string{"package.json", "go.mod", "composer.json", "index.ph
 // looked for.
 func (r reader) unknown() string {
 	var below []string
-	entries, _ := fs.ReadDir(r.fsys, cmpOr(r.root, "."))
-	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || e.Name() == "node_modules" {
-			continue
-		}
-		sub := reader{fsys: r.fsys, root: path.Join(r.root, e.Name())}
-		if slices.ContainsFunc(projectFiles, sub.exists) {
-			below = append(below, strconv.Quote(path.Join(r.root, e.Name())))
-		}
+	for _, f := range FoldersBelow(r.fsys, r.root) {
+		below = append(below, strconv.Quote(f))
 	}
 	if len(below) > 0 {
 		return "can't tell how to build this app: its folder has no project, but " + strings.Join(below, ", ") +
@@ -968,6 +961,27 @@ func (r reader) unknown() string {
 	}
 	return "can't tell how to build this app: no package.json, go.mod, composer.json, index.php, Cargo.toml, pyproject.toml, requirements.txt or index.html in its folder - " +
 		"set the app's folder, or the build and output, in the app's build settings"
+}
+
+// FoldersBelow is the folders just below root in fsys that hold a project,
+// when root holds none (the app is in web/ of its repository): the folder
+// to build instead. Nil when root holds one, or nothing below does.
+func FoldersBelow(fsys fs.FS, root string) []string {
+	if slices.ContainsFunc(projectFiles, reader{fsys: fsys, root: root}.exists) {
+		return nil
+	}
+	var below []string
+	entries, _ := fs.ReadDir(fsys, cmpOr(root, "."))
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || e.Name() == "node_modules" {
+			continue
+		}
+		sub := reader{fsys: fsys, root: path.Join(root, e.Name())}
+		if slices.ContainsFunc(projectFiles, sub.exists) {
+			below = append(below, path.Join(root, e.Name()))
+		}
+	}
+	return below
 }
 
 func (r reader) buildScript() string { return cmpOr(r.script, "build") }
