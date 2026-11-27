@@ -1073,6 +1073,28 @@ queue:
 `drain` and `retry` are args to `./bin`, run without a shell, as the
 release command is.
 
+## Cron jobs
+
+`crons:` in `homeport.yaml` declares the app's cron jobs, by name, so a
+deploy sets them up with no step in the dashboard:
+
+```yaml
+crons:
+  cleanup:
+    command: cleanup          # args to ./bin, run without a shell
+    schedule: "45 3 * * *"    # 5 fields, or a macro like @daily
+    timeout: 300s             # 10s to 1h (10m by default)
+    timezone: UTC             # an IANA zone (UTC by default)
+```
+
+The plan's `crons` lists them by name. Each deploy that goes live makes
+the app's declared jobs these: new ones added, changed ones updated, ones
+no longer listed removed. Jobs added in the dashboard are never touched,
+and a declared job whose name one of them has is left out, said in the
+deploy. A name is lowercase letters, digits and `-`, starting with a
+letter; 25 jobs at most. A static site has none. The control plane checks
+each schedule against the team's plan, as it does a job added by hand.
+
 ## System packages
 
 An app can ship with executables from a short list homeport curates and
