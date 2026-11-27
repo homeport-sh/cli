@@ -257,6 +257,8 @@ type Plan struct {
 	// Queue: the app's background jobs, detected or homeport.yaml's
 	// (queue.go); nil when it has none
 	Queue *Queue `json:"queue,omitempty"`
+	// Crons: the jobs homeport.yaml declares (crons.go), by name; nil none
+	Crons []Cron `json:"crons,omitempty"`
 	// API: the api/ folder's handlers, built into the app's server
 	// (api.go); nil when it has none, or is left alone
 	API *PlanAPI `json:"api,omitempty"`
@@ -373,6 +375,7 @@ type fileConfig struct {
 	Packages  []string                 `yaml:"packages"`
 	Headers   []HeaderRule             `yaml:"headers"`
 	Queue     *queueConfig             `yaml:"queue"`
+	Crons     map[string]cronConfig    `yaml:"crons"`
 	Assets    []PlanAsset              `yaml:"assets"`  // in place of the detected ones (CheckAssets)
 	Backend   *backendConfig           `yaml:"backend"` // a backend beside a renderer's paths (backend.go)
 	API       *bool                    `yaml:"api"`     // false: api/ is left alone
@@ -525,6 +528,10 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 	if err := CheckHeaders(cfg.Headers); err != nil {
 		return Plan{}, fmt.Errorf("%s: %w", ConfigFile, err)
 	}
+	fileCrons, err := crons(cfg.Crons)
+	if err != nil {
+		return Plan{}, fmt.Errorf("%s: %w", ConfigFile, err)
+	}
 	fileAssets, err := CheckAssets(cfg.Assets)
 	if err != nil {
 		return Plan{}, fmt.Errorf("%s: %w", ConfigFile, err)
@@ -644,6 +651,9 @@ func Detect(fsys fs.FS, s Settings) (Plan, error) {
 		p.Assets, _ = CheckAssets(s.Assets) // the person's, in place of the file's (checked with the settings)
 	}
 	p.Headers = cfg.Headers
+	if p.Crons = fileCrons; p.Crons != nil && p.Kind == Static {
+		return Plan{}, fmt.Errorf("%s: %w", ConfigFile, errStaticCrons)
+	}
 	if len(s.Headers) > 0 {
 		p.Headers = slices.Clone(s.Headers) // the person's, in place of the file's
 	}
